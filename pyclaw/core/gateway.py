@@ -6,7 +6,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 from pyclaw.config.loader import ConfigLoader, Config
-from pyclaw.config.schema import SecurityConfig
+from pyclaw.config.schema import AgentConfig, SecurityConfig
 from pyclaw.security.audit import AuditLogger
 from pyclaw.security.approvals import ExecApprovalSystem
 from pyclaw.security.sandbox import Sandbox, create_sandbox
@@ -146,8 +146,10 @@ class Gateway:
         self._logger.info("Session manager started")
         
         # Create default agent from config
-        for agent_id, agent_config in self.config.agents.model_dump().items():
-            name = agent_config.get("name", agent_id)
+        for agent_id, agent_config_dict in self.config.agents.model_dump().items():
+            name = agent_config_dict.get("name", agent_id)
+            # Convert dict to AgentConfig object
+            agent_config = AgentConfig(**agent_config_dict)
             self.agent_manager.create_agent(
                 agent_id=agent_id,
                 name=name,

@@ -15,7 +15,6 @@ from textual.widgets import (
     Log,
     Static,
     RichLog,
-    TextArea,
     Label,
     DataTable,
     Switch,
@@ -33,7 +32,6 @@ class ChatScreen(Screen):
         self.app_ref = app
         self._current_agent_id: Optional[str] = None
         self._chat_history: List[Dict[str, str]] = []
-        self._chat_text_buffer: str = ""
     
     BINDINGS = [
         Binding("escape", "clear_input", "Clear"),
@@ -53,8 +51,8 @@ class ChatScreen(Screen):
             
             # Main chat area
             with Vertical(id="chat-area"):
-                # Chat history (TextArea for selection/copy support)
-                yield TextArea(id="chat-history", read_only=True, show_line_numbers=False)
+                # Chat history (RichLog for Rich markup support)
+                yield RichLog(id="chat-history", read_only=True)
                 
                 # Input area
                 with Horizontal(id="input-area"):
@@ -70,7 +68,7 @@ class ChatScreen(Screen):
     def on_mount(self) -> None:
         """Called when screen is mounted."""
         self._chat_input = self.query_one("#chat-input", Input)
-        self._chat_history = self.query_one("#chat-history", TextArea)
+        self._chat_history = self.query_one("#chat-history", RichLog)
         self._agent_list = self.query_one("#agent-list", AgentListWidget)
         
         # Load agents if gateway available
@@ -100,8 +98,7 @@ class ChatScreen(Screen):
     
     def _append_chat(self, text: str) -> None:
         """Append text to chat history."""
-        self._chat_text_buffer += text + "\n"
-        self._chat_history.load_text(self._chat_text_buffer)
+        self._chat_history.write(text)
     
     def on_input_submitted(self, event: Input.Submitted) -> None:
         """Handle input submission."""
