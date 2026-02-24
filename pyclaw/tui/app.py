@@ -1,6 +1,7 @@
 """Main TUI Application for pyclaw using Textual."""
 
 import asyncio
+from pathlib import Path
 from typing import Optional
 
 from textual.app import App, ComposeResult
@@ -11,6 +12,19 @@ from textual.binding import Binding
 
 from pyclaw.tui.screens import ChatScreen, AgentsScreen, SessionsScreen, StatusScreen, LogsScreen
 from pyclaw.tui.widgets import AgentList, SessionList, StatusPanel
+
+DEBUG_LOG = Path("/tmp/pyclaw_tui_debug.log")
+
+
+def debug_write(msg: str) -> None:
+    """Write debug message to file."""
+    from datetime import datetime
+    timestamp = datetime.now().strftime("%H:%M:%S.%f")[:-3]
+    with open(DEBUG_LOG, "a") as f:
+        f.write(f"[APP][{timestamp}] {msg}\n")
+
+
+debug_write("APP.PY LOADED")
 
 
 class TUIApp(App):
@@ -140,6 +154,7 @@ class TUIApp(App):
         self.gateway = gateway
         self._current_agent_id: Optional[str] = None
         self._current_session_id: Optional[str] = None
+        debug_write(f"TUIApp.__init__ called with gateway={gateway}")
     
     def on_mount(self) -> None:
         """Called when app is mounted."""
@@ -151,6 +166,8 @@ class TUIApp(App):
     
     def _install_screens(self) -> None:
         """Install all screens."""
+        debug_write(f"_install_screens: self.gateway={self.gateway}")
+        
         # Chat screen
         self.install_screen(
             ChatScreen(gateway=self.gateway, app=self),
@@ -224,6 +241,7 @@ class TUIApp(App):
 
 async def run_tui(gateway=None) -> None:
     """Run the TUI application."""
+    debug_write(f"run_tui called with gateway={gateway}")
     app = TUIApp(gateway=gateway)
     await app.run_async()
 
