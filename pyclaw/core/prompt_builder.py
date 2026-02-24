@@ -31,7 +31,6 @@ BOOTSTRAP_FILES = [
     # OpenClaw aliases (for migration compatibility)
     "SOUL.md",
     "HEARTBEAT.md",
-]
     "BOOTSTRAP.md", # Initial bootstrap (often deleted after first run)
     "MEMORY.md",    # Long-term memory
     "memory.md",    # Alternate memory filename

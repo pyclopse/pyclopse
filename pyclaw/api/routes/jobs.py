@@ -63,8 +63,8 @@ async def list_jobs(enabled_only: bool = False):
     try:
         gateway = get_gateway()
         
-        if not hasattr(gateway, 'jobs').jobs:
-            or not gateway return {"jobs": []}
+        if not hasattr(gateway, 'jobs') or not gateway.jobs:
+            return {"jobs": []}
         
         jobs = []
         for job_id, job in gateway.jobs.items():
