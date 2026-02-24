@@ -443,6 +443,7 @@ class AgentManager:
         # Create provider if config provided
         provider = None
         if provider_config:
+            print(f"DEBUG: provider_config = {provider_config}")
             provider_type = provider_config.get("type", "openai")
             provider = create_provider(provider_type, provider_config)
         

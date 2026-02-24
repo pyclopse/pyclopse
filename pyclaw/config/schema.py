@@ -1,6 +1,6 @@
 """Configuration schema definitions using Pydantic."""
 
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, Field, field_validator, ConfigDict
 from typing import Optional, List, Dict, Any
 from enum import Enum
 import os
@@ -148,8 +148,10 @@ class AgentConfig(BaseModel):
 
 class AgentsConfig(BaseModel):
     """Agents configuration (dict of agent configs)."""
+    model_config = ConfigDict(extra="allow")  # Allow additional agents
+    
+    # Default agent
     default: AgentConfig = Field(default_factory=AgentConfig)
-    # Additional agents can be added as dict items
 
 
 class NodeConfig(BaseModel):
