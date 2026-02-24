@@ -8,10 +8,13 @@ from .schema import Config
 
 
 DEFAULT_CONFIG_PATHS = [
+    "~/.pyclaw/config/pyclaw.yaml",
     "~/.pyclaw/config.yaml",
     "~/.pyclaw/config.yml",
+    "~/.pyclaw/pyclaw.yaml",
     "./config.yaml",
     "./config.yml",
+    "./pyclaw.yaml",
 ]
 
 
