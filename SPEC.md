@@ -118,7 +118,81 @@ pyclaw/
 └── scripts/                  # Utility scripts
 ```
 
-### 1.2 pyproject.toml Configuration
+### 1.2 Agent Directory Structure
+
+All agents (including main) are stored in the `agents/` directory:
+
+```
+pyclaw/
+├── agents/
+│   ├── main/                    # Main agent (NOT in workspace/)
+│   │   ├── SOUL.md              # Agent personality
+│   │   ├── RULES.md             # Operational rules
+│   │   ├── PULSE.md             # Pulse/heartbeat config
+│   │   ├── AGENTS.md            # Shared agent config
+│   │   ├── MEMORY.md            # Long-term memory
+│   │   └── memory/              # Agent-specific memory
+│   │       └── YYYY-MM-DD.md    # Daily memory logs
+│   ├── agent-1/                 # Sub-agent 1
+│   │   ├── SOUL.md
+│   │   ├── RULES.md
+│   │   └── memory/
+│   └── agent-2/                 # Sub-agent 2
+│       ├── SOUL.md
+│       ├── RULES.md
+│       └── memory/
+```
+
+**Key difference from OpenClaw:**
+- OpenClaw: Main agent in `workspace/`, subagents in `agents/`
+- pyclaw: All agents in `agents/` directory
+
+---
+
+## 1.3 OpenClaw Migration Compatibility
+
+### File Name Aliases
+
+The gateway supports both pyclaw naming conventions AND OpenClaw naming conventions:
+
+| pyclaw Name | OpenClaw Alias | Purpose |
+|-------------|-----------------|---------|
+| PULSE.md | HEARTBEAT.md | Pulse/heartbeat config |
+| AGENTS.md | (same) | Shared agent config |
+| MEMORY.md | MEMORY.md | Long-term memory |
+| SOUL.md | SOUL.md | Agent personality |
+| RULES.md | RULES.md | Operational rules |
+
+### Compatibility Layer Behavior
+
+The gateway loads agent files as follows:
+
+1. **Check for pyclaw name first** (e.g., `PULSE.md`)
+2. **Fall back to OpenClaw name if not found** (e.g., `HEARTBEAT.md`)
+
+This allows easy migration:
+- Copy files from OpenClaw's `~/.openclaw/workspace/` to pyclaw's `agents/main/` should just work
+- Existing OpenClaw users can migrate by simply copying their agent files
+- No renaming required - the compatibility layer handles it
+
+### Migration Example
+
+```bash
+# OpenClaw files (location)
+~/.openclaw/workspace/SOUL.md
+~/.openclaw/workspace/RULES.md
+~/.openclaw/workspace/HEARTBEAT.md
+
+# Copy to pyclaw (just works!)
+cp -r ~/.openclaw/workspace/* ~/.pyclaw/agents/main/
+
+# pyclaw automatically maps:
+# - HEARTBEAT.md → PULSE.md
+# - SOUL.md → SOUL.md (same name)
+# - RULES.md → RULES.md (same name)
+```
+
+---
 
 ```toml
 [project]
