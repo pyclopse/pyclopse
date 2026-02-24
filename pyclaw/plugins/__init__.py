@@ -5,6 +5,8 @@ from pyclaw.plugins.base import Plugin, ChannelPlugin
 from pyclaw.plugins.registry import PluginRegistry
 from pyclaw.plugins.loader import PluginLoader, BuiltinPluginLoader
 from pyclaw.plugins.hooks import HookPhase, HookRegistry
+from pyclaw.plugins.channels.telegram import TelegramPlugin
+from pyclaw.plugins.channels.discord import DiscordPlugin
 
 
 __all__ = [
@@ -14,6 +16,8 @@ __all__ = [
     "PluginMetadata",
     "PluginInfo",
     "ChannelPlugin",
+    "TelegramPlugin",
+    "DiscordPlugin",
     "HookPhase",
     "HookRegistry",
     "PluginRegistry",

@@ -52,7 +52,13 @@ class PluginRegistry:
             metadata: Optional metadata (will be extracted from class if not provided)
         """
         if metadata is None:
-            metadata = plugin_class.metadata
+            # Try to get from class attribute first
+            if hasattr(plugin_class, '_metadata'):
+                metadata = plugin_class._metadata
+            else:
+                # Create a temporary instance to get metadata
+                temp_instance = plugin_class({})
+                metadata = temp_instance.metadata
         
         self._plugin_classes[name] = plugin_class
         self._plugins[name] = PluginInfo(
