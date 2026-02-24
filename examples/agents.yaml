@@ -29,6 +29,33 @@ agents:
     instruction: "You research topics thoroughly. Provide detailed, accurate information with sources."
     model: sonnet
     servers: [fetch, search]
+  
+  # Order processing agent (for chain demo)
+  order_agent:
+    instruction: "You process customer orders. Collect order details accurately."
+    model: sonnet
+  
+  # Shipping agent (for chain demo)
+  ship_agent:
+    instruction: "You handle shipping logistics. Determine best shipping methods."
+    model: sonnet
+  
+  # Review agents (for parallel demo)
+  proofreader:
+    instruction: "You review text for grammar, spelling, and clarity."
+    model: haiku
+  
+  fact_checker:
+    instruction: "You verify factual accuracy of content."
+    model: haiku
+  
+  style_enforcer:
+    instruction: "You enforce writing style guidelines."
+    model: sonnet
+  
+  grader:
+    instruction: "You compile feedback and provide overall assessment."
+    model: sonnet
 
 # Workflow definitions
 workflows:
