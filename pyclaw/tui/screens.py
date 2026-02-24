@@ -67,23 +67,35 @@ class ChatScreen(Screen):
     
     def on_mount(self) -> None:
         """Called when screen is mounted."""
+        print("DEBUG: ChatScreen on_mount called")
+        
         self._chat_input = self.query_one("#chat-input", Input)
         self._chat_history = self.query_one("#chat-history", RichLog)
         self._agent_list = self.query_one("#agent-list", AgentListWidget)
         
+        print(f"DEBUG: gateway = {self.gateway}")
+        
         # Load agents if gateway available
         if self.gateway:
+            print(f"DEBUG: agent_manager = {getattr(self.gateway, 'agent_manager', 'NONE')}")
             self._load_agents()
+        else:
+            print("DEBUG: No gateway!")
         
         # Focus input
         self._chat_input.focus()
     
     def _load_agents(self) -> None:
         """Load agents from gateway."""
+        print("DEBUG: _load_agents called")
+        
         if self.gateway and self.gateway.agent_manager:
             agents = self.gateway.agent_manager.list_agents()
+            print(f"DEBUG: Found {len(agents)} agents: {[a.id for a in agents]}")
+            
             for agent in agents:
                 self._agent_list.add_agent(agent.id, agent.name, agent.is_running)
+            
             # Auto-select first agent if none selected
             if agents and not self._current_agent_id:
                 self._current_agent_id = agents[0].id
@@ -93,9 +105,12 @@ class ChatScreen(Screen):
                     self.app_ref.set_current_agent(self._current_agent_id)
         # Fallback: use "default" agent if no agents loaded
         elif self.gateway and not self._current_agent_id:
+            print("DEBUG: No agents found, using 'default'")
             self._current_agent_id = "default"
             if self.app_ref:
                 self.app_ref.set_current_agent(self._current_agent_id)
+        else:
+            print(f"DEBUG: gateway={self.gateway}, agent_manager={getattr(self.gateway, 'agent_manager', 'NONE') if self.gateway else 'N/A'}")
     
     def _append_chat(self, text: str) -> None:
         """Append text to chat history."""
