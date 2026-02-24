@@ -35,8 +35,8 @@ class ToolResult:
 class ChatResponse:
     """Response from a chat completion."""
     content: str
-    tool_calls: Optional[List[ToolCall]] = None
     model: str
+    tool_calls: Optional[List[ToolCall]] = None
     usage: Optional[Dict[str, int]] = None
 
 

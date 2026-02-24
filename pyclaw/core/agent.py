@@ -4,9 +4,10 @@ import asyncio
 import logging
 from dataclasses import dataclass, field
 from datetime import datetime
-from typing import Any, Dict, List, Optional
+from typing import Any, Awaitable, Callable, Dict, List, Optional
 
 from pyclaw.config.schema import AgentConfig as ConfigModel
+from pyclaw.config.schema import AgentConfig
 from pyclaw.core.session import Session, Message as SessionMessage
 from pyclaw.core.router import IncomingMessage, OutgoingMessage
 from pyclaw.providers import (
@@ -15,12 +16,11 @@ from pyclaw.providers import (
     create_provider,
     get_registry as get_provider_registry,
 )
-from pyclaw.skills import (
-    get_registry as get_skill_registry,
+from pyclaw.skills.runner import (
+    get_default_runner,
     SkillRunner,
     SkillContext,
 )
-from pyclaw.skills.runner import get_default_runner
 
 
 # Tool execution function type
