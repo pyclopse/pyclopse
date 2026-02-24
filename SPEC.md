@@ -423,6 +423,24 @@ agents:
         start: "08:00"
         end: "22:00"
 
+  # Single agent (default - no workflow_type needed)
+  assistant:
+    instruction: "You are helpful..."
+    model: sonnet
+    # No workflow_type = single agent (default)
+    
+  # Parallel workflow - fan-out to multiple sub-agents
+  researcher:
+    instruction: "Research things..."
+    workflow_type: parallel
+    agents: [web_searcher, url_fetcher]
+    
+  # Chain workflow - sequential steps
+  reporter:
+    instruction: "Create reports..."
+    workflow_type: chain
+    agents: [fetcher, analyzer, writer]
+
 # Jobs (cron)
 jobs:
   enabled: true
@@ -838,9 +856,42 @@ class MemoryStore:
 
 ---
 
-## 7. Providers & Agents (FastAgent-First)
+## 7. Agents (FastAgent-First)
 
-### 7.1 FastAgent is the Backbone
+### 7.1 Every Agent IS a Workflow
+
+The distinction between "agents" and "workflows" is artificial. In pyclaw:
+
+**Every agent IS a workflow:**
+- Single agent → workflow with 1 step (default)
+- Chain → workflow with sequential steps  
+- Parallel → workflow with parallel steps
+
+An agent config just needs a `workflow_type` field:
+
+```yaml
+agents:
+  # Single agent (default - no workflow_type needed)
+  assistant:
+    instruction: "You are helpful..."
+    model: sonnet
+    
+  # Parallel workflow - fan-out to multiple sub-agents
+  researcher:
+    instruction: "Research things..."
+    workflow_type: parallel
+    agents: [web_searcher, url_fetcher]
+    
+  # Chain workflow - sequential steps
+  reporter:
+    instruction: "Create reports..."
+    workflow_type: chain
+    agents: [fetcher, analyzer, writer]
+```
+
+No separate "workflows" section needed. An agent IS a workflow.
+
+### 7.2 FastAgent is the Backbone
 
 Every pyclaw "Agent" IS a FastAgent instance. This is the core insight:
 
@@ -860,31 +911,6 @@ pyclaw Agent = FastAgent instance + Channel binding + Security layer
 - All workflow patterns (chain, parallel, maker, agents-as-tools)
 - Tool calling (MCP-native)
 - Structured outputs, vision, PDF support
-
-**Example pyclaw agent:**
-```yaml
-agents:
-  main:
-    type: fastagent  # extends FastAgent
-    instruction: "You are a helpful assistant..."
-    model: sonnet
-    channels: [telegram, discord]
-    
-  researcher:
-    type: fastagent  
-    workflow: parallel  # uses parallel workflow
-    agents: [web_searcher, url_fetcher]
-    
-  analyst:
-    type: fastagent
-    workflow: chain
-    agents: [data_fetcher, analyzer, reporter]
-```
-
-Every agent automatically gets:
-- All FastAgent capabilities
-- MCP tools via FastAgent's server system
-- Workflow patterns if needed
 
 ### 7.2 Base Provider
 
@@ -969,6 +995,256 @@ workflows:
     agents:
       - research_agent  # fetches data
       - writer_agent    # writes response
+```
+
+### 7.4 FastAgent Detailed Integration
+
+This section provides comprehensive details on integrating FastAgent with pyclaw.
+
+#### 7.4.1 Agent Definition Syntax
+
+FastAgent uses the `@fast.agent` decorator to define agents:
+
+```python
+# pyclaw/agents/definitions.py
+import asyncio
+from fast_agent import FastAgent
+
+# Create FastAgent application
+fast = FastAgent("pyclaw")
+
+@fast.agent(
+    name="assistant",
+    instruction="You are a helpful AI assistant.",
+    human_input=False,  # Enable for human-in-the-loop
+)
+async def main():
+    async with fast.run() as agent:
+        await agent.interactive()
+```
+
+#### 7.4.2 Running Agents
+
+```python
+# Basic prompt execution
+async with fast.run() as agent:
+    result = await agent("Your prompt here")
+    
+# Using .send() method
+async with fast.run() as agent:
+    await agent.send("message")
+```
+
+#### 7.4.3 Workflow Patterns
+
+**Chain (Sequential Execution):**
+```python
+@fast.agent(
+    name="researcher",
+    instruction="Research the given topic and provide key findings.",
+    servers=["fetch"],  # MCP servers
+)
+@fast.agent(
+    name="writer",
+    instruction="Write a summary based on the research.",
+)
+@fast.chain(
+    name="research_and_write",
+    sequence=["researcher", "writer"],
+)
+async def main():
+    async with fast.run() as agent:
+        await agent.research_and_write("AI trends")
+```
+
+**Parallel (Fan-out/Fan-in):**
+```python
+@fast.agent("translate_fr", "Translate to French")
+@fast.agent("translate_de", "Translate to German")
+@fast.agent("translate_es", "Translate to Spanish")
+
+@fast.parallel(
+    name="translate",
+    fan_out=["translate_fr", "translate_de", "translate_es"],
+    # Optional: fan_in="aggregator_agent"
+)
+
+async def main():
+    async with fast.run() as agent:
+        result = await agent.translate("Hello world")
+```
+
+**Maker (K-Voting Error Reduction):**
+```python
+@fast.agent(
+    name="classifier",
+    instruction="Reply with only: A, B, or C.",
+)
+@fast.maker(
+    name="reliable_classifier",
+    worker="classifier",
+    k=3,  # Number of votes
+    max_samples=25,
+    match_strategy="normalized",
+)
+async def main():
+    async with fast.run() as agent:
+        result = await agent.reliable_classifier("Classify this")
+```
+
+**Agents as Tools (Orchestrator-Workers):**
+```python
+@fast.agent(
+    name="NY-Manager",
+    instruction="Return NY time and project status.",
+    servers=["time"],
+)
+@fast.agent(
+    name="London-Manager", 
+    instruction="Return London time and news.",
+    servers=["time"],
+)
+@fast.agent(
+    name="PMO-Orchestrator",
+    instruction=(
+        "Get reports. Always use one tool call per project/news. "
+        "NY projects: [OpenAI, Fast-Agent]. London news: [Economics, Art]. "
+        "Aggregate results with summary."
+    ),
+    default=True,  # Default agent for direct prompts
+    agents=["NY-Manager", "London-Manager"],  # Expose as tools
+)
+async def main():
+    async with fast.run() as agent:
+        await agent("Get PMO report")
+```
+
+#### 7.4.4 MCP Integration
+
+FastAgent uses `fastagent.config.yaml` for MCP server configuration:
+
+```yaml
+# fastagent.config.yaml
+mcp:
+  servers:
+    fetch:
+      command: npx
+      args: ["-y", "@modelcontextprotocol/server-filesystem", "/path/to/files"]
+    
+    time:
+      command: uvx
+      args: ["mcp-server-time", "--local-timezone", "America/New_York"]
+      
+    # HTTP/SSE servers with OAuth
+    remote:
+      transport: http
+      url: http://localhost:8001/mcp
+      auth:
+        oauth: true
+        redirect_port: 3030
+      ping_interval_seconds: 30
+      max_missed_pings: 3
+```
+
+#### 7.4.5 YAML Configuration for pyclaw Agents
+
+```yaml
+# pyclaw.yaml
+agents:
+  main:
+    type: fastagent
+    name: assistant
+    instruction: "You are a helpful AI assistant."
+    model: sonnet
+    temperature: 0.7
+    max_tokens: 4096
+    channels: [telegram, discord]
+    mcp_servers:
+      - fetch
+      - time
+    
+  researcher:
+    type: fastagent
+    workflow: chain
+    agents:
+      - web_searcher
+      - url_fetcher
+      - summarizer
+    
+  translator:
+    type: fastagent
+    workflow: parallel
+    fan_out: [translate_en, translate_fr, translate_de]
+    
+  classifier:
+    type: fastagent
+    workflow: maker
+    worker: basic_classifier
+    k: 5
+    max_samples: 50
+
+workflows:
+  config_path: "~/.pyclaw/fastagent.config.yaml"
+  default_agent: main
+```
+
+#### 7.4.6 pyclaw Agent Factory
+
+```python
+# pyclaw/agents/factory.py
+from fast_agent import FastAgent
+from typing import Dict, Any, Optional, List
+
+class FastAgentFactory:
+    """Factory for creating FastAgent instances from config."""
+    
+    def __init__(self, config_path: str = "fastagent.config.yaml"):
+        self.config_path = config_path
+        self._app = None
+    
+    def create_agent(
+        self,
+        name: str,
+        instruction: str,
+        model: str = "sonnet",
+        temperature: float = 0.7,
+        max_tokens: Optional[int] = None,
+        servers: Optional[List[str]] = None,
+        human_input: bool = False,
+    ) -> FastAgent:
+        """Create a FastAgent from configuration."""
+        fast = FastAgent(name)
+        
+        @fast.agent(
+            name=name,
+            instruction=instruction,
+            human_input=human_input,
+            servers=servers or [],
+        )
+        async def agent_func():
+            async with fast.run() as agent:
+                await agent.interactive()
+        
+        return fast
+    
+    def create_workflow(
+        self,
+        workflow_type: str,
+        name: str,
+        agents: List[str],
+        **kwargs,
+    ) -> Any:
+        """Create a workflow (chain, parallel, maker, agents_as_tools)."""
+        if workflow_type == "chain":
+            return self._create_chain(name, agents)
+        elif workflow_type == "parallel":
+            return self._create_parallel(name, agents, **kwargs)
+        elif workflow_type == "maker":
+            return self._create_maker(name, agents, **kwargs)
+        elif workflow_type == "agents_as_tools":
+            return self._create_agents_as_tools(name, agents, **kwargs)
+        else:
+            raise ValueError(f"Unknown workflow type: {workflow_type}")
 ```
 
 #### FastAgent Provider Implementation
@@ -1160,67 +1436,36 @@ class WorkflowRunner:
 
 ---
 
-## 8. Workflows (FastAgent)
+## 8. Workflow Types
 
-### 8.1 Workflow Configuration
+Since every agent IS a workflow, workflow types are just a field on the agent config:
 
-Workflows are defined in YAML and loaded at startup:
+| workflow_type | Description |
+|---------------|-------------|
+| (none/default) | Single agent - one step |
+| `chain` | Sequential: Agent A → Agent B → Agent C |
+| `parallel` | Fan-out/in: Agent A → [Agent B, Agent C] → combine |
 
 ```yaml
-# ~/.pyclaw/workflows.yaml
-workflows:
-  research_and_write:
-    type: chain
-    description: "Research topic then write summary"
-    agents:
-      - research_agent
-      - writer_agent
-    steps:
-      - agent: research_agent
-        output_key: research_data
-        tools: ["web_search", "web_fetch"]
-      - agent: writer_agent
-        input_mapping:
-          context: research_data
-        tools: ["write"]
-
-  parallel_discovery:
-    type: parallel
-    description: "Search multiple sources simultaneously"
-    max_workers: 5
-    agents:
-      - search_agent
-      - search_agent
-      - search_agent
-    combiner: merge_unique
-
-  code_review:
-    type: maker
-    description: "Multiple agents review code for errors"
-    k_votes: 3
-    agents:
-      - code_reviewer
-
-  routing_assistant:
-    type: agents_as_tools
-    description: "Orchestrator routes to specialists"
-    agents:
-      - triage_agent
-      - researcher_agent
-      - coder_agent
-      - writer_agent
+agents:
+  # Single agent (default)
+  helper:
+    instruction: "You are helpful."
+    
+  # Chain workflow
+  researcher:
+    workflow_type: chain
+    agents: [searcher, analyzer, writer]
+    
+  # Parallel workflow  
+  scout:
+    workflow_type: parallel
+    agents: [searcher1, searcher2, searcher3]
 ```
 
-### 8.2 Workflow Types
+### 8.1 MCP Tools as Agent Tools
 
-| Type | Use Case | Description |
-|------|----------|-------------|
-| `chain` | Sequential tasks | A → B → C, each passes output to next |
-| `parallel` | Concurrent execution | A → [B, C, D] fan-out, combine results |
-| `maker` | Error reduction | Run same task K times, vote on result |
-| `agents_as_tools` | Routing | Orchestrator decides which agents to use |
-
-### 8.3 MCP Tools as Agent Tools
+FastAgent provides native MCP support. Agents can use MCP tools from the registry:
 
 FastAgent provides native MCP support. Agents can use MCP tools from the registry:
 
