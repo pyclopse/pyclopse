@@ -119,15 +119,19 @@ class TUIApp(App):
     }
 
     Button {
+        pointer: pointer;
     }
     
     #agent-list Button {
+        pointer: pointer;
     }
     
     #agent-actions Button {
+        pointer: pointer;
     }
     
     #session-actions Button {
+        pointer: pointer;
     }
     """
     
