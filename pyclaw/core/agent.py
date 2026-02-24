@@ -4,11 +4,23 @@ import asyncio
 import logging
 from dataclasses import dataclass, field
 from datetime import datetime
-from typing import Any, Dict, List, Optional, Callable
+from typing import Any, Dict, List, Optional
 
 from pyclaw.config.schema import AgentConfig as ConfigModel
-from pyclaw.core.session import Session, Message
+from pyclaw.core.session import Session, Message as SessionMessage
 from pyclaw.core.router import IncomingMessage, OutgoingMessage
+from pyclaw.providers import (
+    Message as ProviderMessage,
+    ChatResponse,
+    create_provider,
+    get_registry as get_provider_registry,
+)
+from pyclaw.skills import (
+    get_registry as get_skill_registry,
+    SkillRunner,
+    SkillContext,
+)
+from pyclaw.skills.runner import get_default_runner
 
 
 # Tool execution function type
@@ -23,7 +35,8 @@ class Agent:
     config: ConfigModel
     session_manager: Any = None  # SessionManager
     tool_executor: Optional[ToolExecutor] = None
-    provider: Optional[Any] = None  # Provider
+    provider: Optional[Any] = None  # Provider instance
+    skill_runner: Optional[SkillRunner] = None
     
     # Runtime state
     is_running: bool = False
@@ -33,6 +46,10 @@ class Agent:
     
     def __post_init__(self):
         object.__setattr__(self, '_logger', logging.getLogger(f"pyclaw.agent.{self.id}"))
+        
+        # Initialize skill runner if tools are enabled
+        if self.config.tools.enabled and self.skill_runner is None:
+            self.skill_runner = get_default_runner()
     
     async def start(self) -> None:
         """Start the agent."""
@@ -74,8 +91,13 @@ class Agent:
             # Build messages for provider
             messages = self._build_messages(session)
             
-            # Get response from provider
-            response_content = await self._get_response(messages)
+            # Get available tools if enabled
+            tools = None
+            if self.config.tools.enabled and self.skill_runner:
+                tools = self.skill_runner.registry.get_tools()
+            
+            # Get response from provider (with tool execution loop)
+            response_content = await self._get_response_with_tools(messages, tools)
             
             # Add assistant response to session
             session.add_message(
@@ -102,36 +124,120 @@ class Agent:
                 channel=message.channel,
             )
     
-    def _build_messages(self, session: Session) -> List[Dict[str, Any]]:
+    def _build_messages(self, session: Session) -> List[ProviderMessage]:
         """Build message list for provider."""
         messages = []
         
         # Add system prompt
-        messages.append({
-            "role": "system",
-            "content": self.config.system_prompt,
-        })
+        messages.append(ProviderMessage(
+            role="system",
+            content=self.config.system_prompt,
+        ))
         
         # Add conversation history
         for msg in session.get_context_window(max_messages=20):
-            messages.append({
-                "role": msg.role,
-                "content": msg.content,
-            })
+            messages.append(ProviderMessage(
+                role=msg.role,
+                content=msg.content,
+            ))
         
         return messages
     
-    async def _get_response(
+    async def _get_response_with_tools(
         self,
-        messages: List[Dict[str, Any]],
+        messages: List[ProviderMessage],
+        tools: Optional[List[Dict[str, Any]]] = None,
     ) -> str:
-        """Get response from provider."""
+        """Get response from provider with tool execution loop."""
         if self.provider is None:
             return "No provider configured"
         
-        # This would call the actual provider
-        # For now, return a placeholder
-        return "Response from provider"
+        max_tool_iterations = 5  # Prevent infinite loops
+        iteration = 0
+        
+        while iteration < max_tool_iterations:
+            iteration += 1
+            
+            # Get response from provider
+            response: ChatResponse = await self.provider.chat(
+                messages=messages,
+                model=self.config.model,
+                tools=tools,
+                temperature=self.config.temperature,
+                max_tokens=self.config.max_tokens,
+            )
+            
+            # Add assistant message to conversation
+            messages.append(ProviderMessage(
+                role="assistant",
+                content=response.content,
+                tool_calls=[
+                    {
+                        "id": tc.id,
+                        "name": tc.name,
+                        "arguments": tc.arguments,
+                    }
+                    for tc in (response.tool_calls or [])
+                ] if response.tool_calls else None,
+            ))
+            
+            # If no tool calls, return the content
+            if not response.tool_calls:
+                return response.content
+            
+            # Execute tool calls
+            for tool_call in response.tool_calls:
+                if not self.skill_runner:
+                    # No skill runner, add error message
+                    messages.append(ProviderMessage(
+                        role="tool",
+                        content="Skill runner not configured",
+                        tool_call_id=tool_call.id,
+                        name=tool_call.name,
+                    ))
+                    continue
+                
+                # Create context for skill execution
+                context = SkillContext(
+                    agent_id=self.id,
+                    session_id=self.current_session.id if self.current_session else "unknown",
+                )
+                
+                # Execute the tool
+                tool_result = await self.skill_runner.execute_tool_call(
+                    tool_call_id=tool_call.id,
+                    tool_name=tool_call.name,
+                    arguments=tool_call.arguments,
+                    context=context,
+                )
+                
+                # Add tool result to conversation
+                messages.append(ProviderMessage(
+                    role="tool",
+                    content=tool_result.get("error") or str(tool_result.get("output", "")),
+                    tool_call_id=tool_call.id,
+                    name=tool_call.name,
+                ))
+        
+        # Max iterations reached
+        return "Maximum tool execution iterations reached"
+    
+    async def _get_response(
+        self,
+        messages: List[ProviderMessage],
+    ) -> str:
+        """Get response from provider (simple version without tools)."""
+        if self.provider is None:
+            return "No provider configured"
+        
+        response: ChatResponse = await self.provider.chat(
+            messages=messages,
+            model=self.config.model,
+            temperature=self.config.temperature,
+            max_tokens=self.config.max_tokens,
+        )
+        
+        return response.content
     
     async def execute_tool(
         self,
@@ -140,6 +246,18 @@ class Agent:
         cwd: str,
     ) -> Dict[str, Any]:
         """Execute a tool."""
+        if self.skill_runner:
+            # Use skill runner
+            result = await self.skill_runner.execute(
+                skill_name=tool_name,
+                args={"args": args, "cwd": cwd},
+            )
+            return {
+                "success": result.success,
+                "result": result.result,
+                "error": result.error,
+            }
+        
         if self.tool_executor is None:
             return {
                 "success": False,
@@ -171,8 +289,8 @@ class Agent:
         
         # Build heartbeat message
         messages = [
-            {"role": "system", "content": self.config.system_prompt},
-            {"role": "user", "content": prompt},
+            ProviderMessage(role="system", content=self.config.system_prompt),
+            ProviderMessage(role="user", content=prompt),
         ]
         
         try:
@@ -191,6 +309,8 @@ class Agent:
             "model": self.config.model,
             "session_id": self.current_session.id if self.current_session else None,
             "pending_tasks": len(self._tasks),
+            "provider": type(self.provider).__name__ if self.provider else None,
+            "skills": len(self.skill_runner.registry.list_skills()) if self.skill_runner else 0,
         }
     
     def update_config(self, **updates) -> None:
@@ -214,16 +334,24 @@ class AgentManager:
         agent_id: str,
         name: str,
         config: ConfigModel,
+        provider_config: Optional[Dict[str, Any]] = None,
         **kwargs,
     ) -> Agent:
-        """Create a new agent."""
+        """Create a new agent with optional provider."""
         if agent_id in self.agents:
             raise ValueError(f"Agent {agent_id} already exists")
+        
+        # Create provider if config provided
+        provider = None
+        if provider_config:
+            provider_type = provider_config.get("type", "openai")
+            provider = create_provider(provider_type, provider_config)
         
         agent = Agent(
             id=agent_id,
             name=name,
             config=config,
+            provider=provider,
             **kwargs,
         )
         
@@ -311,3 +439,7 @@ class AgentManager:
                 for a in self.agents.values()
             ],
         }
+
+
+# Type alias for compatibility
+Message = SessionMessage
