@@ -1,5 +1,6 @@
 """MiniMax provider for GPT models."""
 
+import json
 import os
 from typing import Any, AsyncIterator, Dict, List, Optional
 
@@ -29,8 +30,10 @@ class MiniMaxProvider(Provider):
         if not api_key:
             raise ValueError("MINIMAX_API_KEY is required - set in config, env, or Keychain")
         
-        self.base_url = config.get("base_url", "https://api.minimax.io/v1/text/chatcompletion_v2")
+        self.base_url = config.get("base_url", "https://api.minimaxi.com/v1/text/chatcompletion_v2")
         self.api_key = api_key
+        self.model = config.get("model", "MiniMax-M2.5")
+        self.default_model = self.model
     
     def _get_headers(self) -> Dict[str, str]:
         """Get HTTP headers for API requests."""
@@ -38,9 +41,7 @@ class MiniMaxProvider(Provider):
             "Authorization": f"Bearer {self.api_key}",
             "Content-Type": "application/json"
         }
-        self.model = config.get("model", "MiniMax-M2.5")
-        self.default_model = self.model
-    
+
     async def chat(
         self,
         messages: List[Message],
@@ -111,16 +112,15 @@ class MiniMaxProvider(Provider):
             "model": model,
             "messages": messages_payload,
             "temperature": temperature,
+            "stream": True,
         }
         if max_tokens:
             payload["max_tokens"] = max_tokens
         if tools:
             payload["tools"] = tools
         
-        url = f"{self.base_url}?Model={model}"
-        
         async with httpx.AsyncClient(timeout=120.0) as client:
-            async with client.stream("POST", url, json=payload, headers=self._get_headers()) as response:
+            async with client.stream("POST", self.base_url, json=payload, headers=self._get_headers()) as response:
                 response.raise_for_status()
                 
                 async for line in response.aiter_lines():
