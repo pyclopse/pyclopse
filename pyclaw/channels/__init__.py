@@ -4,6 +4,8 @@ from .base import ChannelAdapter
 from .telegram import TelegramAdapter
 from .discord import DiscordAdapter, DiscordWebhookAdapter
 from .slack import SlackAdapter
+from .whatsapp import WhatsAppAdapter
+from .signal import SignalAdapter
 
 
 # Channel registry
@@ -12,6 +14,8 @@ CHANNEL_REGISTRY: Dict[str, Type[ChannelAdapter]] = {
     "discord": DiscordAdapter,
     "discord_webhook": DiscordWebhookAdapter,
     "slack": SlackAdapter,
+    "whatsapp": WhatsAppAdapter,
+    "signal": SignalAdapter,
 }
 
 
@@ -59,6 +63,8 @@ __all__ = [
     "DiscordAdapter",
     "DiscordWebhookAdapter",
     "SlackAdapter",
+    "WhatsAppAdapter",
+    "SignalAdapter",
     "register_channel",
     "get_channel",
     "list_channels",
