@@ -87,6 +87,12 @@ pyclaw/
 │   │   ├── google.py         # Google provider
 │   │   ├── fastagent.py      # FastAgent integration
 │   │   └── registry.py       # Provider registry
+│   ├── workflows/            # Workflow engine (FastAgent)
+│   │   ├── __init__.py
+│   │   ├── runner.py         # Workflow execution
+│   │   ├── patterns.py       # Built-in patterns
+│   │   ├── mcp_integration.py # MCP tool registry
+│   │   └── config.py         # Workflow YAML loading
 │   ├── plugins/              # Plugin system
 │   │   ├── __init__.py
 │   │   ├── loader.py         # Plugin loader
@@ -216,6 +222,7 @@ dependencies = [
     "python-jose>=3.3.0",
     "passlib>=1.7.4",
     "cryptography>=41.0.0",
+    "fast-agent-mcp>=0.1.0",  # FastAgent workflow engine
 ]
 
 [project.optional-dependencies]
@@ -383,8 +390,15 @@ providers:
     apiKey: "${ANTHROPIC_API_KEY}"
     defaultModel: "claude-3-opus-20240229"
   fastagent:
-    enabled: false
+    enabled: true
     url: "http://localhost:8000"
+    defaultModel: "anthropic/claude-3-5-sonnet"
+
+# Workflows (FastAgent)
+workflows:
+  configPath: "~/.pyclaw/workflows.yaml"
+  enabled: true
+  defaultWorkflow: "research_and_write"
 
 # Agents
 agents:
@@ -880,25 +894,91 @@ class Provider(ABC):
 
 ### 7.2 FastAgent Integration
 
-Consider integrating with [FastAgent](https://github.com/BerriAI/fastagent) for multi-provider support:
+We will use [FastAgent](https://github.com/evalstate/fast-agent) as the workflow engine instead of building our own agent system. This provides powerful workflow patterns out of the box:
+
+**Workflow Patterns Supported:**
+1. **Chain** - Sequential execution (Agent A → Agent B → Agent C)
+2. **Parallel** - Fan-out to multiple agents, fan-in results
+3. **Maker** - K-voting error reduction
+4. **Agents as Tools** - Routing, parallelization, orchestrator-workers
+
+**Benefits:**
+- Proven, well-tested workflow patterns
+- MCP-native support
+- Multi-provider (Anthropic, OpenAI, Google, Ollama, etc.)
+- Built-in structured outputs, vision, PDF support
+- Active development
+
+**Implementation:**
+- Add fast-agent-mcp to dependencies
+- Create pyclaw/workflows/ module that wraps FastAgent
+- Define workflows in YAML config
+- Agents become FastAgent agents with MCP tools
+
+**Example pyclaw workflow config:**
+```yaml
+workflows:
+  research_and_write:
+    type: chain
+    agents:
+      - research_agent  # fetches data
+      - writer_agent    # writes response
+```
+
+#### FastAgent Provider Implementation
 
 ```python
 # pyclaw/providers/fastagent.py
 from .base import Provider
+from typing import List, Dict, Any, Optional, AsyncIterator
+import httpx
 
 class FastAgentProvider(Provider):
-    """Wrapper around FastAgent for multi-provider support"""
+    """Wrapper around FastAgent for multi-provider support and workflow patterns"""
     
     def __init__(self, config: Dict[str, Any]):
         super().__init__(config)
         self.url = config.get("url", "http://localhost:8000")
+        self.default_model = config.get("default_model", "anthropic/claude-3-5-sonnet")
     
-    async def chat(self, messages, model, tools=None, **kwargs):
-        # Use FastAgent API
-        pass
+    async def chat(
+        self,
+        messages: List[Message],
+        model: Optional[str] = None,
+        tools: Optional[List[Dict]] = None,
+        **kwargs
+    ) -> AsyncIterator[str]:
+        """Stream chat completion via FastAgent"""
+        model = model or self.default_model
+        
+        async with httpx.AsyncClient() as client:
+            async with client.stream(
+                "POST",
+                f"{self.url}/v1/chat/completions",
+                json={
+                    "model": model,
+                    "messages": [{"role": m.role, "content": m.content} for m in messages],
+                    "tools": tools,
+                    "stream": True,
+                    **kwargs
+                }
+            ) as response:
+                async for chunk in response.aiter_lines():
+                    if chunk.startswith("data: "):
+                        data = chunk[6:]
+                        if data == "[DONE]":
+                            break
+                        # Parse and yield content
+                        yield parse_chunk(data)
     
     async def embed(self, text: str, model: str) -> List[float]:
-        pass
+        """Get embeddings via FastAgent"""
+        async with httpx.AsyncClient() as client:
+            resp = await client.post(
+                f"{self.url}/v1/embeddings",
+                json={"model": model, "input": text}
+            )
+            return resp.json()["data"][0]["embedding"]
     
     @property
     def supports_streaming(self) -> bool:
@@ -909,9 +989,275 @@ class FastAgentProvider(Provider):
         return True
 ```
 
+#### Workflow Runner
+
+```python
+# pyclaw/workflows/runner.py
+from typing import Dict, Any, List, Optional
+from dataclasses import dataclass
+from enum import Enum
+
+class WorkflowType(str, Enum):
+    CHAIN = "chain"           # Sequential: A → B → C
+    PARALLEL = "parallel"    # Fan-out/in: A → [B, C] → D
+    MAKER = "maker"          # K-voting for error reduction
+    AGENTS_AS_TOOLS = "agents_as_tools"  # Routing pattern
+
+@dataclass
+class WorkflowStep:
+    agent_id: str
+    tools: Optional[List[str]] = None
+    input_mapping: Optional[Dict[str, str]] = None  # {"step_output": "next_input"}
+    output_key: Optional[str] = None  # Where to store this step's output
+
+@dataclass
+class Workflow:
+    name: str
+    type: WorkflowType
+    agents: List[str]  # Agent IDs to use
+    steps: Optional[List[WorkflowStep]] = None
+    max_workers: Optional[int] = None  # For parallel
+    k_votes: Optional[int] = None  # For maker
+
+class WorkflowRunner:
+    """Executes workflows using FastAgent patterns"""
+    
+    def __init__(self, agent_registry, mcp_registry):
+        self.agents = agent_registry
+        self.mcp = mcp_registry
+    
+    async def run_chain(self, workflow: Workflow, initial_input: Any) -> Any:
+        """Run sequential chain: A → B → C"""
+        context = {"input": initial_input}
+        
+        for step in workflow.steps:
+            agent = self.agents.get(step.agent_id)
+            # Map inputs from previous step
+            input_data = self._map_inputs(context, step.input_mapping)
+            # Execute agent
+            result = await agent.execute(input_data)
+            # Store output
+            if step.output_key:
+                context[step.output_key] = result
+            context["last_output"] = result
+        
+        return context.get("last_output")
+    
+    async def run_parallel(self, workflow: Workflow, initial_input: Any) -> Any:
+        """Run parallel: A → [B, C, D] → combine results"""
+        # Fan-out
+        tasks = []
+        for step in workflow.steps:
+            agent = self.agents.get(step.agent_id)
+            input_data = self._map_inputs({"input": initial_input}, step.input_mapping)
+            tasks.append(agent.execute(input_data))
+        
+        # Fan-in: gather results
+        import asyncio
+        results = await asyncio.gather(*tasks)
+        
+        # Combine results
+        return self._combine_results(results)
+    
+    async def run_maker(self, workflow: Workflow, input_data: Any) -> Any:
+        """Run K-voting maker pattern for error reduction"""
+        import asyncio
+        
+        k = workflow.k_votes or 3
+        tasks = []
+        
+        for _ in range(k):
+            # Each agent gets same input, produces independent output
+            agent = self.agents.get(workflow.agents[0])
+            tasks.append(agent.execute(input_data))
+        
+        results = await asyncio.gather(*tasks)
+        
+        # Vote/aggregate results (majority wins, or best of N)
+        return self._aggregate_votes(results)
+    
+    async def run_agents_as_tools(self, workflow: Workflow, input_data: Any) -> Any:
+        """Run orchestrator-workers pattern"""
+        orchestrator = self.agents.get(workflow.agents[0])
+        
+        # Orchestrator decides which worker agents to call
+        plan = await orchestrator.plan(input_data)
+        
+        # Execute worker agents based on plan
+        results = {}
+        for step in plan["steps"]:
+            agent = self.agents.get(step["agent_id"])
+            worker_input = self._map_inputs({"original_input": input_data, "results": results}, step.get("input_mapping"))
+            result = await agent.execute(worker_input)
+            results[step["name"]] = result
+        
+        # Orchestrator produces final response
+        return await orchestrator.synthesize(results)
+    
+    def _map_inputs(self, context: Dict, mapping: Optional[Dict[str, str]]) -> Any:
+        """Map inputs from context based on mapping config"""
+        if not mapping:
+            return context.get("last_output") or context.get("input")
+        
+        return {k: context.get(v) for k, v in mapping.items()}
+    
+    def _combine_results(self, results: List[Any]) -> Any:
+        """Combine parallel results - can be overridden"""
+        return {"results": results, "count": len(results)}
+    
+    def _aggregate_votes(self, results: List[Any]) -> Any:
+        """Aggregate K-voting results - majority wins"""
+        # Simple implementation: return most common result
+        from collections import Counter
+        return Counter(str(r) for r in results).most_common(1)[0][0]
+
+
 ---
 
-## 8. Plugin/Hook System
+## 8. Workflows (FastAgent)
+
+### 8.1 Workflow Configuration
+
+Workflows are defined in YAML and loaded at startup:
+
+```yaml
+# ~/.pyclaw/workflows.yaml
+workflows:
+  research_and_write:
+    type: chain
+    description: "Research topic then write summary"
+    agents:
+      - research_agent
+      - writer_agent
+    steps:
+      - agent: research_agent
+        output_key: research_data
+        tools: ["web_search", "web_fetch"]
+      - agent: writer_agent
+        input_mapping:
+          context: research_data
+        tools: ["write"]
+
+  parallel_discovery:
+    type: parallel
+    description: "Search multiple sources simultaneously"
+    max_workers: 5
+    agents:
+      - search_agent
+      - search_agent
+      - search_agent
+    combiner: merge_unique
+
+  code_review:
+    type: maker
+    description: "Multiple agents review code for errors"
+    k_votes: 3
+    agents:
+      - code_reviewer
+
+  routing_assistant:
+    type: agents_as_tools
+    description: "Orchestrator routes to specialists"
+    agents:
+      - triage_agent
+      - researcher_agent
+      - coder_agent
+      - writer_agent
+```
+
+### 8.2 Workflow Types
+
+| Type | Use Case | Description |
+|------|----------|-------------|
+| `chain` | Sequential tasks | A → B → C, each passes output to next |
+| `parallel` | Concurrent execution | A → [B, C, D] fan-out, combine results |
+| `maker` | Error reduction | Run same task K times, vote on result |
+| `agents_as_tools` | Routing | Orchestrator decides which agents to use |
+
+### 8.3 MCP Tools as Agent Tools
+
+FastAgent provides native MCP support. Agents can use MCP tools from the registry:
+
+```python
+# pyclaw/workflows/mcp_integration.py
+from typing import Dict, Any, List
+
+class MCPToolRegistry:
+    """Registry of available MCP tools for agents"""
+    
+    def __init__(self):
+        self.tools: Dict[str, Any] = {}
+    
+    def register(self, name: str, tool: Any):
+        """Register an MCP tool"""
+        self.tools[name] = tool
+    
+    def get_tools_for_agent(self, agent_id: str) -> List[str]:
+        """Get list of tools available to an agent"""
+        # Load from agent config
+        agent_config = self._load_agent_config(agent_id)
+        return agent_config.get("tools", [])
+    
+    async def execute_tool(self, tool_name: str, args: Dict[str, Any]) -> Any:
+        """Execute an MCP tool"""
+        tool = self.tools.get(tool_name)
+        if not tool:
+            raise ValueError(f"Unknown tool: {tool_name}")
+        return await tool.execute(args)
+```
+
+### 8.4 Built-in Workflow Patterns
+
+```python
+# pyclaw/workflows/patterns.py
+from .runner import WorkflowRunner, Workflow, WorkflowType
+from typing import Any, Dict
+
+class WorkflowPatterns:
+    """Pre-built workflow patterns"""
+    
+    @staticmethod
+    def research_write() -> Workflow:
+        """Research → Write chain"""
+        return Workflow(
+            name="research_write",
+            type=WorkflowType.CHAIN,
+            agents=["research_agent", "writer_agent"],
+            steps=[
+                WorkflowStep(agent_id="research_agent", output_key="research"),
+                WorkflowStep(
+                    agent_id="writer_agent",
+                    input_mapping={"context": "research"}
+                )
+            ]
+        )
+    
+    @staticmethod
+    def parallel_scrape(urls: List[str]) -> Workflow:
+        """Scrape multiple URLs in parallel"""
+        return Workflow(
+            name="parallel_scrape",
+            type=WorkflowType.PARALLEL,
+            agents=["scraper_agent"] * len(urls),
+            steps=[
+                WorkflowStep(
+                    agent_id="scraper_agent",
+                    input_mapping={"url": f"url_{i}"}
+                )
+                for i in range(len(urls))
+            ]
+        )
+    
+    @staticmethod
+    def code_review_k_way() -> Workflow:
+        """K-way code review for error reduction"""
+        return Workflow(
+            name="code_review",
+            type=WorkflowType.MAKER,
+            agents=["reviewer_agent"],
+            k_votes=3
+        )
+
 
 ### 8.1 Plugin Loader
 
