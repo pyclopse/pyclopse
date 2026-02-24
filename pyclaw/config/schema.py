@@ -272,6 +272,8 @@ class GatewayConfig(BaseModel):
     port: int = 8080
     debug: bool = False
     log_level: str = "info"
+    webhook_url: Optional[str] = Field(default=None, validation_alias="webhookUrl")
+    cors_origins: List[str] = Field(default_factory=lambda: ["*"], validation_alias="corsOrigins")
 
 
 class Config(BaseModel):
