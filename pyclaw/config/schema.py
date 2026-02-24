@@ -222,9 +222,28 @@ class ChannelsConfig(BaseModel):
     whatsapp: Optional[WhatsAppConfig] = None
 
 
+class PluginType(str, Enum):
+    """Types of plugins supported by pyclaw."""
+    PYTHON = "python"       # Native Python plugin (loaded directly)
+    HTTP = "http"           # HTTP/RPC plugin (separate process)
+    SUBPROCESS = "subprocess"  # stdio communication (any language)
+    JSON = "json"           # Config-only plugins (no code)
+
+
 class PluginEntryConfig(BaseModel):
     """Single plugin entry configuration."""
     enabled: bool = True
+    type: PluginType = PluginType.PYTHON
+    # For python type
+    path: Optional[str] = None
+    module: Optional[str] = None
+    # For http type
+    url: Optional[str] = None
+    health: Optional[str] = None
+    # For subprocess type
+    command: Optional[str] = None
+    protocol: str = "json"  # json, text
+    # For json type
     config: Dict[str, Any] = Field(default_factory=dict)
 
 

@@ -477,10 +477,90 @@ plugins:
   enabled: true
   autoEnable: true
   entries:
+    # Python native plugin
     my-plugin:
-      enabled: true
+      type: python
+      path: ./plugins/my_plugin.py
       config:
         option1: "value1"
+    
+    # HTTP/RPC plugin (any language!)
+    telegram-bot:
+      type: http
+      url: http://localhost:9001/webhook
+      health: http://localhost:9001/health
+      config:
+        token: "${TELEGRAM_BOT_TOKEN}"
+    
+    # Subprocess plugin (stdio communication)
+    custom_shell:
+      type: subprocess
+      command: ./my_plugin.sh
+      protocol: json  # communicate via JSON stdin/stdout
+    
+    # JSON config-only plugin
+    simple_webhook:
+      type: json
+      config:
+        route: /webhook
+        response: "Hello"
+
+### Plugin Types
+
+pyclaw supports multiple plugin types:
+
+| Type | Description | Use Case |
+|------|-------------|----------|
+| `python` | Native Python plugin (loaded directly) | Maximum flexibility, full API access |
+| `http` | HTTP/RPC plugin (separate process) | Any language (Go, Rust, Node, etc.) |
+| `subprocess` | stdio communication (any language) | Simple shell scripts, binaries |
+| `json` | Config-only plugins (no code) | Simple webhooks, static responses |
+
+#### Python Plugins
+
+```yaml
+my-plugin:
+  type: python
+  path: ./plugins/my_plugin.py  # or module: "mymodule.plugin"
+  config:
+    option1: "value1"
+```
+
+Python plugins define a `Plugin` or `ChannelPlugin` subclass.
+
+#### HTTP Plugins
+
+```yaml
+telegram-bot:
+  type: http
+  url: http://localhost:9001/webhook
+  health: http://localhost:9001/health
+```
+
+HTTP plugins run as separate processes and communicate via HTTP. Any language can be used.
+
+#### Subprocess Plugins
+
+```yaml
+custom_shell:
+  type: subprocess
+  command: ./my_plugin.sh
+  protocol: json  # or "text"
+```
+
+Subprocess plugins communicate via stdin/stdout. Use `protocol: json` for JSON messages.
+
+#### JSON Plugins
+
+```yaml
+simple_webhook:
+  type: json
+  config:
+    route: /webhook
+    response: "Hello"
+```
+
+JSON plugins are config-only with no executable code.
 
 # Hooks
 hooks:

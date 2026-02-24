@@ -1,6 +1,7 @@
 """Plugin registry for managing loaded plugins."""
 
 import logging
+from pathlib import Path
 from typing import Any, Dict, List, Optional, Type
 
 from pyclaw.plugins import (
@@ -10,6 +11,7 @@ from pyclaw.plugins import (
     PluginState,
     PluginType,
 )
+from pyclaw.plugins.loaders import MultiTypePluginLoader
 
 
 logger = logging.getLogger("pyclaw.plugins")
@@ -20,12 +22,15 @@ class PluginRegistry:
     Registry for managing plugins.
     
     Handles plugin registration, enabling/disabling, and retrieval.
+    Supports multiple plugin types: python, http, subprocess, json.
     """
     
-    def __init__(self):
+    def __init__(self, plugin_dirs: Optional[List[Path]] = None):
         self._plugins: Dict[str, PluginInfo] = {}
         self._plugin_classes: Dict[str, Type[Plugin]] = {}
         self._gateway = None
+        self._multi_loader = MultiTypePluginLoader(plugin_dirs)
+        self._plugin_dirs = plugin_dirs or []
     
     @property
     def gateway(self):
@@ -92,6 +97,48 @@ class PluginRegistry:
         info.loaded_at = None  # Will be set on enable
         
         logger.info(f"Loaded plugin instance: {name}")
+    
+    async def load_plugin_from_config(
+        self,
+        name: str,
+        config: Dict[str, Any],
+    ) -> bool:
+        """
+        Load a plugin from configuration (supports multi-type).
+        
+        Args:
+            name: Plugin name
+            config: Plugin configuration including 'type' field
+            
+        Returns:
+            True if successful
+        """
+        # Determine plugin type
+        type_str = config.get("type", "python")
+        if isinstance(type_str, str):
+            plugin_type = PluginType(type_str.lower())
+        else:
+            plugin_type = type_str
+
+        # Get the plugin config (nested under 'config' key or at top level)
+        plugin_config = config.get("config", {})
+        
+        # Merge top-level fields into config for backward compatibility
+        for field in ["path", "module", "url", "health", "command", "protocol"]:
+            if field in config and field not in plugin_config:
+                plugin_config[field] = config[field]
+
+        # Load the plugin using multi-type loader
+        instance = await self._multi_loader.load_plugin(name, plugin_type, plugin_config)
+        
+        if instance is None:
+            logger.error(f"Failed to load plugin: {name} (type: {plugin_type})")
+            return False
+
+        # Register the instance
+        self.register_plugin_instance(name, instance, plugin_config)
+        logger.info(f"Loaded plugin: {name} (type: {plugin_type})")
+        return True
     
     async def enable_plugin(self, name: str) -> bool:
         """

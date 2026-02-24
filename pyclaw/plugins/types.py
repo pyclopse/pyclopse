@@ -11,11 +11,15 @@ if TYPE_CHECKING:
 
 class PluginType(str, Enum):
     """Types of plugins supported by pyclaw."""
-    CHANNEL = "channel"
-    SKILL = "skill"
-    TOOL = "tool"
-    MIDDLEWARE = "middleware"
-    STORAGE = "storage"
+    PYTHON = "python"       # Native Python plugin (loaded directly)
+    HTTP = "http"           # HTTP/RPC plugin (separate process)
+    SUBPROCESS = "subprocess"  # stdio communication (any language)
+    JSON = "json"           # Config-only plugins (no code)
+    CHANNEL = "channel"     # Channel adapter plugins
+    SKILL = "skill"         # Skill plugins
+    TOOL = "tool"           # Tool plugins
+    MIDDLEWARE = "middleware"  # Middleware plugins
+    STORAGE = "storage"     # Storage backend plugins
 
 
 class PluginState(str, Enum):
