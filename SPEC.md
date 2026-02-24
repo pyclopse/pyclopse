@@ -1939,7 +1939,175 @@ class HookRegistry:
 
 ---
 
-## 9. Mobile API Design
+## 9. Gateway Concepts
+
+These are gateway-level features that pyclaw must handle, which are outside the scope of FastAgent's agent/workflow engine:
+
+### 9.1 Compaction
+
+**What**: Compress session context to stay within token limits.
+
+**When**: Before hitting token limits during a conversation.
+
+**How**: Summarize old messages while keeping recent context intact. This is critical for long-running sessions where the full message history would exceed the model's context window.
+
+```python
+# pyclaw/core/compaction.py
+class ContextCompactor:
+    def __init__(self, max_tokens: int = 100000):
+        self.max_tokens = max_tokens
+    
+    async def compact(self, messages: list) -> list:
+        """Compress messages to fit within token budget"""
+        # Keep recent messages intact
+        # Summarize older messages into a summary message
+        # Return compacted message list
+        pass
+    
+    async def summarize_messages(self, messages: list) -> str:
+        """Use the model to summarize old message history"""
+        pass
+```
+
+### 9.2 Session Persistence
+
+**What**: Save and restore session state for crash recovery and restarts.
+
+**When**: On gateway restart, before potential crash, and periodically.
+
+**How**: Serialize messages, agent state, and metadata to disk (SQLite or JSON).
+
+```python
+# pyclaw/core/session.py
+class SessionPersistence:
+    def __init__(self, storage_path: str):
+        self.storage_path = storage_path
+    
+    async def save_session(self, session: Session):
+        """Serialize session to disk"""
+        pass
+    
+    async def load_session(self, session_id: str) -> Session:
+        """Restore session from disk"""
+        pass
+    
+    async def list_sessions(self) -> list:
+        """List all persisted sessions"""
+        pass
+```
+
+### 9.3 Context Windows
+
+**What**: Manage token limits per session, tracking message sizes and truncating as needed.
+
+**When**: Always - ongoing management throughout the session.
+
+**How**: Track message token counts, monitor context usage, and proactively truncate or compact before hitting limits.
+
+```python
+# pyclaw/core/context.py
+class ContextManager:
+    def __init__(self, session: Session, max_tokens: int):
+        self.session = session
+        self.max_tokens = max_tokens
+    
+    def count_tokens(self, messages: list) -> int:
+        """Count tokens in message list"""
+        pass
+    
+    def needs_truncation(self) -> bool:
+        """Check if context needs truncation"""
+        pass
+    
+    def truncate(self, messages: list) -> list:
+        """Truncate oldest messages to fit budget"""
+        pass
+```
+
+### 9.4 Pulse System
+
+**What**: Periodic agent polling for background tasks (heartbeats).
+
+**When**: Configured intervals (e.g., every 30 minutes).
+
+**How**: Asyncio tasks per agent that run at configured intervals, checking for updates or performing background work.
+
+> **Status**: Already implemented in `pyclaw/pulse/` module.
+
+```python
+# pyclaw/pulse/runner.py
+class PulseRunner:
+    def __init__(self, agent: Agent, config: PulseConfig):
+        self.agent = agent
+        self.config = config
+    
+    async def start(self):
+        """Start periodic pulse tasks"""
+        pass
+    
+    async def pulse(self):
+        """Execute pulse task"""
+        pass
+```
+
+### 9.5 Jobs System
+
+**What**: Scheduled tasks (cron-like functionality).
+
+**When**: Based on cron schedules configured per job.
+
+**How**: Job queue with persistence (SQLite), scheduler runs jobs at configured times.
+
+> **Status**: Already implemented in `pyclaw/jobs/` module.
+
+```python
+# pyclaw/jobs/scheduler.py
+class JobScheduler:
+    def __init__(self, job_store: JobStore):
+        self.job_store = job_store
+    
+    async def schedule(self, job: Job):
+        """Add job to schedule"""
+        pass
+    
+    async def run_pending(self):
+        """Execute pending jobs"""
+        pass
+```
+
+### 9.6 Channel Management
+
+**What**: Integration with messaging platforms (Telegram, Discord, Slack, WhatsApp, etc.).
+
+**When**: Always running - gateway must handle incoming messages from all channels.
+
+**How**: Channel adapters register with the gateway, receive webhooks, and route messages to agents.
+
+> **Implemented**: See Section 5. Channel Adapters.
+
+### 9.7 Security Layer
+
+**What**: Exec approvals, audit logging, and sandboxing for dangerous operations.
+
+**When**: Before any dangerous operation (exec, file writes, network calls).
+
+**How**: Allowlist/denylist policies, approval UI for pending requests, comprehensive audit logging.
+
+> **Implemented**: See Section 4. Security Model.
+
+### 9.8 Memory (ClawVault)
+
+**What**: Long-term memory integration for persistent context.
+
+**When**: On session end (store context), on session start (restore context), on query (search memory).
+
+**How**: CLI wrapper for clawvault npm package (subprocess calls).
+
+> **Implemented**: See Section 6. Memory Integration.
+
+---
+
+## 10. Mobile API Design
 
 ### 9.1 FastAPI Application
 
