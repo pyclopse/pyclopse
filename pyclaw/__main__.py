@@ -158,9 +158,12 @@ async def run_gateway_with_tui(config_path: str = None, host: str = None, port: 
     gateway = Gateway(config_path)
     await gateway.initialize()
     
-    # Run TUI
-    from .tui.app import run_tui
-    await run_tui(gateway)
+    # Run TUI with graceful shutdown handling
+    try:
+        from .tui.app import run_tui
+        await run_tui(gateway)
+    except KeyboardInterrupt:
+        print("\nCtrl+C received, shutting down...")
     
     # Cleanup
     await gateway.stop()

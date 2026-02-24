@@ -152,12 +152,25 @@ class Gateway:
             provider_config = agent_config_dict.get("provider")
             # Convert dict to AgentConfig object
             agent_config = AgentConfig(**agent_config_dict)
+            
+            # Get config_dir from config loader (default: ~/.pyclaw)
+            # config_path could be a file like ~/.pyclaw/config/pyclaw.yaml, so get parent
+            if self._config_loader.config_path:
+                config_path_obj = self._config_loader.config_path
+                if config_path_obj.is_file():
+                    config_dir = str(config_path_obj.parent)
+                else:
+                    config_dir = str(config_path_obj)
+            else:
+                config_dir = "~/.pyclaw"
+            
             self.agent_manager.create_agent(
                 agent_id=agent_id,
                 name=name,
                 config=agent_config,
                 provider_config=provider_config,
                 session_manager=self.session_manager,
+                config_dir=config_dir,
             )
         
         await self.agent_manager.start_all()

@@ -47,6 +47,7 @@ class Agent:
     tool_executor: Optional[ToolExecutor] = None
     provider: Optional[Any] = None  # Provider instance
     skill_runner: Optional[Any] = None  # SkillRunner for tool execution
+    config_dir: str = "~/.pyclaw"  # Base config directory for agent files
     
     # FastAgent integration
     fast_agent: Optional[Any] = None  # FastAgent instance

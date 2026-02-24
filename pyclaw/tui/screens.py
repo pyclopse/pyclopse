@@ -20,6 +20,7 @@ from textual.widgets import (
     Label,
     DataTable,
     Switch,
+    TextArea,
 )
 from textual.binding import Binding
 from textual import work
@@ -68,8 +69,8 @@ class ChatScreen(Screen):
             
             # Main chat area
             with Vertical(id="chat-area"):
-                # Chat history (RichLog for Rich markup support)
-                yield RichLog(id="chat-history", markup=True)
+                # Chat history (TextArea for text selection support)
+                yield TextArea(id="chat-history", read_only=True, show_line_numbers=False)
                 
                 # Input area
                 with Horizontal(id="input-area"):
@@ -87,7 +88,7 @@ class ChatScreen(Screen):
         debug_write("ChatScreen.on_mount called")
         
         self._chat_input = self.query_one("#chat-input", Input)
-        self._chat_history = self.query_one("#chat-history", RichLog)
+        self._chat_history = self.query_one("#chat-history", TextArea)
         self._agent_list = self.query_one("#agent-list", AgentListWidget)
         
         debug_write(f"on_mount: gateway={self.gateway}, app_ref={self.app_ref}")
@@ -143,7 +144,23 @@ class ChatScreen(Screen):
     
     def _append_chat(self, text: str) -> None:
         """Append text to chat history."""
-        self._chat_history.write(text)
+        # TextArea doesn't support Rich markup, so we strip basic tags
+        # for display purposes
+        import re
+        # Strip common Rich markup tags for plain text display
+        plain_text = re.sub(r'\[/?\w+\]', '', text)  # Remove [b], [blue], [/blue], etc.
+        plain_text = plain_text.strip()
+        
+        # Get current content and append new message
+        current = self._chat_history.text or ""
+        if current:
+            new_content = current + "\n" + plain_text
+        else:
+            new_content = plain_text
+        
+        self._chat_history.text = new_content
+        # Scroll to bottom
+        self._chat_history.scroll_end()
     
     def on_input_submitted(self, event: Input.Submitted) -> None:
         """Handle input submission."""
