@@ -30,6 +30,7 @@ from pyclaw.agents.factory import (
     create_agent_from_config,
     get_factory,
 )
+from pyclaw.core.prompt_builder import build_system_prompt, AGENT_FILES
 
 
 # Tool execution function type
@@ -73,6 +74,18 @@ class Agent:
             getattr(self.config, "workflow", None) is not None
         )
     
+    @property
+    def system_prompt(self) -> str:
+        """Get system prompt - built from agent files or config."""
+        # Try to build from agent files (like OpenClaw)
+        if hasattr(self, 'config_dir'):
+            prompt = build_system_prompt(self.id, self.config_dir)
+            if prompt != "You are a helpful AI assistant.":
+                return prompt
+        
+        # Fall back to config
+        return getattr(self.config, "system_prompt", "You are a helpful AI assistant.")
+    
     def _init_fastagent(self) -> None:
         """Initialize FastAgent for this agent."""
         if not FASTAGENT_AVAILABLE:
@@ -89,7 +102,7 @@ class Agent:
                 # Create workflow agent
                 workflow_config = {
                     "name": self.name,
-                    "instruction": self.config.system_prompt,
+                    "instruction": self.system_prompt,
                     "workflow": workflow_type,
                     "agents": getattr(self.config, "agents", []),
                     "model": self.config.model,
@@ -105,7 +118,7 @@ class Agent:
                 
                 self.fast_agent = factory.create_agent(
                     name=self.name,
-                    instruction=self.config.system_prompt,
+                    instruction=self.system_prompt,
                     model=model or "sonnet",
                     temperature=self.config.temperature,
                     max_tokens=self.config.max_tokens,
@@ -116,7 +129,7 @@ class Agent:
             from pyclaw.agents.runner import AgentRunner
             self.fast_agent_runner = AgentRunner(
                 agent_name=self.name,
-                instruction=self.config.system_prompt,
+                instruction=self.system_prompt,
                 model=self.config.model,
                 temperature=self.config.temperature,
                 max_tokens=self.config.max_tokens,
@@ -232,7 +245,7 @@ class Agent:
         # Add system prompt
         messages.append(ProviderMessage(
             role="system",
-            content=self.config.system_prompt,
+            content=self.system_prompt,
         ))
         
         # Add conversation history
@@ -373,7 +386,7 @@ class Agent:
         
         # Fall back to provider
         messages = [
-            ProviderMessage(role="system", content=self.config.system_prompt),
+            ProviderMessage(role="system", content=self.system_prompt),
             ProviderMessage(role="user", content=prompt),
         ]
         
