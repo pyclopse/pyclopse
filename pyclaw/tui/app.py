@@ -68,7 +68,7 @@ class TUIApp(App):
         margin: 1 0;
     }
     
-    # status-bar {
+    #status-bar {
         height: 3;
         background: $panel;
         border-top: solid $border;
