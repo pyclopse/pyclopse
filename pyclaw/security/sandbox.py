@@ -162,6 +162,28 @@ class DockerSandbox(Sandbox):
             "-w", cwd,
         ]
         
+        # Add resource limits if configured
+        if self.docker_config.memory_limit:
+            cmd.extend(["--memory", self.docker_config.memory_limit])
+        
+        if self.docker_config.cpu_limit:
+            cmd.extend(["--cpus", str(self.docker_config.cpu_limit)])
+        
+        if self.docker_config.pids_limit:
+            cmd.extend(["--pids-limit", str(self.docker_config.pids_limit)])
+        
+        # Read-only root filesystem
+        if self.docker_config.read_only:
+            cmd.append("--read-only")
+        
+        # Tmpfs for /tmp if configured
+        if self.docker_config.tmp_size:
+            cmd.extend(["--tmpfs", f"/tmp:size={self.docker_config.tmp_size}m"])
+        
+        # Add allowed volumes
+        for volume in self.docker_config.allowed_volumes:
+            cmd.extend(["-v", volume])
+        
         # Add environment variables
         exec_env = os.environ.copy()
         if env:
@@ -233,3 +255,77 @@ def create_sandbox(config: SandboxConfig) -> Sandbox:
     
     # Default to no sandbox
     return NoSandbox(config)
+
+
+class DockerContainerManager:
+    """Manage Docker containers for sandboxed execution."""
+    
+    def __init__(self, docker_config: Optional[DockerSandboxConfig] = None):
+        self.docker_config = docker_config or DockerSandboxConfig()
+        self._logger = logging.getLogger("pyclaw.sandbox.docker.manager")
+    
+    async def is_docker_available(self) -> bool:
+        """Check if Docker is available."""
+        try:
+            process = await asyncio.create_subprocess_exec(
+                "docker", "--version",
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
+            )
+            await process.communicate()
+            return process.returncode == 0
+        except FileNotFoundError:
+            return False
+    
+    async def pull_image(self) -> bool:
+        """Pull the configured Docker image."""
+        if not await self.is_docker_available():
+            return False
+        
+        self._logger.info(f"Pulling Docker image: {self.docker_config.image}")
+        process = await asyncio.create_subprocess_exec(
+            "docker", "pull", self.docker_config.image,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+        )
+        stdout, stderr = await process.communicate()
+        
+        if process.returncode != 0:
+            self._logger.error(f"Failed to pull image: {stderr.decode()}")
+            return False
+        
+        return True
+    
+    async def list_containers(self) -> List[Dict[str, Any]]:
+        """List running containers."""
+        if not await self.is_docker_available():
+            return []
+        
+        process = await asyncio.create_subprocess_exec(
+            "docker", "ps", "--format", "{{json . }}",
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+        )
+        stdout, stderr = await process.communicate()
+        
+        if process.returncode != 0:
+            return []
+        
+        containers = []
+        for line in stdout.decode().strip().split("\n"):
+            if line:
+                import json
+                containers.append(json.loads(line))
+        return containers
+    
+    async def prune_containers(self) -> bool:
+        """Prune stopped containers."""
+        if not await self.is_docker_available():
+            return False
+        
+        process = await asyncio.create_subprocess_exec(
+            "docker", "container", "prune", "-f",
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+        )
+        return process.returncode == 0

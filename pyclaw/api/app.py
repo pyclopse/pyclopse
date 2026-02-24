@@ -7,7 +7,7 @@ from fastapi import FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
-from .routes import agents, channels, jobs
+from .routes import agents, channels, jobs, nodes
 
 logger = logging.getLogger("pyclaw.api")
 
@@ -70,6 +70,7 @@ def create_app(gateway: Optional[Any] = None) -> FastAPI:
     app.include_router(agents.router, prefix="/api/v1/agents", tags=["agents"])
     app.include_router(channels.router, prefix="/api/v1/channels", tags=["channels"])
     app.include_router(jobs.router, prefix="/api/v1/jobs", tags=["jobs"])
+    app.include_router(nodes.router, prefix="/api/v1/nodes", tags=["nodes"])
     
     # Health check
     @app.get("/health")

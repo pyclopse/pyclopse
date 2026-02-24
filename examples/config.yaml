@@ -1,0 +1,110 @@
+# Example pyclaw configuration with nodes, browser, and sandbox settings
+# Copy to ~/.pyclaw/config.yaml and customize
+
+version: "1.0"
+
+# Gateway server configuration
+gateway:
+  host: "0.0.0.0"
+  port: 8080
+  debug: false
+  log_level: "info"
+  cors_origins:
+    - "*"
+
+# Node API configuration for peer-to-peer communication
+nodes:
+  enabled: true
+  node_id: "pyclaw-main"  # Unique ID for this instance
+  requireApproval: true  # Require manual approval for new nodes
+  # secretKey: "${NODE_SECRET}"  # Optional shared secret
+  whitelist:  # Only allow these node IDs
+    - node_id_1
+    - node_id_2
+
+# Security configuration
+security:
+  execApprovals:
+    mode: "allowlist"  # allowlist, denylist, all, none
+    safe_bins:
+      - /bin/ls
+      - /bin/cat
+      - /bin/echo
+    always_approve:
+      - localhost
+  
+  sandbox:
+    enabled: true
+    type: "docker"  # docker, none
+    docker:
+      image: "pyclaw-sandbox:latest"
+      network: "none"
+      memoryLimit: "512m"
+      cpuLimit: 1.0
+      pidsLimit: 100
+      readOnly: true
+      tmpSize: 100
+      allowedVolumes: []
+  
+  audit:
+    enabled: true
+    log_file: "~/.pyclaw/logs/audit.log"
+    retention_days: 90
+
+# Browser automation (Playwright)
+browser:
+  enabled: false
+  headless: true
+  slow_mo: 0
+  timeout: 30000
+  viewport_width: 1280
+  viewport_height: 720
+
+# Memory configuration
+memory:
+  backend: "clawvault"
+  clawvault:
+    enabled: true
+    vault_path: "~/.claw/vault"
+
+# Providers configuration
+providers:
+  openai:
+    enabled: true
+    api_key: "${OPENAI_API_KEY}"
+    defaultModel: "gpt-4"
+
+# Agents configuration
+agents:
+  default:
+    name: "Assistant"
+    model: "openai/gpt-4"
+    maxTokens: 4096
+    temperature: 0.7
+    system_prompt: "You are a helpful assistant."
+    heartbeat:
+      enabled: true
+      every: "30m"
+
+# Jobs (cron) configuration
+jobs:
+  enabled: true
+  persist_file: "~/.pyclaw/jobs.json"
+
+# Channels configuration
+channels:
+  telegram:
+    enabled: false
+    bot_token: "${TELEGRAM_BOT_TOKEN}"
+    allowed_users: []
+
+# Plugins configuration
+plugins:
+  enabled: true
+  auto_enable: true
+  entries: {}
+
+# TUI configuration
+tui:
+  enabled: true
+  theme: "dark"

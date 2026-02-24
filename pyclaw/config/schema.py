@@ -25,6 +25,12 @@ class DockerSandboxConfig(BaseModel):
     """Docker sandbox configuration."""
     image: str = "pyclaw-sandbox:latest"
     network: str = "none"
+    memory_limit: Optional[str] = Field(default=None, validation_alias="memoryLimit")
+    cpu_limit: Optional[float] = Field(default=None, validation_alias="cpuLimit")
+    pids_limit: Optional[int] = Field(default=None, validation_alias="pidsLimit")
+    read_only: bool = Field(default=True, validation_alias="readOnly")
+    tmp_size: Optional[int] = Field(default=None, validation_alias="tmpSize")  # MB
+    allowed_volumes: List[str] = Field(default_factory=list, validation_alias="allowedVolumes")
 
 
 class SandboxConfig(BaseModel):
@@ -138,6 +144,25 @@ class AgentsConfig(BaseModel):
     """Agents configuration (dict of agent configs)."""
     default: AgentConfig = Field(default_factory=AgentConfig)
     # Additional agents can be added as dict items
+
+
+class NodeConfig(BaseModel):
+    """Node configuration for peer-to-peer communication."""
+    enabled: bool = False
+    node_id: Optional[str] = Field(default=None, validation_alias="nodeId")
+    whitelist: List[str] = Field(default_factory=list)
+    require_approval: bool = Field(True, validation_alias="requireApproval")
+    secret_key: Optional[str] = Field(default=None, validation_alias="secretKey")
+
+    @field_validator("secret_key", mode="before")
+    @classmethod
+    def resolve_env_var(cls, v: Optional[str]) -> Optional[str]:
+        if v is None:
+            return None
+        if isinstance(v, str) and v.startswith("${") and v.endswith("}"):
+            var_name = v[2:-1]
+            return os.environ.get(var_name)
+        return v
 
 
 class JobsConfig(BaseModel):
@@ -273,6 +298,16 @@ class TUIConfig(BaseModel):
     key_bindings: Dict[str, str] = Field(default_factory=dict, validation_alias="keyBindings")
 
 
+class BrowserAutomationConfig(BaseModel):
+    """Browser automation configuration."""
+    enabled: bool = False
+    headless: bool = True
+    slow_mo: int = 0
+    timeout: int = 30000
+    viewport_width: int = 1280
+    viewport_height: int = 720
+
+
 class MemoryQmdPathConfig(BaseModel):
     """Memory QMD path configuration."""
     path: str
@@ -304,6 +339,8 @@ class Config(BaseModel):
     providers: ProvidersConfig = Field(default_factory=ProvidersConfig)
     agents: AgentsConfig = Field(default_factory=AgentsConfig)
     jobs: JobsConfig = Field(default_factory=JobsConfig)
+    nodes: NodeConfig = Field(default_factory=NodeConfig)
+    browser: BrowserAutomationConfig = Field(default_factory=BrowserAutomationConfig)
     channels: ChannelsConfig = Field(default_factory=ChannelsConfig)
     plugins: PluginsConfig = Field(default_factory=PluginsConfig)
     hooks: HooksConfig = Field(default_factory=HooksConfig)
