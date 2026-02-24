@@ -59,11 +59,6 @@ pyclaw/
 │   │   ├── runner.py         # Pulse runner
 │   │   ├── scheduler.py      # Pulse scheduling
 │   │   └── triggers.py       # Pulse triggers
-│   ├── skills/               # Skills system
-│   │   ├── __init__.py
-│   │   ├── loader.py         # Skill loader
-│   │   ├── registry.py       # Skill registry
-│   │   └── installer.py      # Skill installation
 │   ├── memory/               # Memory integration
 │   │   ├── __init__.py
 │   │   ├── client.py         # ClawVault CLI wrapper (subprocess)
@@ -1572,14 +1567,13 @@ agents:
 
 ### Skills (FastAgent Built-in)
 
-pyclaw uses FastAgent's built-in skills system (`fast_agent.skills`) instead of a custom skills system. 
+pyclaw uses FastAgent's built-in skills system (`fast_agent.skills`). The custom skills system has been removed.
 
 **Key Points:**
 - Skills are defined in FastAgent and loaded automatically
-- No need for pyclaw's custom skills system - it's deprecated
-- Skills integrate automatically via FastAgent
-- Skills provide additional capabilities to agents (e.g., web search, file operations)
 - Use FastAgent's skill registry to manage skills
+- Skills provide additional capabilities to agents (e.g., web search, file operations)
+- pyclaw no longer has its own skills module - use FastAgent skills
 
 ```python
 # Example: Using FastAgent skills

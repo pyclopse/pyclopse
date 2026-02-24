@@ -16,11 +16,6 @@ from pyclaw.providers import (
     create_provider,
     get_registry as get_provider_registry,
 )
-from pyclaw.skills.runner import (
-    get_default_runner,
-    SkillRunner,
-    SkillContext,
-)
 
 # FastAgent imports
 try:
@@ -50,7 +45,6 @@ class Agent:
     session_manager: Any = None  # SessionManager
     tool_executor: Optional[ToolExecutor] = None
     provider: Optional[Any] = None  # Provider instance
-    skill_runner: Optional[SkillRunner] = None
     
     # FastAgent integration
     fast_agent: Optional[Any] = None  # FastAgent instance
@@ -68,10 +62,6 @@ class Agent:
         # Initialize FastAgent if available and configured
         if FASTAGENT_AVAILABLE and self._should_use_fastagent():
             self._init_fastagent()
-        
-        # Initialize skill runner if tools are enabled
-        if self.config.tools.enabled and self.skill_runner is None:
-            self.skill_runner = get_default_runner()
     
     def _should_use_fastagent(self) -> bool:
         """Check if agent should use FastAgent."""
@@ -296,36 +286,12 @@ class Agent:
             if not response.tool_calls:
                 return response.content
             
-            # Execute tool calls
+            # Tool execution requires FastAgent
+            # Use FastAgent for agents that need tool execution
             for tool_call in response.tool_calls:
-                if not self.skill_runner:
-                    # No skill runner, add error message
-                    messages.append(ProviderMessage(
-                        role="tool",
-                        content="Skill runner not configured",
-                        tool_call_id=tool_call.id,
-                        name=tool_call.name,
-                    ))
-                    continue
-                
-                # Create context for skill execution
-                context = SkillContext(
-                    agent_id=self.id,
-                    session_id=self.current_session.id if self.current_session else "unknown",
-                )
-                
-                # Execute the tool
-                tool_result = await self.skill_runner.execute_tool_call(
-                    tool_call_id=tool_call.id,
-                    tool_name=tool_call.name,
-                    arguments=tool_call.arguments,
-                    context=context,
-                )
-                
-                # Add tool result to conversation
                 messages.append(ProviderMessage(
                     role="tool",
-                    content=tool_result.get("error") or str(tool_result.get("output", "")),
+                    content="Tool execution requires FastAgent. Use a FastAgent-based agent for tools.",
                     tool_call_id=tool_call.id,
                     name=tool_call.name,
                 ))
