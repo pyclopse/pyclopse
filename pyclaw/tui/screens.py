@@ -70,7 +70,7 @@ class ChatScreen(Screen):
             # Main chat area
             with Vertical(id="chat-area"):
                 # Chat history (TextArea for text selection support)
-                yield RichLog(id="chat-history", auto_scroll=True)
+                yield RichLog(id="chat-history", auto_scroll=True, markup=True)
                 
                 # Input area
                 with Horizontal(id="input-area"):
