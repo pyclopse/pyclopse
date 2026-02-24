@@ -945,6 +945,180 @@ class PluginLoader:
         module = importlib.util.module_from_spec(spec)
         spec.loader.exec_module(module)
         return module
+
+### 8.2 Route Dispatch System
+
+Plugins don't run their own servers—they register routes with the main FastAPI app. This is cleaner than OpenClaw's approach where each plugin could run as a separate process.
+
+```python
+# Plugin just registers routes, doesn't run its own server
+class TelegramPlugin(Plugin):
+    def register_routes(self, app: FastAPI) -> None:
+        app.add_api_route("/telegram/webhook", self.handle_webhook)
+        app.add_api_route("/telegram/commands", self.handle_commands)
+    
+    async def handle_webhook(self, request: Request):
+        # Handle incoming Telegram messages
+        pass
+    
+    async def handle_commands(self, request: Request):
+        # Handle Telegram commands
+        pass
+
+class DiscordPlugin(Plugin):
+    def register_routes(self, app: FastAPI) -> None:
+        app.add_api_route("/discord/webhook", self.handle_webhook)
+        app.add_api_route("/discord/interactions", self.handle_interactions)
+```
+
+The main gateway dispatches requests to the appropriate plugin:
+
+```python
+# Main router - plugins register routes at startup
+app = FastAPI()
+
+# Plugins register their routes during initialization
+telegram_plugin = TelegramPlugin(config)
+telegram_plugin.register_routes(app)
+
+discord_plugin = DiscordPlugin(config)
+discord_plugin.register_routes(app)
+
+# Resulting routes:
+# POST /telegram/webhook
+# POST /telegram/commands
+# POST /discord/webhook
+# POST /discord/interactions
+```
+
+### 8.3 Multi-Language Plugin Support
+
+**The Problem:** OpenClaw plugins are TypeScript-only since they're part of the same Node.js process.
+
+**pyclaw's Solution:** Plugins are NOT limited to Python—any language can be a plugin via HTTP/RPC.
+
+#### Architecture
+
+- pyclaw runs on ONE port (e.g., 18789)
+- Plugins register ROUTES at startup (not their own servers!)
+- Main router dispatches: `/telegram/*` → Telegram plugin, `/discord/*` → Discord plugin
+
+#### Plugin Interface (any language)
+
+Plugins implement a simple HTTP interface:
+
+```
+POST /webhook - receive messages from channel
+POST /send   - send messages to channel
+GET  /health - liveness check
+```
+
+Example external plugin in any language:
+
+```python
+# Example: Go plugin (external_service.go)
+package main
+
+import (
+    "github.com/gin-gonic/gin"
+)
+
+func main() {
+    r := gin.Default()
+    
+    r.POST("/webhook", func(c *gin.Context) {
+        // Receive messages from channel
+        c.JSON(200, gin.H{"status": "received"})
+    })
+    
+    r.POST("/send", func(c *gin.Context) {
+        // Send messages to channel
+        c.JSON(200, gin.H{"status": "sent"})
+    })
+    
+    r.GET("/health", func(c *gin.Context) {
+        c.JSON(200, gin.H{"status": "healthy"})
+    })
+    
+    r.Run(":8080")
+}
+```
+
+```rust
+// Example: Rust plugin (external_service.rs)
+use actix_web::{web, App, HttpServer, Responder};
+
+async fn webhook(req: web::HttpRequest) -> impl Responder {
+    "received"
+}
+
+async fn send(req: web::HttpRequest) -> impl Responder {
+    "sent"
+}
+
+async fn health() -> impl Responder {
+    "healthy"
+}
+
+#[actix_web::main]
+async fn main() -> std::io::Result<()> {
+    HttpServer::new(|| {
+        App::new()
+            .route("/webhook", web::post().to(webhook))
+            .route("/send", web::post().to(send))
+            .route("/health", web::get().to(health))
+    })
+    .bind("127.0.0.1:8081")?
+    .run()
+    .await
+}
+```
+
+#### Benefits
+
+- **Any language can be a plugin**: Python, Go, Rust, Node.js, etc.
+- **One port to manage**: pyclaw runs on a single port
+- **Easy to proxy**: Behind nginx, Caddy, or any reverse proxy
+- **Plugins distributed as binaries**: No language runtime required for plugin consumers
+
+#### Plugin Registration
+
+External plugins register with the gateway:
+
+```python
+# pyclaw/plugins/registry.py
+from typing import Dict, Any, Optional
+from dataclasses import dataclass
+
+@dataclass
+class ExternalPlugin:
+    name: str
+    base_url: str  # e.g., "http://localhost:8081"
+    health_check_interval: int = 30
+    
+class PluginRegistry:
+    def __init__(self):
+        self.plugins: Dict[str, ExternalPlugin] = {}
+    
+    def register(self, plugin: ExternalPlugin):
+        """Register an external plugin"""
+        self.plugins[plugin.name] = plugin
+    
+    def get_plugin(self, name: str) -> Optional[ExternalPlugin]:
+        return self.plugins.get(name)
+    
+    async def check_health(self, name: str) -> bool:
+        """Check if plugin is healthy"""
+        plugin = self.get_plugin(name)
+        if not plugin:
+            return False
+        # GET /health on the plugin's base_url
+        async with httpx.AsyncClient() as client:
+            try:
+                resp = await client.get(f"{plugin.base_url}/health")
+                return resp.status_code == 200
+            except:
+                return False
 ```
 
 ### 8.2 Hook System
