@@ -72,32 +72,98 @@ def create_parser() -> argparse.ArgumentParser:
         help="Path to config file",
     )
     
+    # run command
+    run_parser = subparsers.add_parser(
+        "run",
+        help="Run the gateway server (with optional TUI)",
+    )
+    run_parser.add_argument(
+        "--host",
+        type=str,
+        default=None,
+        help="Host to bind to (overrides config)",
+    )
+    run_parser.add_argument(
+        "--port",
+        type=int,
+        default=None,
+        help="Port to bind to (overrides config)",
+    )
+    run_parser.add_argument(
+        "--tui", "-t",
+        action="store_true",
+        help="Launch the TUI instead of API server",
+    )
+    run_parser.add_argument(
+        "--debug",
+        action="store_true",
+        help="Enable debug mode",
+    )
+    
     return parser
 
 
-async def run_gateway(config_path: str = None, debug: bool = False):
+async def run_gateway(config_path: str = None, host: str = None, port: int = None, debug: bool = False):
     """Run the gateway server."""
     from .config import ConfigLoader
+    from .core.gateway import Gateway
     
     loader = ConfigLoader(config_path)
     config = loader.load()
     
+    # Override host/port if provided
+    if host:
+        config.gateway.host = host
+    if port:
+        config.gateway.port = port
+    
     print(f"pyclaw v{__version__}")
-    print(f"Loaded config: {config.gateway.host}:{config.gateway.port}")
+    print(f"Starting gateway on {config.gateway.host}:{config.gateway.port}")
     print(f"Debug: {debug}")
     
-    # TODO: Implement actual gateway run
-    # For now, just print config summary
-    print("\nConfiguration summary:")
-    print(f"  Gateway: {config.gateway.host}:{config.gateway.port}")
-    print(f"  Security: {config.security.exec_approvals.mode}")
-    print(f"  Memory backend: {config.memory.backend}")
-    print(f"  Providers: {config.providers.model_dump(exclude_none=True)}")
-    print(f"  Channels: {config.channels.model_dump(exclude_none=True)}")
-    print(f"  Jobs: {config.jobs.enabled}")
-    print(f"  TUI: {config.tui.enabled}")
+    # Create and start gateway
+    gateway = Gateway(config_path)
+    await gateway.start()
     
-    print("\nGateway startup not implemented yet.")
+    print("\nGateway is running!")
+    print("Press Ctrl+C to stop...")
+    
+    # Keep running until interrupted
+    try:
+        while gateway._is_running:
+            await asyncio.sleep(1)
+    except KeyboardInterrupt:
+        print("\nShutting down...")
+        await gateway.stop()
+
+
+async def run_gateway_with_tui(config_path: str = None, host: str = None, port: int = None, debug: bool = False):
+    """Run the gateway with TUI."""
+    from .config import ConfigLoader
+    from .core.gateway import Gateway
+    
+    loader = ConfigLoader(config_path)
+    config = loader.load()
+    
+    # Override host/port if provided
+    if host:
+        config.gateway.host = host
+    if port:
+        config.gateway.port = port
+    
+    print(f"pyclaw v{__version__}")
+    print(f"Starting gateway + TUI...")
+    
+    # Create gateway (don't start API server, just initialize core)
+    gateway = Gateway(config_path)
+    await gateway.initialize()
+    
+    # Run TUI
+    from .tui.app import run_tui
+    await run_tui(gateway)
+    
+    # Cleanup
+    await gateway.stop()
 
 
 def cmd_init(args):
@@ -144,9 +210,16 @@ def main():
         cmd_validate(args)
         return
     
+    if args.command == "run":
+        if args.tui:
+            asyncio.run(run_gateway_with_tui(args.config, args.host, args.port, args.debug))
+        else:
+            asyncio.run(run_gateway(args.config, args.host, args.port, args.debug))
+        return
+    
     # Default: run gateway
     if args.command is None:
-        asyncio.run(run_gateway(args.config, args.debug))
+        asyncio.run(run_gateway(args.config, debug=args.debug))
         return
     
     parser.print_help()
