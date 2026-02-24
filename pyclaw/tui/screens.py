@@ -129,8 +129,12 @@ class ChatScreen(Screen):
         # If gateway available, process message
         if self.gateway and self._current_agent_id:
             self._process_message(message)
+        elif self.gateway:
+            # Gateway exists but no agent configured - use demo mode
+            self._append_chat(f"[yellow]PyClaw:[/yellow] Gateway running! Configure agents in config to enable chat.")
         else:
-            self._append_chat(f"[red]Error:[/red] No agent selected")
+            # No gateway - demo mode
+            self._append_chat(f"[yellow]PyClaw:[/yellow] Gateway not connected. Start with --tui flag.")
     
     @work(exclusive=True)
     async def _process_message(self, message: str) -> None:

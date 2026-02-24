@@ -90,11 +90,17 @@ class TUIApp(App):
     
     #chat-area {
         height: 100%;
+        layout: vertical;
     }
     
     #chat-history {
         height: 1fr;
         border: solid $border;
+    }
+    
+    #input-area {
+        height: auto;
+        dock: bottom;
     }
     
     #input-area {
