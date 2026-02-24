@@ -130,6 +130,9 @@ class ChatScreen(Screen):
     
     def _send_message(self, message: str) -> None:
         """Send a message."""
+        import sys
+        print(f"DEBUG _send_message: gateway={self.gateway}, current_agent_id={self._current_agent_id}", file=sys.stderr)
+        
         if not message.strip():
             return
         
