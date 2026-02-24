@@ -6,6 +6,9 @@ from .discord import DiscordAdapter, DiscordWebhookAdapter
 from .slack import SlackAdapter
 from .whatsapp import WhatsAppAdapter
 from .signal import SignalAdapter
+from .line import LineAdapter
+from .imessage import IMessageAdapter
+from .googlechat import GoogleChatAdapter
 
 
 # Channel registry
@@ -16,6 +19,9 @@ CHANNEL_REGISTRY: Dict[str, Type[ChannelAdapter]] = {
     "slack": SlackAdapter,
     "whatsapp": WhatsAppAdapter,
     "signal": SignalAdapter,
+    "line": LineAdapter,
+    "imessage": IMessageAdapter,
+    "googlechat": GoogleChatAdapter,
 }
 
 
@@ -65,6 +71,9 @@ __all__ = [
     "SlackAdapter",
     "WhatsAppAdapter",
     "SignalAdapter",
+    "LineAdapter",
+    "IMessageAdapter",
+    "GoogleChatAdapter",
     "register_channel",
     "get_channel",
     "list_channels",
