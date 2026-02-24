@@ -487,11 +487,6 @@ class StatusScreen(Screen):
 class LogsScreen(Screen):
     """Real-time log viewer."""
     
-    def __init__(self, gateway=None, app=None):
-        super().__init__()
-        self.gateway = gateway
-        self.app_ref = app
-    
     BINDINGS = [
         Binding("c", "clear_logs", "Clear"),
         Binding("r", "toggle_auto_scroll", "Auto-scroll"),
