@@ -221,12 +221,15 @@ class ChatScreen(Screen):
             # Display response (strip thinking tags and render in dim color)
             if response:
                 content = response.content
-                # Strip <thinking>...</thinking> tags and render in dim color
+                # Support both <thinking>...</thinking> and <thinking>...</thinking>
                 import re
                 # Replace thinking blocks with dimmed version (no tags shown)
+                def dim_thinking(m):
+                    inner = m.group(1)
+                    return f"[dim]{inner}[/dim]"
                 content = re.sub(
-                    r'<thinking>.*?</thinking>',
-                    lambda m: f"[dim]{m.group(0)[9:-10]}[/dim]",
+                    r'<(thinking|think)>(.*?)</\1>',
+                    dim_thinking,
                     content,
                     flags=re.DOTALL
                 )
