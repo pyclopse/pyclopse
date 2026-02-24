@@ -165,8 +165,11 @@ async def run_gateway_with_tui(config_path: str = None, host: str = None, port: 
     except KeyboardInterrupt:
         print("\nCtrl+C received, shutting down...")
     
-    # Cleanup
-    await gateway.stop()
+    # Cleanup (with error handling)
+    try:
+        await gateway.stop()
+    except Exception as e:
+        print(f"Error during shutdown: {e}")
 
 
 def cmd_init(args):
@@ -214,10 +217,13 @@ def main():
         return
     
     if args.command == "run":
-        if args.tui:
-            asyncio.run(run_gateway_with_tui(args.config, args.host, args.port, args.debug))
-        else:
-            asyncio.run(run_gateway(args.config, args.host, args.port, args.debug))
+        try:
+            if args.tui:
+                asyncio.run(run_gateway_with_tui(args.config, args.host, args.port, args.debug))
+            else:
+                asyncio.run(run_gateway(args.config, args.host, args.port, args.debug))
+        except KeyboardInterrupt:
+            print("\nShutting down...")
         return
     
     # Default: run gateway
