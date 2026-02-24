@@ -148,12 +148,15 @@ class Gateway:
         # Create default agent from config
         for agent_id, agent_config_dict in self.config.agents.model_dump().items():
             name = agent_config_dict.get("name", agent_id)
+            # Extract provider config if present
+            provider_config = agent_config_dict.get("provider")
             # Convert dict to AgentConfig object
             agent_config = AgentConfig(**agent_config_dict)
             self.agent_manager.create_agent(
                 agent_id=agent_id,
                 name=name,
                 config=agent_config,
+                provider_config=provider_config,
                 session_manager=self.session_manager,
             )
         
