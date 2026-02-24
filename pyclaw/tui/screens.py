@@ -235,34 +235,94 @@ class ChatScreen(Screen):
                 sender_id="tui_user",
             )
             
-            # Handle message
-            response = await agent.handle_message(incoming, session)
-            
-            # Display response (strip thinking tags and render in dim color)
-            if response:
-                content = response.content
-                # Support both <thinking>...</thinking> and <thinking>...</thinking>
-                import re
-                # Replace thinking blocks with dimmed version (no tags shown)
-                def dim_thinking(m):
-                    inner = m.group(1)
-                    return f"[dim]{inner}[/dim]"
-                content = re.sub(
-                    r'<(thinking|think)>(.*?)</\1>',
-                    dim_thinking,
-                    content,
-                    flags=re.DOTALL
-                )
-                # Stream response with simulated streaming (chunked display)
-                full_response = ""
-                for chunk in self._chunk_text(content, 50):  # 50 chars at a time
-                    full_response += chunk
-                    self._append_chat(f"[green]{agent.name}:[/green] {full_response}")
-                    await asyncio.sleep(0.05)  # Small delay for visual effect
+            # Check if provider supports streaming
+            if agent.provider and hasattr(agent.provider, 'supports_streaming') and agent.provider.supports_streaming:
+                # Use real streaming from provider
+                debug_write(f"_process_message: Using streaming for agent {agent.name}")
+                
+                # Build messages the same way the agent does
+                from pyclaw.providers import Message as ProviderMessage
+                messages = []
+                
+                # Add system prompt
+                if agent.system_prompt:
+                    messages.append(ProviderMessage(
+                        role="system",
+                        content=agent.system_prompt,
+                    ))
+                
+                # Add conversation history from session
+                for msg in session.get_context_window(max_messages=20):
+                    messages.append(ProviderMessage(
+                        role=msg.role,
+                        content=msg.content,
+                    ))
+                
+                # Add the current user message
+                messages.append(ProviderMessage(
+                    role="user",
+                    content=message,
+                ))
+                
+                # Stream response from provider
+                full_content = ""
+                try:
+                    async for chunk in agent.provider.chat_stream(
+                        messages=messages,
+                        model=agent.config.model if agent.config else None,
+                        temperature=agent.config.temperature if agent.config else 0.7,
+                        max_tokens=agent.config.max_tokens if agent.config else None,
+                    ):
+                        if chunk.content:
+                            full_content += chunk.content
+                            # Strip thinking tags and render
+                            import re
+                            display_content = re.sub(
+                                r'<(thinking|think)>(.*?)</\1>',
+                                lambda m: f"[dim]{m.group(2)}[/dim]",
+                                full_content,
+                                flags=re.DOTALL
+                            )
+                            self._append_chat(f"[green]{agent.name}:[/green] {display_content}")
+                except Exception as stream_err:
+                    debug_write(f"Streaming error: {stream_err}")
+                    self._append_chat(f"[red]Streaming error:[/red] {str(stream_err)}")
+                    return
             else:
-                self._append_chat("[yellow]No response[/yellow]")
+                # Use regular non-streaming response
+                debug_write(f"_process_message: Using non-streaming for agent {agent.name}")
+                
+                # Handle message
+                response = await agent.handle_message(incoming, session)
+                
+                # Display response (strip thinking tags and render in dim color)
+                if response:
+                    content = response.content
+                    # Support both <thinking>...</thinking> and <thinking>...</thinking>
+                    import re
+                    # Replace thinking blocks with dimmed version (no tags shown)
+                    def dim_thinking(m):
+                        inner = m.group(1)
+                        return f"[dim]{inner}[/dim]"
+                    content = re.sub(
+                        r'<(thinking|think)>(.*?)</\1>',
+                        dim_thinking,
+                        content,
+                        flags=re.DOTALL
+                    )
+                    # Stream response with simulated streaming (chunked display)
+                    full_response = ""
+                    for chunk in self._chunk_text(content, 50):  # 50 chars at a time
+                        full_response += chunk
+                        self._append_chat(f"[green]{agent.name}:[/green] {full_response}")
+                        await asyncio.sleep(0.05)  # Small delay for visual effect
+                else:
+                    self._append_chat("[yellow]No response[/yellow]")
                 
         except Exception as e:
+            debug_write(f"_process_message error: {e}")
+            import traceback
+            debug_write(traceback.format_exc())
             self._append_chat(f"[red]Error:[/red] {str(e)}")
     
     def action_clear_input(self) -> None:
