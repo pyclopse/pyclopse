@@ -400,7 +400,11 @@ workflows:
   enabled: true
   defaultWorkflow: "research_and_write"
 
-# Agents
+# Agents (FastAgent-First)
+# 
+# pyclaw uses FastAgent as the backbone. YAML config compiles to @fast.agent decorators,
+# OR you can load Python files that define agents directly with decorators.
+
 agents:
   default:
     name: "Assistant"
@@ -423,23 +427,29 @@ agents:
         start: "08:00"
         end: "22:00"
 
-  # Single agent (default - no workflow_type needed)
+  # Single agent - YAML compiles to @fast.agent decorator
   assistant:
     instruction: "You are helpful..."
     model: sonnet
-    # No workflow_type = single agent (default)
-    
-  # Parallel workflow - fan-out to multiple sub-agents
-  researcher:
-    instruction: "Research things..."
-    workflow_type: parallel
-    agents: [web_searcher, url_fetcher]
+    # No workflow = single agent (default)
     
   # Chain workflow - sequential steps
   reporter:
     instruction: "Create reports..."
-    workflow_type: chain
-    agents: [fetcher, analyzer, writer]
+    workflow: chain
+    sequence: [fetcher, analyzer, writer]
+
+  # Parallel workflow - fan-out to multiple sub-agents
+  researcher:
+    instruction: "Research things..."
+    workflow: parallel
+    fan_out: [web_searcher, url_fetcher]
+    
+  # Orchestrator-workers pattern
+  pmo:
+    instruction: "Manage projects across regions"
+    workflow: agents_as_tools
+    agents: [ny_manager, london_manager]
 
 # Jobs (cron)
 jobs:
@@ -858,38 +868,54 @@ class MemoryStore:
 
 ## 7. Agents (FastAgent-First)
 
-### 7.1 Every Agent IS a Workflow
+### 7.1 Agent Definition: YAML Config → FastAgent Decorators
 
-The distinction between "agents" and "workflows" is artificial. In pyclaw:
+FastAgent uses **decorators** to define agents, NOT just config. pyclaw supports two approaches:
 
-**Every agent IS a workflow:**
-- Single agent → workflow with 1 step (default)
-- Chain → workflow with sequential steps  
-- Parallel → workflow with parallel steps
-
-An agent config just needs a `workflow_type` field:
-
+**Option A: YAML config that compiles to FastAgent decorators**
 ```yaml
+# pyclaw.yaml - compiles to @fast.agent decorators
 agents:
-  # Single agent (default - no workflow_type needed)
-  assistant:
-    instruction: "You are helpful..."
-    model: sonnet
+  url_fetcher:
+    instruction: "Given a URL, provide a summary"
+    servers: [fetch]  # MCP server names
     
-  # Parallel workflow - fan-out to multiple sub-agents
+  social_media:
+    instruction: "Write a social media post"
+    
+  post_writer:
+    workflow: chain
+    sequence: [url_fetcher, social_media]
+    
   researcher:
-    instruction: "Research things..."
-    workflow_type: parallel
-    agents: [web_searcher, url_fetcher]
+    workflow: parallel
+    fan_out: [web_searcher, url_fetcher]
     
-  # Chain workflow - sequential steps
-  reporter:
-    instruction: "Create reports..."
-    workflow_type: chain
-    agents: [fetcher, analyzer, writer]
+  pmo:
+    workflow: agents_as_tools
+    agents: [ny_manager, london_manager]
 ```
 
-No separate "workflows" section needed. An agent IS a workflow.
+**Option B: Load Python files that define agents directly**
+
+```python
+# agents/assistant.py - direct FastAgent definition
+from fast_agent import FastAgent
+
+fast = FastAgent("pyclaw")
+
+@fast.agent(
+    name="assistant",
+    instruction="You are a helpful AI assistant.",
+    servers=["fetch", "time"],  # MCP tools
+    human_input=False,
+)
+async def main():
+    async with fast.run() as agent:
+        await agent.interactive()
+```
+
+The key insight: **agents are defined with decorators in FastAgent**. pyclaw's YAML config is a convenience layer that compiles to these decorators at runtime.
 
 ### 7.2 FastAgent is the Backbone
 
@@ -1149,7 +1175,7 @@ mcp:
 #### 7.4.5 YAML Configuration for pyclaw Agents
 
 ```yaml
-# pyclaw.yaml
+# pyclaw.yaml - compiles to @fast.agent decorators
 agents:
   main:
     type: fastagent
@@ -1159,29 +1185,30 @@ agents:
     temperature: 0.7
     max_tokens: 4096
     channels: [telegram, discord]
-    mcp_servers:
+    servers:
       - fetch
       - time
     
   researcher:
-    type: fastagent
     workflow: chain
-    agents:
+    sequence:
       - web_searcher
       - url_fetcher
       - summarizer
     
   translator:
-    type: fastagent
     workflow: parallel
     fan_out: [translate_en, translate_fr, translate_de]
     
   classifier:
-    type: fastagent
     workflow: maker
     worker: basic_classifier
     k: 5
     max_samples: 50
+
+  pmo:
+    workflow: agents_as_tools
+    agents: [ny_manager, london_manager]
 
 workflows:
   config_path: "~/.pyclaw/fastagent.config.yaml"
@@ -1438,13 +1465,14 @@ class WorkflowRunner:
 
 ## 8. Workflow Types
 
-Since every agent IS a workflow, workflow types are just a field on the agent config:
+Since agents can be defined with decorators OR YAML that compiles to decorators, workflow types are fields on the agent config:
 
-| workflow_type | Description |
-|---------------|-------------|
+| workflow | Description |
+|----------|-------------|
 | (none/default) | Single agent - one step |
 | `chain` | Sequential: Agent A → Agent B → Agent C |
 | `parallel` | Fan-out/in: Agent A → [Agent B, Agent C] → combine |
+| `agents_as_tools` | Orchestrator-workers: one agent calls others as tools |
 
 ```yaml
 agents:
@@ -1452,15 +1480,20 @@ agents:
   helper:
     instruction: "You are helpful."
     
-  # Chain workflow
+  # Chain workflow - sequential
   researcher:
-    workflow_type: chain
-    agents: [searcher, analyzer, writer]
+    workflow: chain
+    sequence: [searcher, analyzer, writer]
     
-  # Parallel workflow  
+  # Parallel workflow - fan-out/in
   scout:
-    workflow_type: parallel
-    agents: [searcher1, searcher2, searcher3]
+    workflow: parallel
+    fan_out: [searcher1, searcher2, searcher3]
+    
+  # Orchestrator-workers
+  pmo:
+    workflow: agents_as_tools
+    agents: [ny_manager, london_manager]
 ```
 
 ### 8.1 MCP Tools as Agent Tools
