@@ -77,6 +77,40 @@ class TUIApp(App):
         height: 100%;
         border: solid $border;
     }
+    
+    /* Chat screen layout */
+    #main-layout {
+        height: 100%;
+    }
+    
+    #sidebar {
+        width: 25;
+        min-width: 20;
+    }
+    
+    #chat-area {
+        height: 100%;
+    }
+    
+    #chat-history {
+        height: 1fr;
+        border: solid $border;
+    }
+    
+    #input-area {
+        height: auto;
+        padding: 1;
+        background: $panel;
+        border-top: solid $border;
+    }
+    
+    #chat-input {
+        width: 1fr;
+    }
+    
+    #send-button {
+        width: auto;
+    }
     """
     
     def __init__(self, gateway=None):

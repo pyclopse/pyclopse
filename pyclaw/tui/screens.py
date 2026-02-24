@@ -33,6 +33,7 @@ class ChatScreen(Screen):
         self.app_ref = app
         self._current_agent_id: Optional[str] = None
         self._chat_history: List[Dict[str, str]] = []
+        self._chat_text_buffer: str = ""
     
     BINDINGS = [
         Binding("escape", "clear_input", "Clear"),
@@ -52,8 +53,8 @@ class ChatScreen(Screen):
             
             # Main chat area
             with Vertical(id="chat-area"):
-                # Chat history
-                yield RichLog(id="chat-history", highlight=True, markup=True)
+                # Chat history (TextArea for selection/copy support)
+                yield TextArea(id="chat-history", read_only=True, show_line_numbers=False)
                 
                 # Input area
                 with Horizontal(id="input-area"):
@@ -69,7 +70,7 @@ class ChatScreen(Screen):
     def on_mount(self) -> None:
         """Called when screen is mounted."""
         self._chat_input = self.query_one("#chat-input", Input)
-        self._chat_history = self.query_one("#chat-history", RichLog)
+        self._chat_history = self.query_one("#chat-history", TextArea)
         self._agent_list = self.query_one("#agent-list", AgentListWidget)
         
         # Load agents if gateway available
@@ -85,6 +86,22 @@ class ChatScreen(Screen):
             agents = self.gateway.agent_manager.list_agents()
             for agent in agents:
                 self._agent_list.add_agent(agent.id, agent.name, agent.is_running)
+            # Auto-select first agent if none selected
+            if agents and not self._current_agent_id:
+                self._current_agent_id = agents[0].id
+                # Also update the app's current agent
+                if self.app_ref:
+                    self.app_ref.set_current_agent(self._current_agent_id)
+        # Fallback: use "default" agent if no agents loaded
+        elif self.gateway and not self._current_agent_id:
+            self._current_agent_id = "default"
+            if self.app_ref:
+                self.app_ref.set_current_agent(self._current_agent_id)
+    
+    def _append_chat(self, text: str) -> None:
+        """Append text to chat history."""
+        self._chat_text_buffer += text + "\n"
+        self._chat_history.load_text(self._chat_text_buffer)
     
     def on_input_submitted(self, event: Input.Submitted) -> None:
         """Handle input submission."""
@@ -104,9 +121,7 @@ class ChatScreen(Screen):
             return
         
         # Add user message to history
-        self._chat_history.write(
-            f"[bold blue]You:[/bold blue] {message}"
-        )
+        self._append_chat(f"[blue]You:[/blue] {message}")
         
         # Clear input
         self._chat_input.value = ""
@@ -115,9 +130,7 @@ class ChatScreen(Screen):
         if self.gateway and self._current_agent_id:
             self._process_message(message)
         else:
-            self._chat_history.write(
-                "[bold red]Error:[/bold red] No agent selected"
-            )
+            self._append_chat(f"[red]Error:[/red] No agent selected")
     
     @work(exclusive=True)
     async def _process_message(self, message: str) -> None:
@@ -133,17 +146,13 @@ class ChatScreen(Screen):
                 )
             
             if not session:
-                self._chat_history.write(
-                    "[bold red]Error:[/bold red] Could not create session"
-                )
+                self._append_chat("[red]Error:[/red] Could not create session")
                 return
             
             # Get agent
             agent = self.gateway.agent_manager.get_agent(self._current_agent_id)
             if not agent:
-                self._chat_history.write(
-                    "[bold red]Error:[/bold red] Agent not found"
-                )
+                self._append_chat("[red]Error:[/red] Agent not found")
                 return
             
             # Create incoming message
@@ -161,18 +170,12 @@ class ChatScreen(Screen):
             
             # Display response
             if response:
-                self._chat_history.write(
-                    f"[bold green]{agent.name}:[/bold green] {response.content}"
-                )
+                self._append_chat(f"[green]{agent.name}:[/green] {response.content}")
             else:
-                self._chat_history.write(
-                    "[bold yellow]No response[/bold yellow]"
-                )
+                self._append_chat("[yellow]No response[/yellow]")
                 
         except Exception as e:
-            self._chat_history.write(
-                f"[bold red]Error:[/bold red] {str(e)}"
-            )
+            self._append_chat(f"[red]Error:[/red] {str(e)}")
     
     def action_clear_input(self) -> None:
         """Clear the input field."""
