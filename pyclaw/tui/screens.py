@@ -218,14 +218,14 @@ class ChatScreen(Screen):
             # Handle message
             response = await agent.handle_message(incoming, session)
             
-            # Display response (strip thinking tags and render in dim color)
+            # Display response ( render in dim colorstrip thinking tags and)
             if response:
                 content = response.content
-                # Support both <thinking>...</thinking> and <thinking>...</thinking>
+                # Support both <thinking>...</thinking> and <think>...</think>
                 import re
                 # Replace thinking blocks with dimmed version (no tags shown)
                 def dim_thinking(m):
-                    inner = m.group(1)
+                    inner = m.group(2)  # Get the content inside the tags
                     return f"[dim]{inner}[/dim]"
                 content = re.sub(
                     r'<(thinking|think)>(.*?)</\1>',
