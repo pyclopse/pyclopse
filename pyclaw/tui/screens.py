@@ -147,6 +147,26 @@ class ChatScreen(Screen):
         # RichLog.write() parses Rich markup automatically
         self._chat_history.write(text)
     
+    def _chunk_text(self, text: str, chunk_size: int = 50) -> List[str]:
+        """Split text into chunks for streaming effect."""
+        words = text.split()
+        chunks = []
+        current = ""
+        for word in words:
+            if len(current) + len(word) + 1 > chunk_size:
+                if current:
+                    chunks.append(current)
+                current = word
+            else:
+                if current:
+                    current += " " + word
+                else:
+                    current = word
+        if current:
+            chunks.append(current)
+        return chunks
+
+
     def on_input_submitted(self, event: Input.Submitted) -> None:
         """Handle input submission."""
         if event.input.id == "chat-input":
@@ -233,7 +253,12 @@ class ChatScreen(Screen):
                     content,
                     flags=re.DOTALL
                 )
-                self._append_chat(f"[green]{agent.name}:[/green] {content}")
+                # Stream response with simulated streaming (chunked display)
+                full_response = ""
+                for chunk in self._chunk_text(content, 50):  # 50 chars at a time
+                    full_response += chunk
+                    self._append_chat(f"[green]{agent.name}:[/green] {full_response}")
+                    await asyncio.sleep(0.05)  # Small delay for visual effect
             else:
                 self._append_chat("[yellow]No response[/yellow]")
                 
