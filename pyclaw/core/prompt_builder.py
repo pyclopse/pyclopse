@@ -33,6 +33,9 @@ BOOTSTRAP_FILES = [
     "memory.md",    # Alternate memory filename
 ]
 
+# Backward compatibility alias
+AGENT_FILES = BOOTSTRAP_FILES
+
 # Minimal files for subagent/cron sessions (matching OpenClaw's MINIMAL_BOOTSTRAP_ALLOWLIST)
 MINIMAL_BOOTSTRAP_FILES = [
     "AGENTS.md",
