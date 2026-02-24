@@ -30,15 +30,6 @@ class TUIApp(App):
         Binding("ctrl+q", "quit", "Quit"),
     ]
     
-    # Screens
-    SCREENS = {
-        "chat": "chat",
-        "agents": "agents",
-        "sessions": "sessions",
-        "logs": "logs",
-        "status": "status",
-    }
-    
     CSS = """
     Screen {
         background: $surface;
