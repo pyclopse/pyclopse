@@ -235,8 +235,32 @@ class ChatScreen(Screen):
                 sender_id="tui_user",
             )
             
+            # Check if FastAgent runner is available for streaming
+            if agent.fast_agent_runner:
+                # Use FastAgent streaming for real-time streaming
+                debug_write(f"_process_message: Using FastAgent streaming for agent {agent.name}")
+                
+                # Stream response from FastAgent
+                full_content = ""
+                try:
+                    async for chunk in agent.fast_agent_runner.run_stream(message):
+                        if chunk:
+                            full_content += chunk
+                            # Strip thinking tags and render
+                            import re
+                            display_content = re.sub(
+                                r'<(thinking|think)>(.*?)</\1>',
+                                lambda m: f"[dim]{m.group(2)}[/dim]",
+                                full_content,
+                                flags=re.DOTALL
+                            )
+                            self._append_chat(f"[green]{agent.name}:[/green] {display_content}")
+                except Exception as stream_err:
+                    debug_write(f"FastAgent streaming error: {stream_err}")
+                    self._append_chat(f"[red]Streaming error:[/red] {str(stream_err)}")
+                    return
             # Check if provider supports streaming
-            if agent.provider and hasattr(agent.provider, 'supports_streaming') and agent.provider.supports_streaming:
+            elif agent.provider and hasattr(agent.provider, 'supports_streaming') and agent.provider.supports_streaming:
                 # Use real streaming from provider
                 debug_write(f"_process_message: Using streaming for agent {agent.name}")
                 
