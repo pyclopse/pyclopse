@@ -91,10 +91,56 @@ class MiniMaxProvider(Provider):
         max_tokens: Optional[int] = None,
         **kwargs,
     ) -> AsyncIterator[ChatResponse]:
-        """Send a streaming chat completion request."""
-        # For now, yield chunks manually - simplified implementation
-        result = await self.chat(messages, model, tools, temperature, max_tokens, **kwargs)
-        yield result
+        """Send a streaming chat completion request using SSE."""
+        model = model or self.default_model
+        
+        # Build messages payload
+        messages_payload = []
+        for msg in messages:
+            msg_dict = {"role": msg.role, "content": msg.content}
+            if msg.name:
+                msg_dict["name"] = msg.name
+            messages_payload.append(msg_dict)
+        
+        # Build request
+        payload = {
+            "model": model,
+            "messages": messages_payload,
+            "temperature": temperature,
+        }
+        if max_tokens:
+            payload["max_tokens"] = max_tokens
+        if tools:
+            payload["tools"] = tools
+        
+        url = f"{self.base_url}?Model={model}"
+        
+        async with httpx.AsyncClient(timeout=120.0) as client:
+            async with client.stream("POST", url, json=payload, headers=self._get_headers()) as response:
+                response.raise_for_status()
+                
+                async for line in response.aiter_lines():
+                    if not line.strip() or not line.startswith("data:"):
+                        continue
+                    
+                    data_str = line[5:].strip()
+                    if data_str == "[DONE]":
+                        break
+                    
+                    try:
+                        data = json.loads(data_str)
+                        choices = data.get("choices", [])
+                        if choices:
+                            delta = choices[0].get("delta", {})
+                            content = delta.get("content", "")
+                            if content:
+                                yield ChatResponse(
+                                    content=content,
+                                    finish_reason=choices[0].get("finish_reason"),
+                                    model=data.get("model", model),
+                                )
+                    except json.JSONDecodeError:
+                        continue
     
     async def embed(self, text: str, model: Optional[str] = None) -> List[float]:
         """Get embeddings for text."""
@@ -104,7 +150,7 @@ class MiniMaxProvider(Provider):
     @property
     def supports_streaming(self) -> bool:
         """Whether this provider supports streaming."""
-        return False  # Simplified
+        return True  # Now supports real streaming
     
     @property
     def supports_tools(self) -> bool:
