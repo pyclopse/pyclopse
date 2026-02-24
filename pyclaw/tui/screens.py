@@ -218,9 +218,19 @@ class ChatScreen(Screen):
             # Handle message
             response = await agent.handle_message(incoming, session)
             
-            # Display response
+            # Display response (strip thinking tags and render in dim color)
             if response:
-                self._append_chat(f"[green]{agent.name}:[/green] {response.content}")
+                content = response.content
+                # Strip <thinking>...</thinking> tags and render in dim color
+                import re
+                # Replace thinking blocks with dimmed version (no tags shown)
+                content = re.sub(
+                    r'<thinking>.*?</thinking>',
+                    lambda m: f"[dim]{m.group(0)[9:-10]}[/dim]",
+                    content,
+                    flags=re.DOTALL
+                )
+                self._append_chat(f"[green]{agent.name}:[/green] {content}")
             else:
                 self._append_chat("[yellow]No response[/yellow]")
                 
