@@ -54,11 +54,11 @@ pyclaw/
 │   │   ├── runner.py         # Job execution
 │   │   ├── store.py          # Job persistence
 │   │   └── types.py          # Job types
-│   ├── heartbeat/            # Heartbeat system
+│   ├── pulse/            # Pulse system
 │   │   ├── __init__.py
-│   │   ├── runner.py         # Heartbeat runner
-│   │   ├── scheduler.py      # Heartbeat scheduling
-│   │   └── triggers.py       # Heartbeat triggers
+│   │   ├── runner.py         # Pulse runner
+│   │   ├── scheduler.py      # Pulse scheduling
+│   │   └── triggers.py       # Pulse triggers
 │   ├── skills/               # Skills system
 │   │   ├── __init__.py
 │   │   ├── loader.py         # Skill loader
@@ -171,7 +171,7 @@ build-backend = "hatchling.build"
 5. **Initialize Channels**: Load channel adapters
 6. **Initialize Plugins**: Load and enable plugins
 7. **Initialize Jobs**: Start job scheduler
-8. **Initialize Heartbeat**: Start heartbeat runner
+8. **Initialize Pulse**: Start pulse runner
 9. **Initialize TUI**: Start terminal UI (if not headless)
 10. **Initialize API**: Start REST API server (for mobile support)
 
@@ -197,6 +197,59 @@ These are conceptual roles—naming is not required to match OpenClaw. Use Pytho
 **Router** (or `MessageRouter`, `Dispatcher`, etc.): Routes incoming messages to appropriate agents/sessions
 
 **ChannelAdapter** (or `Channel`, `ChannelBackend`, etc.): Abstracts different chat platforms
+
+---
+
+## Concurrency Strategy
+
+> ⚠️ **This section is critical for future implementers.** It describes a key architectural mistake in OpenClaw that pyclaw intentionally avoids.
+
+### The OpenClaw Problem
+
+OpenClaw uses a **nested lane architecture** with **double-locking** that causes severe concurrency issues:
+
+- **Nested lane architecture**: Session lane (maxConcurrent: 1) sits inside a global lane
+- **Double-locking**: Before any agent can run, it must acquire both the session lock AND the global lock
+- **Blocking cascade**: The session lane with `maxConcurrent: 1` blocks BEFORE checking the global lane
+- **Total blockage**: One blocked agent blocks ALL agents — true concurrency is impossible
+
+This design means:
+- If one agent is busy, every other agent waits
+- Long-running sessions prevent any new sessions from starting
+- The system cannot scale beyond a few concurrent users
+
+### pyclaw's Solution
+
+pyclaw uses a **true parallel execution model** based on Python's asyncio:
+
+- **Per-agent async tasks**: Each agent/session gets its own independent async task
+- **No global lock**: Sessions run truly in parallel — no shared lock between different agents
+- **Isolated state**: Each session maintains its own state without interfering with others
+- **Per-session locking only**: Locking is only needed within the same session (if at all), not across sessions
+
+```python
+# pyclaw approach - each session runs as its own async task
+async def handle_session(session_id: str, messages: list):
+    """Each session runs independently in its own task"""
+    agent = Agent(session_id=session_id)
+    await agent.run(messages)
+
+async def gateway_main():
+    # Spawn each session as a separate async task - they run in parallel!
+    tasks = [
+        asyncio.create_task(handle_session(sid, msgs))
+        for sid, msgs in incoming_sessions
+    ]
+    await asyncio.gather(*tasks)  # True parallel execution
+```
+
+**Key principles:**
+1. **Never block other agents** — use async/await for I/O-bound work
+2. **No shared global lock** — each session is independent
+3. **Use asyncio primitives** — `asyncio.create_task()`, `asyncio.gather()`, etc.
+4. **Isolate session state** — no shared mutable state between sessions
+
+This ensures pyclaw can handle many concurrent users without one blocking all others.
 
 ---
 
@@ -274,7 +327,7 @@ agents:
         - "read"
         - "write"
         - "web_search"
-    heartbeat:
+    pulse:
       enabled: true
       every: "30m"
       prompt: "Check for any important updates."
@@ -965,12 +1018,12 @@ async def search_memory(
 - [ ] Implement WhatsApp adapter
 - [ ] Add remaining channel adapters
 
-### Phase 4: Jobs & Heartbeat (Weeks 7-8)
+### Phase 4: Jobs & Pulse (Weeks 7-8)
 
 - [ ] Build job scheduler system
 - [ ] Implement job persistence
-- [ ] Create heartbeat runner
-- [ ] Add heartbeat triggers
+- [ ] Create pulse runner
+- [ ] Add pulse triggers
 - [ ] Build active hours support
 
 ### Phase 5: Plugins & Hooks (Weeks 9-10)
