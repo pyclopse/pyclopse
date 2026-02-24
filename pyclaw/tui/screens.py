@@ -88,7 +88,7 @@ class ChatScreen(Screen):
         debug_write("ChatScreen.on_mount called")
         
         self._chat_input = self.query_one("#chat-input", Input)
-        self._chat_history = self.query_one("#chat-history", TextArea)
+        self._chat_history = self.query_one("#chat-history", RichLog)
         self._agent_list = self.query_one("#agent-list", AgentListWidget)
         
         debug_write(f"on_mount: gateway={self.gateway}, app_ref={self.app_ref}")
