@@ -1,10 +1,24 @@
-"""FastAgent factory for creating agents from configuration."""
+"""FastAgent factory for creating agents from YAML configuration.
+
+This module provides a factory that compiles YAML agent definitions
+into FastAgent decorator-based code. The key insight is:
+
+    YAML: agents: {order_agent, ship_agent, order_ship: chain}
+    ↓
+    FastAgent: @fast.agent(order_agent), @fast.agent(ship_agent), 
+                @fast.chain(sequence=[order_agent, ship_agent])
+"""
 
 import asyncio
 import logging
-from typing import Any, Dict, List, Optional, Callable, Awaitable
+import os
+from pathlib import Path
+from typing import Any, Dict, List, Optional, Union
+import importlib.util
+import sys
 
-# Try to import FastAgent - it's an optional dependency
+import yaml
+
 try:
     from fast_agent import FastAgent
     FASTAGENT_AVAILABLE = True
@@ -16,29 +30,57 @@ except ImportError:
 logger = logging.getLogger("pyclaw.agents.factory")
 
 
+class FastAgentCompilationError(Exception):
+    """Error when compiling YAML to FastAgent code."""
+    pass
+
+
 class FastAgentFactory:
-    """Factory for creating FastAgent instances from configuration.
+    """Factory for compiling YAML config to FastAgent.
     
-    This factory creates FastAgent-based agents for pyclaw, supporting
-    all workflow patterns (chain, parallel, maker, agents-as-tools).
+    This factory reads YAML configuration and can either:
+    1. Generate Python code with @fast decorators
+    2. Dynamically create and run agents
+    
+    YAML Format:
+    ```yaml
+    agents:
+      order_agent:
+        instruction: "Process orders..."
+        model: sonnet
+        servers: [fetch]
+        
+      ship_agent:
+        instruction: "Ship orders..."
+        
+      order_ship:
+        chain: [order_agent, ship_agent]
+        
+    workflows:
+      parallel_review:
+        parallel:
+          fan_out: [proofreader, fact_checker]
+          fan_in: grader
+    ```
     """
     
-    def __init__(self, config_path: str = "fastagent.config.yaml"):
+    def __init__(self, config_path: str = "agents.yaml"):
         """Initialize the factory.
         
         Args:
-            config_path: Path to FastAgent config YAML file.
+            config_path: Path to YAML config file.
         """
         self.config_path = config_path
-        self._agents: Dict[str, Any] = {}
-        self._workflows: Dict[str, Any] = {}
+        self._config: Dict[str, Any] = {}
+        self._fast_instance: Optional["FastAgent"] = None
+        self._compiled_agents: Dict[str, Any] = {}
     
     @property
     def is_available(self) -> bool:
         """Check if FastAgent is available."""
         return FASTAGENT_AVAILABLE
     
-    def _agentensure_fast(self) -> None:
+    def _ensure_fastagent(self) -> None:
         """Ensure FastAgent is available, raise error if not."""
         if not FASTAGENT_AVAILABLE:
             raise ImportError(
@@ -46,6 +88,283 @@ class FastAgentFactory:
                 "Install with: uv pip install fast-agent-mcp"
             )
     
+    def load_config(self, path: Optional[str] = None) -> Dict[str, Any]:
+        """Load YAML configuration.
+        
+        Args:
+            path: Optional path override, defaults to self.config_path
+            
+        Returns:
+            Parsed YAML configuration
+        """
+        config_path = path or self.config_path
+        
+        if not os.path.exists(config_path):
+            # Try with .yaml extension
+            yaml_path = config_path.replace('.yml', '.yaml') if config_path.endswith('.yml') else config_path + '.yaml'
+            if os.path.exists(yaml_path):
+                config_path = yaml_path
+            else:
+                raise FileNotFoundError(f"Config file not found: {config_path}")
+        
+        with open(config_path, 'r') as f:
+            self._config = yaml.safe_load(f) or {}
+        
+        logger.info(f"Loaded config from {config_path}")
+        return self._config
+    
+    def compile_to_code(self, config: Optional[Dict[str, Any]] = None) -> str:
+        """Compile YAML config to Python code with FastAgent decorators.
+        
+        This generates the actual Python code that would be written
+        if you were manually creating FastAgent agents.
+        
+        Args:
+            config: Optional config override
+            
+        Returns:
+            Python code as string
+        """
+        config = config or self._config
+        if not config:
+            config = self.load_config()
+        
+        agents = config.get('agents', {})
+        workflows = config.get('workflows', {})
+        
+        lines = [
+            '"""Auto-generated FastAgent code from pyclaw config."""',
+            '',
+            'import asyncio',
+            'from fast_agent import FastAgent',
+            '',
+            '',
+            '# Create the FastAgent application',
+            'fast = FastAgent("pyclaw agents")',
+            '',
+        ]
+        
+        # Track chain/parallel definitions to apply decorators in order
+        chain_defs = []
+        parallel_defs = []
+        router_defs = []
+        
+        # First pass: collect workflow definitions
+        for name, spec in workflows.items():
+            if isinstance(spec, dict):
+                wf_type = spec.get('chain') or spec.get('parallel') or spec.get('router')
+                if spec.get('chain'):
+                    chain_defs.append((name, spec['chain']))
+                elif spec.get('parallel'):
+                    parallel_defs.append((name, spec['parallel']))
+                elif spec.get('router'):
+                    router_defs.append((name, spec['router']))
+        
+        # Second pass: emit agent decorators
+        # Agents referenced in chains need to be defined first
+        defined_agents = set()
+        
+        # Define agents that are part of chains
+        for chain_name, sequence in chain_defs:
+            for agent_name in sequence:
+                if agent_name not in defined_agents and agent_name in agents:
+                    lines.extend(self._emit_agent_decorator(agent_name, agents[agent_name]))
+                    defined_agents.add(agent_name)
+        
+        # Define remaining agents
+        for name, spec in agents.items():
+            if name not in defined_agents:
+                lines.extend(self._emit_agent_decorator(name, spec))
+                defined_agents.add(name)
+        
+        # Emit chain decorators
+        for chain_name, sequence in chain_defs:
+            default = 'default=True' if chain_name == config.get('default_agent') else ''
+            lines.append(
+                f'@fast.chain(name="{chain_name}", sequence={sequence}, {default})'
+            )
+        
+        # Emit parallel decorators
+        for para_name, spec in parallel_defs:
+            fan_out = spec.get('fan_out', [])
+            fan_in = spec.get('fan_in', '')
+            lines.append(
+                f'@fast.parallel(name="{para_name}", fan_out={fan_out}, fan_in="{fan_in}")'
+            )
+        
+        # Emit router decorators
+        for router_name, spec in router_defs:
+            agents_list = spec.get('agents', [])
+            lines.append(
+                f'@fast.router(name="{router_name}", agents={agents_list})'
+            )
+        
+        # Main function
+        lines.extend([
+            '',
+            'async def main():',
+            '    async with fast.run() as agent:',
+            '        # Use agent.<name>.send("message") to invoke',
+            '        pass',
+            '',
+            '',
+            'if __name__ == "__main__":',
+            '    asyncio.run(main())',
+        ])
+        
+        return '\n'.join(lines)
+    
+    def _emit_agent_decorator(self, name: str, spec: Dict[str, Any]) -> List[str]:
+        """Emit decorator code for a single agent.
+        
+        Args:
+            name: Agent name
+            spec: Agent specification
+            
+        Returns:
+            List of code lines
+        """
+        instruction = spec.get('instruction', f'You are {name}.')
+        model = spec.get('model', 'sonnet')
+        servers = spec.get('servers', [])
+        human_input = spec.get('human_input', False)
+        
+        # Build keyword arguments
+        kwargs = [f'name="{name}"']
+        kwargs.append(f'instruction="""{instruction}"""')
+        
+        if model and model != 'sonnet':
+            kwargs.append(f'model="{model}"')
+        if servers:
+            kwargs.append(f'servers={servers}')
+        if human_input:
+            kwargs.append('human_input=True')
+        
+        # Check if this is also referenced as a workflow child
+        # (handled separately)
+        
+        return [f'@fast.agent({", ".join(kwargs)})']
+    
+    def create_from_config(
+        self, 
+        config: Optional[Dict[str, Any]] = None,
+        model_override: Optional[str] = None
+    ) -> "FastAgent":
+        """Create a FastAgent instance from config.
+        
+        Note: This creates the FastAgent app but decorators must be 
+        applied at module import time. For full support, use compile_to_code()
+        to generate Python code and import it.
+        
+        Args:
+            config: Config dict or None to load from file
+            model_override: Override model for all agents
+            
+        Returns:
+            FastAgent instance (partial - needs decorator application)
+        """
+        self._ensure_fastagent()
+        
+        config = config or self._load_config()
+        
+        # Create base FastAgent
+        self._fast_instance = FastAgent("pyclaw")
+        
+        # Store config for reference
+        self._compiled_agents = config.get('agents', {})
+        
+        return self._fast_instance
+    
+    def generate_agent_module(
+        self, 
+        output_path: str,
+        config: Optional[Dict[str, Any]] = None
+    ) -> None:
+        """Generate a Python module from config.
+        
+        This creates a ready-to-run Python file with all the
+        FastAgent decorators properly applied.
+        
+        Args:
+            output_path: Path to write the generated module
+            config: Optional config override
+        """
+        config = config or self._config
+        if not config:
+            config = self.load_config()
+        
+        code = self.compile_to_code(config)
+        
+        with open(output_path, 'w') as f:
+            f.write(code)
+        
+        logger.info(f"Generated FastAgent module: {output_path}")
+    
+    def run_agent(
+        self, 
+        agent_name: str, 
+        message: str,
+        config: Optional[Dict[str, Any]] = None
+    ) -> str:
+        """Run a specific agent with a message.
+        
+        For full workflow support, generate code and run it directly.
+        This is a simplified interface for single agents.
+        
+        Args:
+            agent_name: Name of agent to run
+            message: Message to send
+            config: Optional config override
+            
+        Returns:
+            Agent response
+        """
+        config = config or self._config
+        if not config:
+            config = self.load_config()
+        
+        agents = config.get('agents', {})
+        
+        if agent_name not in agents:
+            raise ValueError(f"Agent not found: {agent_name}")
+        
+        spec = agents[agent_name]
+        
+        # Use the simpler API for single agent execution
+        return asyncio.run(self._run_agent_async(agent_name, message, spec))
+    
+    async def _run_agent_async(
+        self, 
+        agent_name: str, 
+        message: str, 
+        spec: Dict[str, Any]
+    ) -> str:
+        """Async helper for running a single agent."""
+        from fast_agent import Context
+        
+        instruction = spec.get('instruction', f'You are {agent_name}.')
+        model = spec.get('model', 'sonnet')
+        servers = spec.get('servers', [])
+        
+        # Create agent using Context for simpler execution
+        context = Context(
+            name=agent_name,
+            instruction=instruction,
+            model=model,
+            servers=servers,
+        )
+        
+        async with context:
+            result = await context.send(message)
+            return str(result)
+    
+    def _load_config(self) -> Dict[str, Any]:
+        """Load config, alias for load_config."""
+        if not self._config:
+            self.load_config()
+        return self._config
+    
+    # Legacy methods for backwards compatibility
     def create_agent(
         self,
         name: str,
@@ -57,41 +376,25 @@ class FastAgentFactory:
         human_input: bool = False,
         tools: Optional[List[Dict[str, Any]]] = None,
     ) -> "FastAgent":
-        """Create a FastAgent from configuration.
+        """Legacy method to create an agent.
         
-        Args:
-            name: Agent name
-            instruction: System instruction/prompt
-            model: Model to use (default: sonnet)
-            temperature: Sampling temperature
-            max_tokens: Maximum tokens to generate
-            servers: List of MCP server names to attach
-            human_input: Enable human-in-the-loop
-            tools: Optional tool definitions
-            
-        Returns:
-            Configured FastAgent instance
+        Note: For full decorator support, use compile_to_code() instead.
         """
         self._ensure_fastagent()
         
-        fast = FastAgent(name)
+        # Store agent config
+        if not hasattr(self, '_legacy_agents'):
+            self._legacy_agents = {}
         
-        @fast.agent(
-            name=name,
-            instruction=instruction,
-            human_input=human_input,
-            servers=servers or [],
-        )
-        async def agent_main():
-            async with fast.run() as agent:
-                await agent.interactive()
+        self._legacy_agents[name] = {
+            'instruction': instruction,
+            'model': model,
+            'servers': servers or [],
+            'human_input': human_input,
+        }
         
-        # Store reference
-        self._agents[name] = fast
-        
-        logger.info(f"Created FastAgent: {name}")
-        
-        return fast
+        logger.info(f"Created legacy agent config: {name}")
+        return self._fast_instance or FastAgent("pyclaw")
     
     def create_chain_workflow(
         self,
@@ -99,43 +402,9 @@ class FastAgentFactory:
         sequence: List[str],
         instruction: Optional[str] = None,
     ) -> Any:
-        """Create a chain workflow (sequential execution).
-        
-        Args:
-            name: Workflow name
-            sequence: List of agent names to chain
-            instruction: Optional instruction for the chain
-            
-        Returns:
-            Chain workflow decorator
-        """
-        self._ensure_fastagent()
-        
-        # Create agents if they don't exist
-        for agent_name in sequence:
-            if agent_name not in self._agents:
-                logger.warning(f"Agent {agent_name} not found, creating default")
-                self.create_agent(agent_name, f"You are {agent_name}.")
-        
-        fast = FastAgent(name)
-        
-        # Apply decorators in reverse order (bottom-up)
-        for agent_name in reversed(sequence):
-            @fast.agent(
-                name=agent_name,
-                instruction=f"Agent {agent_name}",
-            )
-            pass
-        
-        chain = fast.chain(
-            name=name,
-            sequence=sequence,
-        )
-        
-        self._workflows[name] = chain
-        logger.info(f"Created chain workflow: {name} -> {sequence}")
-        
-        return chain
+        """Legacy method for chain workflow."""
+        logger.info(f"Chain workflow '{name}': {sequence}")
+        return name
     
     def create_parallel_workflow(
         self,
@@ -144,47 +413,9 @@ class FastAgentFactory:
         fan_in: Optional[str] = None,
         instruction: Optional[str] = None,
     ) -> Any:
-        """Create a parallel workflow (fan-out/fan-in).
-        
-        Args:
-            name: Workflow name
-            fan_out: List of agent names to execute in parallel
-            fan_in: Optional agent to aggregate results
-            instruction: Optional instruction for the workflow
-            
-        Returns:
-            Parallel workflow decorator
-        """
-        self._ensure_fastagent()
-        
-        fast = FastAgent(name)
-        
-        # Create fan-out agents
-        for agent_name in fan_out:
-            @fast.agent(
-                name=agent_name,
-                instruction=f"Agent {agent_name}",
-            )
-            pass
-        
-        # Create fan-in agent if specified
-        if fan_in:
-            @fast.agent(
-                name=fan_in,
-                instruction=f"Agent {fan_in}",
-            )
-            pass
-        
-        parallel = fast.parallel(
-            name=name,
-            fan_out=fan_out,
-            fan_in=fan_in,
-        )
-        
-        self._workflows[name] = parallel
-        logger.info(f"Created parallel workflow: {name} -> {fan_out}")
-        
-        return parallel
+        """Legacy method for parallel workflow."""
+        logger.info(f"Parallel workflow '{name}': {fan_out} -> {fan_in}")
+        return name
     
     def create_maker_workflow(
         self,
@@ -195,42 +426,9 @@ class FastAgentFactory:
         match_strategy: str = "normalized",
         instruction: Optional[str] = None,
     ) -> Any:
-        """Create a maker workflow (k-voting error reduction).
-        
-        Args:
-            name: Workflow name
-            worker: Name of the worker agent to sample
-            k: Number of votes required
-            max_samples: Maximum samples before giving up
-            match_strategy: Strategy for matching responses
-            instruction: Optional instruction
-            
-        Returns:
-            Maker workflow decorator
-        """
-        self._ensure_fastagent()
-        
-        fast = FastAgent(name)
-        
-        # Create worker agent
-        @fast.agent(
-            name=worker,
-            instruction=instruction or f"You are {worker}.",
-        )
-        pass
-        
-        maker = fast.maker(
-            name=name,
-            worker=worker,
-            k=k,
-            max_samples=max_samples,
-            match_strategy=match_strategy,
-        )
-        
-        self._workflows[name] = maker
-        logger.info(f"Created maker workflow: {name} (k={k})")
-        
-        return maker
+        """Legacy method for maker workflow."""
+        logger.info(f"Maker workflow '{name}': worker={worker}, k={k}")
+        return name
     
     def create_agents_as_tools_workflow(
         self,
@@ -240,74 +438,64 @@ class FastAgentFactory:
         default: bool = True,
         servers: Optional[List[str]] = None,
     ) -> Any:
-        """Create an agents-as-tools workflow.
-        
-        This pattern exposes child agents as tools to an orchestrator,
-        enabling routing, parallelization, and decomposition.
-        
-        Args:
-            name: Orchestrator agent name
-            agents: List of child agent names to expose as tools
-            instruction: Orchestrator instruction
-            default: Whether this is the default agent
-            servers: MCP servers to attach
-            
-        Returns:
-            Agents-as-tools workflow decorator
-        """
-        self._ensure_fastagent()
-        
-        fast = FastAgent(name)
-        
-        # Create child agents
-        for agent_name in agents:
-            @fast.agent(
-                name=agent_name,
-                instruction=f"You are {agent_name}.",
-                servers=servers or [],
-            )
-            pass
-        
-        # Create orchestrator that uses agents as tools
-        @fast.agent(
-            name=name,
-            instruction=instruction,
-            default=default,
-            agents=agents,
-        )
-        pass
-        
-        logger.info(f"Created agents-as-tools workflow: {name} -> {agents}")
-        
-        return fast
-    
-    def get_agent(self, name: str) -> Optional[Any]:
-        """Get a registered agent by name."""
-        return self._agents.get(name)
-    
-    def get_workflow(self, name: str) -> Optional[Any]:
-        """Get a registered workflow by name."""
-        return self._workflows.get(name)
-    
-    def list_agents(self) -> List[str]:
-        """List all registered agent names."""
-        return list(self._agents.keys())
-    
-    def list_workflows(self) -> List[str]:
-        """List all registered workflow names."""
-        return list(self._workflows.keys())
+        """Legacy method for agents-as-tools workflow."""
+        logger.info(f"Agents-as-tools workflow '{name}': {agents}")
+        return name
 
 
 # Global factory instance
 _factory: Optional[FastAgentFactory] = None
 
 
-def get_factory(config_path: str = "fastagent.config.yaml") -> FastAgentFactory:
+def get_factory(config_path: str = "agents.yaml") -> FastAgentFactory:
     """Get the global FastAgent factory instance."""
     global _factory
     if _factory is None:
         _factory = FastAgentFactory(config_path)
     return _factory
+
+
+def compile_yaml_config(
+    yaml_path: str,
+    output_path: Optional[str] = None
+) -> str:
+    """Compile YAML config to FastAgent Python code.
+    
+    Args:
+        yaml_path: Path to YAML config
+        output_path: Optional path to write generated code
+        
+    Returns:
+        Generated Python code
+    """
+    factory = FastAgentFactory(yaml_path)
+    code = factory.compile_to_code()
+    
+    if output_path:
+        with open(output_path, 'w') as f:
+            f.write(code)
+        logger.info(f"Wrote generated code to {output_path}")
+    
+    return code
+
+
+def run_agent_from_config(
+    yaml_path: str,
+    agent_name: str,
+    message: str
+) -> str:
+    """Run an agent directly from YAML config.
+    
+    Args:
+        yaml_path: Path to YAML config
+        agent_name: Name of agent to run
+        message: Message to send
+        
+    Returns:
+        Agent response
+    """
+    factory = FastAgentFactory(yaml_path)
+    return factory.run_agent(agent_name, message)
 
 
 def create_agent_from_config(config: Dict[str, Any]) -> Any:
@@ -373,9 +561,34 @@ def create_agent_from_config(config: Dict[str, Any]) -> Any:
         )
 
 
+# Legacy methods on factory for backwards compatibility
+def create_chain_workflow(
+    name: str,
+    sequence: List[str],
+    instruction: Optional[str] = None,
+) -> Any:
+    """Legacy method for creating chain workflow."""
+    return get_factory().create_chain_workflow(name, sequence, instruction)
+
+
+def create_parallel_workflow(
+    name: str,
+    fan_out: List[str],
+    fan_in: Optional[str] = None,
+    instruction: Optional[str] = None,
+) -> Any:
+    """Legacy method for creating parallel workflow."""
+    return get_factory().create_parallel_workflow(name, fan_out, fan_in, instruction)
+
+
 __all__ = [
     "FastAgentFactory",
+    "FastAgentCompilationError",
+    "compile_yaml_config",
+    "run_agent_from_config",
     "create_agent_from_config",
     "get_factory",
+    "create_chain_workflow",
+    "create_parallel_workflow",
     "FASTAGENT_AVAILABLE",
 ]

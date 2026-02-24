@@ -1,0 +1,56 @@
+# Example pyclaw agents configuration
+# This YAML config compiles to FastAgent decorator code
+
+# Default agent (used when no specific agent is specified)
+default_agent: assistant
+
+# Agent definitions
+agents:
+  # Simple agent
+  assistant:
+    instruction: "You are a helpful assistant."
+    model: sonnet
+    servers: []
+  
+  # Agent with MCP servers
+  fetcher:
+    instruction: "You can fetch URLs. Provide summaries of web pages."
+    model: haiku
+    servers: [fetch]
+  
+  # Code expert agent
+  coder:
+    instruction: "You are an expert Python developer. Write clean, well-documented code."
+    model: sonnet
+    servers: [filesystem]
+  
+  # Research agent
+  researcher:
+    instruction: "You research topics thoroughly. Provide detailed, accurate information with sources."
+    model: sonnet
+    servers: [fetch, search]
+
+# Workflow definitions
+workflows:
+  # Sequential chain: order_agent → ship_agent
+  order_ship:
+    chain:
+      - order_agent
+      - ship_agent
+  
+  # Parallel workflow: fan-out to reviewers, fan-in to grader
+  parallel_review:
+    parallel:
+      fan_out:
+        - proofreader
+        - fact_checker
+        - style_enforcer
+      fan_in: grader
+  
+  # Router: route to appropriate agent based on request
+  route:
+    router:
+      agents:
+        - coder
+        - fetcher
+        - researcher
