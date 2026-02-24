@@ -107,12 +107,18 @@ class FastAgentProviderConfig(ProviderConfig):
     url: str = "http://localhost:8000"
 
 
+class MiniMaxProviderConfig(ProviderConfig):
+    """MiniMax provider configuration."""
+    base_url: str = "https://api.minimax.chat/v1"
+
+
 class ProvidersConfig(BaseModel):
     """Providers configuration."""
     openai: Optional[OpenAIProviderConfig] = None
     anthropic: Optional[AnthropicProviderConfig] = None
     google: Optional[GoogleProviderConfig] = None
     fastagent: Optional[FastAgentProviderConfig] = None
+    minimax: Optional[MiniMaxProviderConfig] = None
 
 
 class HeartbeatConfig(BaseModel):
