@@ -11,6 +11,7 @@ from textual.app import ComposeResult
 from textual.containers import Container, Horizontal, Vertical, ScrollableContainer
 from textual.screen import Screen
 from textual.widgets import (
+    RichLog,
     Button,
     Footer,
     Header,
@@ -20,7 +21,6 @@ from textual.widgets import (
     Label,
     DataTable,
     Switch,
-    TextArea,
 )
 from textual.binding import Binding
 from textual import work
@@ -70,7 +70,7 @@ class ChatScreen(Screen):
             # Main chat area
             with Vertical(id="chat-area"):
                 # Chat history (TextArea for text selection support)
-                yield TextArea(id="chat-history", read_only=True)
+                yield RichLog(id="chat-history", auto_scroll=True)
                 
                 # Input area
                 with Horizontal(id="input-area"):
@@ -88,7 +88,7 @@ class ChatScreen(Screen):
         debug_write("ChatScreen.on_mount called")
         
         self._chat_input = self.query_one("#chat-input", Input)
-        self._chat_history = self.query_one("#chat-history", TextArea)
+        self._chat_history = self.query_one("#chat-history", RichLog)
         self._agent_list = self.query_one("#agent-list", AgentListWidget)
         
         debug_write(f"on_mount: gateway={self.gateway}, app_ref={self.app_ref}")
@@ -143,17 +143,9 @@ class ChatScreen(Screen):
             debug_write(f"_load_agents: gateway={self.gateway}, agent_manager={getattr(self.gateway, 'agent_manager', 'NONE') if self.gateway else 'N/A'}")
     
     def _append_chat(self, text: str) -> None:
-        """Append text to chat history (strip Rich tags for TextArea)."""
-        # Strip Rich markup tags ([/blue], [green], etc.) for TextArea
-        plain = re.sub(r'\[/?\w+\]', '', text)
-        # Append to TextArea
-        current = self._chat_history.text
-        if current:
-            self._chat_history.text = current + "\n" + plain
-        else:
-            self._chat_history.text = plain
-        # Auto-scroll to bottom
-        self._chat_history.scroll_end()
+        """Append text to chat history (RichLog with Rich markup support)."""
+        # RichLog.write() parses Rich markup automatically
+        self._chat_history.write(text)
     
     def on_input_submitted(self, event: Input.Submitted) -> None:
         """Handle input submission."""
