@@ -69,8 +69,8 @@ class ChatScreen(Screen):
             
             # Main chat area
             with Vertical(id="chat-area"):
-                # Chat history (TextArea for text selection support)
-                yield TextArea(id="chat-history", read_only=True, show_line_numbers=False)
+                # Chat history (RichLog for Rich markup support + colors)
+                yield RichLog(id="chat-history", auto_scroll=True)
                 
                 # Input area
                 with Horizontal(id="input-area"):
@@ -143,24 +143,9 @@ class ChatScreen(Screen):
             debug_write(f"_load_agents: gateway={self.gateway}, agent_manager={getattr(self.gateway, 'agent_manager', 'NONE') if self.gateway else 'N/A'}")
     
     def _append_chat(self, text: str) -> None:
-        """Append text to chat history."""
-        # TextArea doesn't support Rich markup, so we strip basic tags
-        # for display purposes
-        import re
-        # Strip common Rich markup tags for plain text display
-        plain_text = re.sub(r'\[/?\w+\]', '', text)  # Remove [b], [blue], [/blue], etc.
-        plain_text = plain_text.strip()
-        
-        # Get current content and append new message
-        current = self._chat_history.text or ""
-        if current:
-            new_content = current + "\n" + plain_text
-        else:
-            new_content = plain_text
-        
-        self._chat_history.text = new_content
-        # Scroll to bottom
-        self._chat_history.scroll_end()
+        """Append text to chat history (with Rich markup support)."""
+        # RichLog supports Rich markup directly - no stripping needed
+        self._chat_history.write(text)
     
     def on_input_submitted(self, event: Input.Submitted) -> None:
         """Handle input submission."""
