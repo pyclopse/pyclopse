@@ -79,7 +79,7 @@ class TUIApp(App):
         height: 3;
         background: $primary;
         content-align: center middle;
-        text: $text;
+        color: $text;
     }
     
     Log {
