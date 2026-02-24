@@ -1,4 +1,4 @@
-"""Agent management for pyclaw."""
+"""Agent management for pyclaw with FastAgent integration."""
 
 import asyncio
 import logging
@@ -22,6 +22,20 @@ from pyclaw.skills.runner import (
     SkillContext,
 )
 
+# FastAgent imports
+try:
+    from fast_agent import FastAgent
+    FASTAGENT_AVAILABLE = True
+except ImportError:
+    FastAgent = None
+    FASTAGENT_AVAILABLE = False
+
+from pyclaw.agents.factory import (
+    FastAgentFactory,
+    create_agent_from_config,
+    get_factory,
+)
+
 
 # Tool execution function type
 ToolExecutor = Callable[[str, List[str], str], Awaitable[Dict[str, Any]]]
@@ -38,6 +52,10 @@ class Agent:
     provider: Optional[Any] = None  # Provider instance
     skill_runner: Optional[SkillRunner] = None
     
+    # FastAgent integration
+    fast_agent: Optional[Any] = None  # FastAgent instance
+    fast_agent_runner: Optional[Any] = None  # AgentRunner instance
+    
     # Runtime state
     is_running: bool = False
     current_session: Optional[Session] = None
@@ -47,14 +65,87 @@ class Agent:
     def __post_init__(self):
         object.__setattr__(self, '_logger', logging.getLogger(f"pyclaw.agent.{self.id}"))
         
+        # Initialize FastAgent if available and configured
+        if FASTAGENT_AVAILABLE and self._should_use_fastagent():
+            self._init_fastagent()
+        
         # Initialize skill runner if tools are enabled
         if self.config.tools.enabled and self.skill_runner is None:
             self.skill_runner = get_default_runner()
+    
+    def _should_use_fastagent(self) -> bool:
+        """Check if agent should use FastAgent."""
+        model = self.config.model.lower()
+        return (
+            model.startswith("fastagent") or
+            model.startswith("fa:") or
+            getattr(self.config, "use_fastagent", False) or
+            getattr(self.config, "workflow", None) is not None
+        )
+    
+    def _init_fastagent(self) -> None:
+        """Initialize FastAgent for this agent."""
+        if not FASTAGENT_AVAILABLE:
+            self._logger.warning("FastAgent not available")
+            return
+        
+        try:
+            factory = get_factory()
+            
+            # Get workflow type from config
+            workflow_type = getattr(self.config, "workflow", None)
+            
+            if workflow_type:
+                # Create workflow agent
+                workflow_config = {
+                    "name": self.name,
+                    "instruction": self.config.system_prompt,
+                    "workflow": workflow_type,
+                    "agents": getattr(self.config, "agents", []),
+                    "model": self.config.model,
+                    "temperature": self.config.temperature,
+                    "servers": getattr(self.config, "mcp_servers", []),
+                }
+                self.fast_agent = create_agent_from_config(workflow_config)
+            else:
+                # Create regular FastAgent
+                model = self.config.model
+                for prefix in ["fastagent:", "fa:", "fastagent/"]:
+                    model = model.replace(prefix, "")
+                
+                self.fast_agent = factory.create_agent(
+                    name=self.name,
+                    instruction=self.config.system_prompt,
+                    model=model or "sonnet",
+                    temperature=self.config.temperature,
+                    max_tokens=self.config.max_tokens,
+                    servers=getattr(self.config, "mcp_servers", []),
+                )
+            
+            # Create runner for turn-based execution
+            from pyclaw.agents.runner import AgentRunner
+            self.fast_agent_runner = AgentRunner(
+                agent_name=self.name,
+                instruction=self.config.system_prompt,
+                model=self.config.model,
+                temperature=self.config.temperature,
+                max_tokens=self.config.max_tokens,
+                servers=getattr(self.config, "mcp_servers", []),
+            )
+            
+            self._logger.info(f"Initialized FastAgent for {self.name}")
+            
+        except Exception as e:
+            self._logger.error(f"Failed to initialize FastAgent: {e}")
     
     async def start(self) -> None:
         """Start the agent."""
         self.is_running = True
         self._logger.info(f"Agent {self.name} started")
+        
+        # Initialize FastAgent runner if available
+        if self.fast_agent_runner:
+            await self.fast_agent_runner.initialize()
     
     async def stop(self) -> None:
         """Stop the agent."""
@@ -88,16 +179,16 @@ class Agent:
         )
         
         try:
-            # Build messages for provider
-            messages = self._build_messages(session)
-            
-            # Get available tools if enabled
-            tools = None
-            if self.config.tools.enabled and self.skill_runner:
-                tools = self.skill_runner.registry.get_tools()
-            
-            # Get response from provider (with tool execution loop)
-            response_content = await self._get_response_with_tools(messages, tools)
+            # Use FastAgent if available
+            if self.fast_agent_runner:
+                response_content = await self._handle_with_fastagent(message.content, session)
+            else:
+                # Fall back to provider-based handling
+                messages = self._build_messages(session)
+                tools = None
+                if self.config.tools.enabled and self.skill_runner:
+                    tools = self.skill_runner.registry.get_tools()
+                response_content = await self._get_response_with_tools(messages, tools)
             
             # Add assistant response to session
             session.add_message(
@@ -123,6 +214,26 @@ class Agent:
                 target=message.sender_id,
                 channel=message.channel,
             )
+    
+    async def _handle_with_fastagent(
+        self,
+        prompt: str,
+        session: Session,
+    ) -> str:
+        """Handle message using FastAgent."""
+        # Build message history for context
+        messages = []
+        for msg in session.get_context_window(max_messages=20):
+            messages.append({
+                "role": msg.role,
+                "content": msg.content,
+            })
+        
+        # Add current prompt
+        messages.append({"role": "user", "content": prompt})
+        
+        # Run with FastAgent
+        return await self.fast_agent_runner.run_with_messages(messages)
     
     def _build_messages(self, session: Session) -> List[ProviderMessage]:
         """Build message list for provider."""
@@ -287,7 +398,14 @@ class Agent:
         # Run heartbeat
         self._logger.debug("Running heartbeat")
         
-        # Build heartbeat message
+        # Use FastAgent if available
+        if self.fast_agent_runner:
+            try:
+                return await self.fast_agent_runner.run(prompt)
+            except Exception as e:
+                self._logger.error(f"FastAgent heartbeat error: {e}")
+        
+        # Fall back to provider
         messages = [
             ProviderMessage(role="system", content=self.config.system_prompt),
             ProviderMessage(role="user", content=prompt),
@@ -310,6 +428,7 @@ class Agent:
             "session_id": self.current_session.id if self.current_session else None,
             "pending_tasks": len(self._tasks),
             "provider": type(self.provider).__name__ if self.provider else None,
+            "fast_agent": self.fast_agent is not None,
             "skills": len(self.skill_runner.registry.list_skills()) if self.skill_runner else 0,
         }
     
