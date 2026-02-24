@@ -838,9 +838,55 @@ class MemoryStore:
 
 ---
 
-## 7. Provider Abstraction
+## 7. Providers & Agents (FastAgent-First)
 
-### 7.1 Base Provider
+### 7.1 FastAgent is the Backbone
+
+Every pyclaw "Agent" IS a FastAgent instance. This is the core insight:
+
+```
+pyclaw Agent = FastAgent instance + Channel binding + Security layer
+```
+
+**What pyclaw adds to FastAgent:**
+- Channel integrations (Telegram, Discord, etc.)
+- Security layer (exec approvals, audit)
+- CLI and TUI
+- Persistence (sessions, history)
+- ClawVault memory integration
+
+**What FastAgent provides:**
+- Multi-provider support (Anthropic, OpenAI, Google, Ollama, etc.)
+- All workflow patterns (chain, parallel, maker, agents-as-tools)
+- Tool calling (MCP-native)
+- Structured outputs, vision, PDF support
+
+**Example pyclaw agent:**
+```yaml
+agents:
+  main:
+    type: fastagent  # extends FastAgent
+    instruction: "You are a helpful assistant..."
+    model: sonnet
+    channels: [telegram, discord]
+    
+  researcher:
+    type: fastagent  
+    workflow: parallel  # uses parallel workflow
+    agents: [web_searcher, url_fetcher]
+    
+  analyst:
+    type: fastagent
+    workflow: chain
+    agents: [data_fetcher, analyzer, reporter]
+```
+
+Every agent automatically gets:
+- All FastAgent capabilities
+- MCP tools via FastAgent's server system
+- Workflow patterns if needed
+
+### 7.2 Base Provider
 
 ```python
 # pyclaw/providers/base.py
@@ -892,7 +938,7 @@ class Provider(ABC):
         pass
 ```
 
-### 7.2 FastAgent Integration
+### 7.3 FastAgent Integration
 
 We will use [FastAgent](https://github.com/evalstate/fast-agent) as the workflow engine instead of building our own agent system. This provides powerful workflow patterns out of the box:
 
