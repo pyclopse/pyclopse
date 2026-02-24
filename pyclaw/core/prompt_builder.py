@@ -19,15 +19,19 @@ from typing import Optional
 from datetime import datetime
 
 
-# Files to read for system prompt - matching OpenClaw's bootstrap files
-# Note: RULES.md isn't used in OpenClaw - it uses AGENTS.md instead
+# Files to read for system prompt - pyclaw names with OpenClaw aliases
 BOOTSTRAP_FILES = [
-    "AGENTS.md",     # Workspace instructions (critical!)
-    "SOUL.md",       # Agent personality
-    "TOOLS.md",     # Tool-specific notes
+    # pyclaw names (preferred)
+    "AGENTS.md",     # Workspace instructions
+    "PERSONALITY.md", # Agent personality (formerly SOUL.md)
     "IDENTITY.md",   # Agent identity
+    "RULES.md",     # Operational rules (pyclaw addition)
     "USER.md",      # User information
-    "HEARTBEAT.md", # Heartbeat/pulse config
+    "PULSE.md",    # Pulse config (formerly HEARTBEAT.md)
+    # OpenClaw aliases (for migration compatibility)
+    "SOUL.md",
+    "HEARTBEAT.md",
+]
     "BOOTSTRAP.md", # Initial bootstrap (often deleted after first run)
     "MEMORY.md",    # Long-term memory
     "memory.md",    # Alternate memory filename
