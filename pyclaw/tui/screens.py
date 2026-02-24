@@ -87,6 +87,7 @@ class ChatScreen(Screen):
             # Auto-select first agent if none selected
             if agents and not self._current_agent_id:
                 self._current_agent_id = agents[0].id
+                print(f"DEBUG: Selected agent {self._current_agent_id} with provider {agents[0].provider}")
                 # Also update the app's current agent
                 if self.app_ref:
                     self.app_ref.set_current_agent(self._current_agent_id)
