@@ -44,17 +44,17 @@ class TUIApp(App):
         background: $surface;
     }
     
-    # main-container {
+    #main-container {
         height: 100%;
     }
     
-    # sidebar {
+    #sidebar {
         width: 30;
         background: $panel;
         border-right: solid $border;
     }
     
-    # content {
+    #content {
         width: 1fr;
     }
     
