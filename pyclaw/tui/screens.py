@@ -153,7 +153,7 @@ class ChatScreen(Screen):
         else:
             self._chat_history.text = plain
         # Auto-scroll to bottom
-        self._chat_history.scroll_to_row(self._chat_history.line_count - 1)
+        self._chat_history.scroll_end()
     
     def on_input_submitted(self, event: Input.Submitted) -> None:
         """Handle input submission."""
