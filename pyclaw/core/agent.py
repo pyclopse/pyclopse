@@ -46,6 +46,7 @@ class Agent:
     session_manager: Any = None  # SessionManager
     tool_executor: Optional[ToolExecutor] = None
     provider: Optional[Any] = None  # Provider instance
+    skill_runner: Optional[Any] = None  # SkillRunner for tool execution
     
     # FastAgent integration
     fast_agent: Optional[Any] = None  # FastAgent instance

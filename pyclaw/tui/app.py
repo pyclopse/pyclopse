@@ -117,6 +117,22 @@ class TUIApp(App):
     #send-button {
         width: auto;
     }
+
+    Button {
+        cursor: pointer;
+    }
+    
+    #agent-list Button {
+        cursor: pointer;
+    }
+    
+    #agent-actions Button {
+        cursor: pointer;
+    }
+    
+    #session-actions Button {
+        cursor: pointer;
+    }
     """
     
     def __init__(self, gateway=None):

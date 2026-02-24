@@ -52,7 +52,7 @@ class ChatScreen(Screen):
             # Main chat area
             with Vertical(id="chat-area"):
                 # Chat history (RichLog for Rich markup support)
-                yield RichLog(id="chat-history")
+                yield RichLog(id="chat-history", markup=True)
                 
                 # Input area
                 with Horizontal(id="input-area"):
