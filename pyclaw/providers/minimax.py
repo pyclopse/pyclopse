@@ -31,6 +31,13 @@ class MiniMaxProvider(Provider):
         
         self.base_url = config.get("base_url", "https://api.minimax.io/v1/text/chatcompletion_v2")
         self.api_key = api_key
+    
+    def _get_headers(self) -> Dict[str, str]:
+        """Get HTTP headers for API requests."""
+        return {
+            "Authorization": f"Bearer {self.api_key}",
+            "Content-Type": "application/json"
+        }
         self.model = config.get("model", "MiniMax-M2.5")
         self.default_model = self.model
     
@@ -46,10 +53,7 @@ class MiniMaxProvider(Provider):
         """Send a non-streaming chat completion request."""
         model = model or self.default_model or "MiniMax-M2.5"
         
-        headers = {
-            "Authorization": f"Bearer {self.api_key}",
-            "Content-Type": "application/json"
-        }
+        headers = self._get_headers()
         
         payload: Dict[str, Any] = {
             "model": model,
