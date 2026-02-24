@@ -437,13 +437,13 @@ agents:
   reporter:
     instruction: "Create reports..."
     workflow: chain
-    sequence: [fetcher, analyzer, writer]
+    agents: [fetcher, analyzer, writer]
 
   # Parallel workflow - fan-out to multiple sub-agents
   researcher:
     instruction: "Research things..."
     workflow: parallel
-    fan_out: [web_searcher, url_fetcher]
+    agents: [web_searcher, url_fetcher]
     
   # Orchestrator-workers pattern
   pmo:
@@ -870,27 +870,64 @@ class MemoryStore:
 
 ### 7.1 Agent Definition: YAML Config → FastAgent Decorators
 
+> **Key Insight: Agents Can Chain to Other Agents**
+>
+> Every pyclaw agent can use other agents as building blocks:
+>
+> ```yaml
+> agents:
+>   # Base agents (single FastAgent)
+>   order_agent:
+>     instruction: "Place orders..."
+>     model: sonnet
+>     
+>   ship_agent:
+>     instruction: "Ship orders..."
+>     model: sonnet
+>     
+>   # Chained agent - runs order then ship
+>   order_and_ship:
+>     workflow: chain
+>     agents: [order_agent, ship_agent]
+>     
+>   # Parallel agent - fans out to multiple
+>   research_team:
+>     workflow: parallel
+>     agents: [web_searcher, data_fetcher]
+>     
+>   # Agents-as-tools - orchestrator pattern
+>   coordinator:
+>     workflow: agents_as_tools
+>     agents: [order_agent, ship_agent, inventory_agent]
+> ```
+
 FastAgent uses **decorators** to define agents, NOT just config. pyclaw supports two approaches:
 
 **Option A: YAML config that compiles to FastAgent decorators**
 ```yaml
 # pyclaw.yaml - compiles to @fast.agent decorators
 agents:
+  # Base agents (single FastAgent)
   url_fetcher:
     instruction: "Given a URL, provide a summary"
     servers: [fetch]  # MCP server names
+    model: sonnet
     
   social_media:
     instruction: "Write a social media post"
+    model: sonnet
     
+  # Chained agent - runs agents sequentially
   post_writer:
     workflow: chain
-    sequence: [url_fetcher, social_media]
+    agents: [url_fetcher, social_media]
     
+  # Parallel agent - fans out to multiple agents
   researcher:
     workflow: parallel
-    fan_out: [web_searcher, url_fetcher]
+    agents: [web_searcher, url_fetcher]
     
+  # Agents-as-tools - orchestrator calls others as tools
   pmo:
     workflow: agents_as_tools
     agents: [ny_manager, london_manager]
@@ -1465,14 +1502,51 @@ class WorkflowRunner:
 
 ## 8. Workflow Types
 
-Since agents can be defined with decorators OR YAML that compiles to decorators, workflow types are fields on the agent config:
+Since agents can be defined with decorators OR YAML that compiles to decorators, workflow types determine how agents combine:
 
 | workflow | Description |
 |----------|-------------|
-| (none/default) | Single agent - one step |
-| `chain` | Sequential: Agent A → Agent B → Agent C |
-| `parallel` | Fan-out/in: Agent A → [Agent B, Agent C] → combine |
-| `agents_as_tools` | Orchestrator-workers: one agent calls others as tools |
+| `single` (default) | Single agent - just this agent |
+| `chain` | Sequential: agent1 → agent2 → agent3 |
+| `parallel` | Fan-out: [agent1, agent2, agent3] run simultaneously |
+| `agents_as_tools` | Orchestrator calls others as tools |
+
+### Workflow Details
+
+**single** (default):
+```yaml
+# Single agent - no workflow specified
+helper:
+  instruction: "You are helpful."
+  model: sonnet
+```
+
+**chain** - Sequential execution:
+```yaml
+# Runs order_agent first, then ship_agent
+order_and_ship:
+  workflow: chain
+  agents: [order_agent, ship_agent]
+  # Output of order_agent becomes input to ship_agent
+```
+
+**parallel** - Fan-out execution:
+```yaml
+# All agents run simultaneously, results combined
+research_team:
+  workflow: parallel
+  agents: [web_searcher, data_fetcher, analyzer]
+  # Each agent gets the same input, results aggregated
+```
+
+**agents_as_tools** - Orchestrator pattern:
+```yaml
+# Coordinator can call other agents as tools
+coordinator:
+  workflow: agents_as_tools
+  agents: [order_agent, ship_agent, inventory_agent]
+  # Coordinator decides which agents to call and when
+```
 
 ```yaml
 agents:
@@ -1483,17 +1557,65 @@ agents:
   # Chain workflow - sequential
   researcher:
     workflow: chain
-    sequence: [searcher, analyzer, writer]
+    agents: [searcher, analyzer, writer]
     
   # Parallel workflow - fan-out/in
   scout:
     workflow: parallel
-    fan_out: [searcher1, searcher2, searcher3]
+    agents: [searcher1, searcher2, searcher3]
     
   # Orchestrator-workers
   pmo:
     workflow: agents_as_tools
     agents: [ny_manager, london_manager]
+```
+
+### Skills (FastAgent Built-in)
+
+pyclaw uses FastAgent's built-in skills system (`fast_agent.skills`) instead of a custom skills system. 
+
+**Key Points:**
+- Skills are defined in FastAgent and loaded automatically
+- No need for pyclaw's custom skills system - it's deprecated
+- Skills integrate automatically via FastAgent
+- Skills provide additional capabilities to agents (e.g., web search, file operations)
+- Use FastAgent's skill registry to manage skills
+
+```python
+# Example: Using FastAgent skills
+from fast_agent import FastAgent
+from fast_agent.skills import skill
+
+# Define a skill
+@skill(name="web_search")
+def web_search(query: str):
+    """Search the web for information"""
+    # Implementation
+    pass
+
+# Agent automatically has access to the skill
+fast = FastAgent("my_agent")
+
+@fast.agent(
+    name="researcher",
+    instruction="Research topics using available skills",
+    skills=["web_search"],  # Attach skills to agent
+)
+async def main():
+    async with fast.run() as agent:
+        await agent.interactive()
+```
+
+For YAML-defined agents, skills are specified via the `skills` field:
+
+```yaml
+agents:
+  researcher:
+    instruction: "Research the given topic"
+    skills:
+      - web_search
+      - fetch
+      - time
 ```
 
 ### 8.1 MCP Tools as Agent Tools
