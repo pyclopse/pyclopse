@@ -74,6 +74,11 @@ class MiniMaxProvider(Provider):
             response.raise_for_status()
             data = response.json()
             
+            # Check for API-level errors
+            if "base_resp" in data:
+                err = data["base_resp"]
+                raise Exception(f"MiniMax API error: {err.get('status_msg', 'Unknown')} (code: {err.get('status_code')})")
+            
             choice = data["choices"][0]
             msg = choice["message"]
             
@@ -123,8 +128,23 @@ class MiniMaxProvider(Provider):
             async with client.stream("POST", self.base_url, json=payload, headers=self._get_headers()) as response:
                 response.raise_for_status()
                 
+                # Check if response is SSE streaming or a regular JSON response
+                content_type = response.headers.get("content-type", "")
+                
                 async for line in response.aiter_lines():
-                    if not line.strip() or not line.startswith("data:"):
+                    if not line.strip():
+                        continue
+                    
+                    # Check for error responses (non-SSE format)
+                    if not line.startswith("data:"):
+                        # Try to parse as JSON to check for errors
+                        try:
+                            data = json.loads(line)
+                            if "base_resp" in data:
+                                err = data["base_resp"]
+                                raise Exception(f"MiniMax API error: {err.get('status_msg', 'Unknown')} (code: {err.get('status_code')})")
+                        except json.JSONDecodeError:
+                            pass
                         continue
                     
                     data_str = line[5:].strip()
