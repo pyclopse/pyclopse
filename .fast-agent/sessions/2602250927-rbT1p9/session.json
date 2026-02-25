@@ -1,0 +1,17 @@
+{
+  "name": "2602250927-rbT1p9",
+  "created_at": "2026-02-25T09:27:51.284750",
+  "last_activity": "2026-02-25T09:28:36.407435",
+  "history_files": [
+    "history_default_previous.json",
+    "history_default.json"
+  ],
+  "metadata": {
+    "agent_name": "default",
+    "model": "generic.MiniMax-M2.5",
+    "last_history_by_agent": {
+      "default": "history_default.json"
+    },
+    "first_user_preview": "hello"
+  }
+}

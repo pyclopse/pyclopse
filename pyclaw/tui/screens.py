@@ -259,17 +259,20 @@ class ChatScreen(Screen):
                     chunk_count += 1
                     if chunk:
                         full_content += chunk
-                        # Strip thinking tags and render
-                        import re
-
-                        display_content = re.sub(
-                            r"<(thinking|think)>(.*?)</\1>",
-                            lambda m: f"[dim]{m.group(2)}[/dim]",
-                            full_content,
-                            flags=re.DOTALL,
-                        )
-                        self._append_chat(f"[green]{agent.name}:[/green] {display_content}")
+                        # Only show final content, not duplicates
+                        # (streaming to same line would require terminal tricks)
                 debug_write(f"_process_message: run_stream completed, chunks={chunk_count}")
+                
+                # Show final complete response
+                if full_content:
+                    import re
+                    display_content = re.sub(
+                        r"<(thinking|think)>(.*?)</\1>",
+                        lambda m: f"[dim]{m.group(2)}[/dim]",
+                        full_content,
+                        flags=re.DOTALL,
+                    )
+                    self._append_chat(f"[green]{agent.name}:[/green] {display_content}")
 
             except Exception as stream_err:
                 debug_write(f"FastAgent streaming failed: {stream_err}")
