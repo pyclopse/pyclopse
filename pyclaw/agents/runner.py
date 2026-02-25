@@ -3,8 +3,6 @@ import asyncio
 import logging
 from typing import Any, AsyncIterator, Dict, List, Optional
 
-from pyclaw.agents.factory import AgentFactory
-
 logger = logging.getLogger(__name__)
 
 
