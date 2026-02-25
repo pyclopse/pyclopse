@@ -251,50 +251,30 @@ class ChatScreen(Screen):
             debug_write(f"_process_message: Using FastAgent streaming for agent {agent.name}")
 
             # Stream response from FastAgent
-            full_content = ""
             try:
                 debug_write(f"_process_message: About to call run_stream")
                 chunk_count = 0
-                # Stream and show progress every few chunks (not every single chunk to avoid spam)
-                display_line = ""
+
+                # Show agent name header once before streaming begins
+                self._append_chat(f"[green]{agent.name}:[/green]")
+
+                # Display each chunk immediately as it arrives in real-time
                 async for chunk in agent.fast_agent_runner.run_stream(message):
                     chunk_count += 1
                     if chunk:
-                        full_content += chunk
-                        # Update single line every 3 chunks
-                        if chunk_count % 3 == 0:
-                            import re
-                            display_line = re.sub(
-                                r"<(thinking|think)>(.*?)</\1>",
-                                lambda m: f"[dim]{m.group(2)}[/dim]",
-                                full_content,
-                                flags=re.DOTALL,
-                            )
-                            # Clear previous line and show new one
-                            self._append_chat(f"[green]{agent.name}:[/green] {display_line}[dim]...[/dim]")
+                        # Strip thinking tags from this chunk for display
+                        display_chunk = re.sub(
+                            r"<(thinking|think)>(.*?)</\1>",
+                            lambda m: f"[dim]{m.group(2)}[/dim]",
+                            chunk,
+                            flags=re.DOTALL,
+                        )
+                        self._append_chat(display_chunk)
+
                 debug_write(f"_process_message: run_stream completed, chunks={chunk_count}")
-                
-                # Show final complete response
-                if full_content:
-                    import re
-                    display_content = re.sub(
-                        r"<(thinking|think)>(.*?)</\1>",
-                        lambda m: f"[dim]{m.group(2)}[/dim]",
-                        full_content,
-                        flags=re.DOTALL,
-                    )
-                    self._append_chat(f"[green]{agent.name}:[/green] {display_content}")
-                
-                # Show final complete response
-                if full_content:
-                    import re
-                    display_content = re.sub(
-                        r"<(thinking|think)>(.*?)</\1>",
-                        lambda m: f"[dim]{m.group(2)}[/dim]",
-                        full_content,
-                        flags=re.DOTALL,
-                    )
-                    self._append_chat(f"[green]{agent.name}:[/green] {display_content}")
+
+                if chunk_count == 0:
+                    self._append_chat("[dim](no response)[/dim]")
 
             except Exception as stream_err:
                 debug_write(f"FastAgent streaming failed: {stream_err}")

@@ -1,0 +1,16 @@
+{
+  "name": "2602251006-ob7RIN",
+  "created_at": "2026-02-25T10:06:05.272802",
+  "last_activity": "2026-02-25T10:06:05.278538",
+  "history_files": [
+    "history_default.json"
+  ],
+  "metadata": {
+    "agent_name": "default",
+    "model": "generic.MiniMax-M2.5",
+    "last_history_by_agent": {
+      "default": "history_default.json"
+    },
+    "first_user_preview": "tell me a joke"
+  }
+}
