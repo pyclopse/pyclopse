@@ -238,7 +238,7 @@ class Agent:
         messages.append({"role": "user", "content": prompt})
         
         # Run with FastAgent
-        return await self.fast_agent_runner.run_with_messages(messages)
+        return await self.fast_agent_runner.run(messages)
     
     def _build_messages(self, session: Session) -> List[ProviderMessage]:
         """Build message list for provider."""
