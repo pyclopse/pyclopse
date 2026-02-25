@@ -145,6 +145,8 @@ class ChatScreen(Screen):
 
     def _append_chat(self, text: str) -> None:
         """Append text to chat history (RichLog with Rich markup support)."""
+        # Add a blank line before each message for visual separation
+        self._chat_history.write("")
         # RichLog.write() parses Rich markup automatically
         self._chat_history.write(text)
         # Refresh to show new content immediately
