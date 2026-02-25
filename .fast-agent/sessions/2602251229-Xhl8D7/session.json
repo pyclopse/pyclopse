@@ -1,8 +1,9 @@
 {
-  "name": "2602250920-ZcQv9t",
-  "created_at": "2026-02-25T09:20:12.543222",
-  "last_activity": "2026-02-25T09:20:12.545914",
+  "name": "2602251229-Xhl8D7",
+  "created_at": "2026-02-25T12:29:33.653656",
+  "last_activity": "2026-02-25T12:29:49.469829",
   "history_files": [
+    "history_default_previous.json",
     "history_default.json"
   ],
   "metadata": {
@@ -11,6 +12,6 @@
     "last_history_by_agent": {
       "default": "history_default.json"
     },
-    "first_user_preview": "Count from 1 to 5"
+    "first_user_preview": "hello"
   }
 }

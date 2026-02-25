@@ -290,6 +290,28 @@ class SessionManager:
         
         return sessions
     
+    def list_sessions_sync(
+        self,
+        agent_id: Optional[str] = None,
+        channel: Optional[str] = None,
+        user_id: Optional[str] = None,
+        active_only: bool = True,
+    ) -> List[Session]:
+        """Synchronous version of list_sessions for use from screens."""
+        sessions = list(self.sessions.values())
+        
+        if agent_id:
+            sessions = [s for s in sessions if s.agent_id == agent_id]
+        if channel:
+            sessions = [s for s in sessions if s.channel == channel]
+        if user_id:
+            sessions = [s for s in sessions if s.user_id == user_id]
+        if active_only:
+            sessions = [s for s in sessions if s.is_active]
+        
+        sessions.sort(key=lambda s: s.updated_at, reverse=True)
+        return sessions
+    
     def get_status(self) -> Dict[str, Any]:
         """Get session manager status."""
         return {

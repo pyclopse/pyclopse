@@ -587,7 +587,7 @@ class SessionsScreen(Screen):
         self._table.clear()
 
         if self.gateway and self.gateway.session_manager:
-            sessions = self.gateway.session_manager.list_sessions()
+            sessions = self.gateway.session_manager.list_sessions_sync()
 
             for session in sessions:
                 status = "Active" if session.is_active else "Inactive"
@@ -622,7 +622,7 @@ class SessionsScreen(Screen):
             session_id = row[0].replace("...", "")
             # Find full session ID
             if self.gateway and self.gateway.session_manager:
-                sessions = self.gateway.session_manager.list_sessions()
+                sessions = self.gateway.session_manager.list_sessions_sync()
                 for s in sessions:
                     if s.id.startswith(session_id):
                         session_id = s.id
