@@ -101,6 +101,18 @@ class Agent:
         try:
             factory = get_factory()
             
+            # Check if we need to use generic provider for minimax
+            provider_type = None
+            if hasattr(self, 'provider') and self.provider:
+                provider_type = type(self.provider).__name__
+            
+            # Configure for minimax if needed
+            if provider_type == 'MiniMaxProvider':
+                # Set up generic provider for MiniMax
+                import os
+                os.environ['GENERIC_BASE_URL'] = 'https://api.minimax.io/v1'
+                # API key will be picked up from environment or keychain
+            
             # Get workflow type from config
             workflow_type = getattr(self.config, "workflow", None)
             
@@ -122,6 +134,10 @@ class Agent:
                 for prefix in ["fastagent:", "fa:", "fastagent/"]:
                     model = model.replace(prefix, "")
                 
+                # Use generic provider for minimax
+                if provider_type == 'MiniMaxProvider' and not model.startswith('generic.'):
+                    model = f"generic.{model}"
+                
                 self.fast_agent = factory.create_agent(
                     name=self.name,
                     instruction=self.system_prompt,
@@ -133,10 +149,12 @@ class Agent:
             
             # Create runner for turn-based execution
             from pyclaw.agents.runner import AgentRunner
-            # Strip prefix from model for runner
+            # Strip prefix from model for runner, but add generic. for minimax
             runner_model = self.config.model
             for prefix in ["fastagent:", "fa:", "fastagent/"]:
                 runner_model = runner_model.replace(prefix, "")
+            if provider_type == 'MiniMaxProvider' and not runner_model.startswith('generic.'):
+                runner_model = f"generic.{runner_model}"
             self.fast_agent_runner = AgentRunner(
                 agent_name=self.name,
                 instruction=self.system_prompt,

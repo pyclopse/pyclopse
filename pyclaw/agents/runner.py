@@ -31,6 +31,24 @@ class AgentRunner:
         """Initialize the FastAgent app."""
         if self._app is not None:
             return
+        
+        import os
+        # Set up MiniMax generic provider if needed
+        if 'generic.' in self.model:
+            # Get API key from environment or keychain
+            api_key = os.environ.get('MINIMAX_API_KEY')
+            if not api_key:
+                try:
+                    import subprocess
+                    api_key = subprocess.check_output(
+                        ["security", "find-generic-password", "-s", "pyclaw", "-a", "minimax-api-key", "-w"],
+                        text=True
+                    ).strip()
+                except:
+                    pass
+            if api_key:
+                os.environ['GENERIC_API_KEY'] = api_key
+            os.environ['GENERIC_BASE_URL'] = 'https://api.minimax.io/v1'
             
         from fast_agent import FastAgent
         
