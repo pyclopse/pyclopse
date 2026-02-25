@@ -68,6 +68,10 @@ class Agent:
     
     def _should_use_fastagent(self) -> bool:
         """Check if agent should use FastAgent."""
+        # Don't use FastAgent if a direct provider is configured
+        if hasattr(self, 'provider') and self.provider is not None:
+            return False
+        
         model = self.config.model.lower()
         return (
             model.startswith("fastagent") or
