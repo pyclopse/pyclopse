@@ -129,10 +129,14 @@ class Agent:
             
             # Create runner for turn-based execution
             from pyclaw.agents.runner import AgentRunner
+            # Strip prefix from model for runner
+            runner_model = self.config.model
+            for prefix in ["fastagent:", "fa:", "fastagent/"]:
+                runner_model = runner_model.replace(prefix, "")
             self.fast_agent_runner = AgentRunner(
                 agent_name=self.name,
                 instruction=self.system_prompt,
-                model=self.config.model,
+                model=runner_model or "sonnet",
                 temperature=self.config.temperature,
                 max_tokens=self.config.max_tokens,
                 servers=getattr(self.config, "mcp_servers", []),
