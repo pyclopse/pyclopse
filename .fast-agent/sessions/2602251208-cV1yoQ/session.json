@@ -1,7 +1,7 @@
 {
-  "name": "2602250847-KRLHjf",
-  "created_at": "2026-02-25T08:47:25.194569",
-  "last_activity": "2026-02-25T08:47:25.200005",
+  "name": "2602251208-cV1yoQ",
+  "created_at": "2026-02-25T12:08:07.087044",
+  "last_activity": "2026-02-25T12:08:07.093274",
   "history_files": [
     "history_default.json"
   ],
@@ -11,6 +11,6 @@
     "last_history_by_agent": {
       "default": "history_default.json"
     },
-    "first_user_preview": "tell me a joke"
+    "first_user_preview": "hello"
   }
 }

@@ -387,19 +387,24 @@ class ChatScreen(Screen):
                 # Blank line before agent message for spacing
                 self._append_chat("")
 
+                first_chunk = True
                 async for chunk in agent.fast_agent_runner.run_stream(message):
                     chunk_count += 1
                     if chunk:
                         # Process thinking tags across chunk boundaries
                         display_chunk = self._process_thinking_chunk(chunk)
                         if display_chunk:
-                            # Stream each chunk to TUI in real-time
-                            self._append_chat(f"{agent_header}{display_chunk}")
+                            # Only prepend header on first chunk
+                            if first_chunk:
+                                self._append_chat(f"{agent_header}{display_chunk}")
+                                first_chunk = False
+                            else:
+                                self._append_chat(display_chunk)
                 
                 # Flush any remaining buffered content from thinking-tag parser
                 leftover = self._reset_thinking_state()
                 if leftover:
-                    self._append_chat(f"{agent_header}{leftover}")
+                    self._append_chat(leftover)
 
                 debug_write(f"_process_message: run_stream completed, chunks={chunk_count}")
 
