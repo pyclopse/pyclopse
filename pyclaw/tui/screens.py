@@ -255,11 +255,23 @@ class ChatScreen(Screen):
             try:
                 debug_write(f"_process_message: About to call run_stream")
                 chunk_count = 0
-                # Stream and collect all chunks, show final result when done
+                # Stream and show progress every few chunks (not every single chunk to avoid spam)
+                display_line = ""
                 async for chunk in agent.fast_agent_runner.run_stream(message):
                     chunk_count += 1
                     if chunk:
                         full_content += chunk
+                        # Update single line every 3 chunks
+                        if chunk_count % 3 == 0:
+                            import re
+                            display_line = re.sub(
+                                r"<(thinking|think)>(.*?)</\1>",
+                                lambda m: f"[dim]{m.group(2)}[/dim]",
+                                full_content,
+                                flags=re.DOTALL,
+                            )
+                            # Clear previous line and show new one
+                            self._append_chat(f"[green]{agent.name}:[/green] {display_line}[dim]...[/dim]")
                 debug_write(f"_process_message: run_stream completed, chunks={chunk_count}")
                 
                 # Show final complete response
