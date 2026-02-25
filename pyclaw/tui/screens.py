@@ -49,6 +49,9 @@ class ChatScreen(Screen):
         self.app_ref = app
         self._current_agent_id: Optional[str] = None
         self._chat_history: List[Dict[str, str]] = []
+        # State for streaming thinking-tag detection across chunks
+        self._in_thinking: bool = False
+        self._tag_buffer: str = ""
         debug_write(f"ChatScreen.__init__ called with gateway={gateway}")
 
     BINDINGS = [
@@ -146,6 +149,86 @@ class ChatScreen(Screen):
         self._chat_history.write(text)
         # Refresh to show new content immediately
         self._chat_history.refresh()
+
+    def _process_thinking_chunk(self, chunk: str) -> str:
+        """Process a streaming chunk, handling <thinking>/<think> tags that may span chunks.
+
+        Maintains state across calls so that opening/closing tags split across
+        chunk boundaries are detected correctly.  Content inside thinking blocks
+        is wrapped in Rich ``[dim]…[/dim]`` markup; the tags themselves are
+        stripped from the output.
+
+        Returns the Rich-markup string ready for display (may be empty if the
+        chunk is entirely buffered waiting for a closing angle bracket).
+        """
+        # Append incoming text to any leftover buffer from the previous call.
+        text = self._tag_buffer + chunk
+        self._tag_buffer = ""
+        output: list[str] = []
+
+        while text:
+            if self._in_thinking:
+                # We are inside a thinking block – look for the closing tag.
+                close_match = re.search(r"</(thinking|think)>", text)
+                if close_match:
+                    # Emit everything before the closing tag as dimmed text.
+                    thinking_content = text[: close_match.start()]
+                    if thinking_content:
+                        # Escape any Rich markup chars in the raw thinking text
+                        thinking_content = thinking_content.replace("[", "\\[")
+                        output.append(f"[dim]{thinking_content}[/dim]")
+                    text = text[close_match.end() :]
+                    self._in_thinking = False
+                else:
+                    # Closing tag hasn't arrived yet.  Check whether the tail
+                    # of the text could be the *start* of a closing tag (e.g.
+                    # the chunk ends with ``</thi``).  Buffer that partial
+                    # candidate so it can be matched on the next call.
+                    partial = re.search(
+                        r"</?(?:t(?:h(?:i(?:n(?:k(?:i(?:n(?:g)?)?)?)?)?)?)?)?$", text
+                    )
+                    if partial and partial.start() < len(text):
+                        safe = text[: partial.start()]
+                        self._tag_buffer = text[partial.start() :]
+                    else:
+                        safe = text
+                    if safe:
+                        safe = safe.replace("[", "\\[")
+                        output.append(f"[dim]{safe}[/dim]")
+                    text = ""
+            else:
+                # Outside a thinking block – look for an opening tag.
+                open_match = re.search(r"<(thinking|think)>", text)
+                if open_match:
+                    # Emit everything before the opening tag normally.
+                    before = text[: open_match.start()]
+                    if before:
+                        output.append(before)
+                    text = text[open_match.end() :]
+                    self._in_thinking = True
+                else:
+                    # No full opening tag found.  Buffer a potential partial
+                    # tag at the very end of the text (e.g. ``<thin``).
+                    partial = re.search(r"<(?:t(?:h(?:i(?:n(?:k(?:i(?:n(?:g)?)?)?)?)?)?)?)?$", text)
+                    if partial and partial.start() < len(text):
+                        output.append(text[: partial.start()])
+                        self._tag_buffer = text[partial.start() :]
+                    else:
+                        output.append(text)
+                    text = ""
+
+        return "".join(output)
+
+    def _reset_thinking_state(self) -> str:
+        """Reset thinking-tag parser state between messages.
+
+        Flushes any remaining buffer content so it is not silently lost.
+        Returns any buffered text that was not yet emitted.
+        """
+        remaining = self._tag_buffer
+        self._tag_buffer = ""
+        self._in_thinking = False
+        return remaining
 
     def _chunk_text(self, text: str, chunk_size: int = 50) -> List[str]:
         """Split text into chunks for streaming effect."""
@@ -258,18 +341,22 @@ class ChatScreen(Screen):
                 # Show agent name header once before streaming begins
                 self._append_chat(f"[green]{agent.name}:[/green]")
 
+                # Reset thinking-tag parser state for this new message
+                self._reset_thinking_state()
+
                 # Display each chunk immediately as it arrives in real-time
                 async for chunk in agent.fast_agent_runner.run_stream(message):
                     chunk_count += 1
                     if chunk:
-                        # Strip thinking tags from this chunk for display
-                        display_chunk = re.sub(
-                            r"<(thinking|think)>(.*?)</\1>",
-                            lambda m: f"[dim]{m.group(2)}[/dim]",
-                            chunk,
-                            flags=re.DOTALL,
-                        )
-                        self._append_chat(display_chunk)
+                        # Process thinking tags across chunk boundaries
+                        display_chunk = self._process_thinking_chunk(chunk)
+                        if display_chunk:
+                            self._append_chat(display_chunk)
+
+                # Flush any remaining buffered content
+                leftover = self._reset_thinking_state()
+                if leftover:
+                    self._append_chat(leftover)
 
                 debug_write(f"_process_message: run_stream completed, chunks={chunk_count}")
 
