@@ -30,7 +30,7 @@ class MiniMaxProvider(Provider):
         if not api_key:
             raise ValueError("MINIMAX_API_KEY is required - set in config, env, or Keychain")
         
-        self.base_url = config.get("base_url", "https://api.minimaxi.com/v1/text/chatcompletion_v2")
+        self.base_url = config.get("base_url", "https://api.minimax.io/v1/text/chatcompletion_v2")
         self.api_key = api_key
         self.model = config.get("model", "MiniMax-M2.5")
         self.default_model = self.model
