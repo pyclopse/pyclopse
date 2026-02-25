@@ -114,7 +114,11 @@ class AgentRunner:
             chunks = []
             
             def on_chunk(chunk):
-                chunks.append(str(chunk))
+                # Extract text from StreamChunk
+                if hasattr(chunk, 'text'):
+                    chunks.append(chunk.text)
+                else:
+                    chunks.append(str(chunk))
             
             remove_listener = agent.add_stream_listener(on_chunk)
             
