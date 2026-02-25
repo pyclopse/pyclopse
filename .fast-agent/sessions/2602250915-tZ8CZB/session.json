@@ -1,0 +1,17 @@
+{
+  "name": "2602250915-tZ8CZB",
+  "created_at": "2026-02-25T09:15:28.856081",
+  "last_activity": "2026-02-25T09:15:51.900904",
+  "history_files": [
+    "history_default_previous.json",
+    "history_default.json"
+  ],
+  "metadata": {
+    "agent_name": "default",
+    "model": "generic.MiniMax-M2.5",
+    "last_history_by_agent": {
+      "default": "history_default.json"
+    },
+    "first_user_preview": "hello"
+  }
+}

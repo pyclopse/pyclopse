@@ -144,6 +144,8 @@ class ChatScreen(Screen):
         """Append text to chat history (RichLog with Rich markup support)."""
         # RichLog.write() parses Rich markup automatically
         self._chat_history.write(text)
+        # Refresh to show new content immediately
+        self._chat_history.refresh()
 
     def _chunk_text(self, text: str, chunk_size: int = 50) -> List[str]:
         """Split text into chunks for streaming effect."""
