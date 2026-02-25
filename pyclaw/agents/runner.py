@@ -105,10 +105,31 @@ class AgentRunner:
         
         self._message_history.append({"role": "user", "content": prompt})
         
-        # For streaming, we'd need to use a different method
-        # For now, fall back to non-streaming
-        result = await self._app.send(prompt)
-        yield str(result)
+        # Get the agent and set up streaming
+        agent = self._app._agent(None)
+        
+        # Check if agent supports streaming
+        if hasattr(agent, 'add_stream_listener'):
+            # Use streaming callback
+            chunks = []
+            
+            def on_chunk(chunk):
+                chunks.append(str(chunk))
+            
+            remove_listener = agent.add_stream_listener(on_chunk)
+            
+            try:
+                await agent.send(prompt)
+                
+                # Yield all accumulated chunks
+                for chunk in chunks:
+                    yield chunk
+            finally:
+                remove_listener()
+        else:
+            # Fall back to non-streaming
+            result = await self._app.send(prompt)
+            yield str(result)
     
     async def run_with_history(
         self,
