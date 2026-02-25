@@ -1,0 +1,17 @@
+{
+  "name": "2602251114-whkQts",
+  "created_at": "2026-02-25T11:14:46.527812",
+  "last_activity": "2026-02-25T11:15:26.362007",
+  "history_files": [
+    "history_default_previous.json",
+    "history_default.json"
+  ],
+  "metadata": {
+    "agent_name": "default",
+    "model": "generic.MiniMax-M2.5",
+    "last_history_by_agent": {
+      "default": "history_default.json"
+    },
+    "first_user_preview": "hello"
+  }
+}

@@ -1,8 +1,9 @@
 {
-  "name": "2602250831-crt0lE",
-  "created_at": "2026-02-25T08:31:17.005642",
-  "last_activity": "2026-02-25T08:31:17.011578",
+  "name": "2602251108-aOOmDa",
+  "created_at": "2026-02-25T11:08:19.682399",
+  "last_activity": "2026-02-25T11:08:45.081100",
   "history_files": [
+    "history_default_previous.json",
     "history_default.json"
   ],
   "metadata": {
@@ -11,6 +12,6 @@
     "last_history_by_agent": {
       "default": "history_default.json"
     },
-    "first_user_preview": "Say 'hello world' in exactly 3 words"
+    "first_user_preview": "hello"
   }
 }

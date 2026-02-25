@@ -150,6 +150,34 @@ class ChatScreen(Screen):
         # Refresh to show new content immediately
         self._chat_history.refresh()
 
+    def _stream_replace_lines(self, text: str, previous_line_count: int) -> int:
+        """Replace the last `previous_line_count` lines in the RichLog with new rendered content.
+
+        This enables real-time streaming to the same logical line: each call
+        removes the lines written by the previous call, then writes the
+        updated (longer) content.  The RichLog line cache is invalidated so
+        the display reflects the change immediately.
+
+        Returns the number of Strip lines the new content occupies (pass this
+        as `previous_line_count` on the next call).
+        """
+        from textual.geometry import Size
+
+        log = self._chat_history
+
+        # Remove the lines that the previous render produced
+        if previous_line_count > 0 and log.lines:
+            del log.lines[-previous_line_count:]
+            log._line_cache.clear()
+            log.virtual_size = Size(log._widest_line_width, len(log.lines))
+
+        # Record how many lines exist before the write so we can count
+        # how many the new content adds.
+        before = len(log.lines)
+        log.write(text)
+        after = len(log.lines)
+        return after - before
+
     def _process_thinking_chunk(self, chunk: str) -> str:
         """Process a streaming chunk, handling <thinking>/<think> tags that may span chunks.
 
@@ -356,10 +384,8 @@ class ChatScreen(Screen):
 
                 agent_header = f"[green]{agent.name}:[/green] "
 
-                # Accumulate the entire streamed response into a buffer.
-                # We write it as ONE message at the end so that chunks
-                # don't each appear on their own line.
-                response_buffer: list[str] = []
+                # Blank line before agent message for spacing
+                self._append_chat("")
 
                 async for chunk in agent.fast_agent_runner.run_stream(message):
                     chunk_count += 1
@@ -367,25 +393,15 @@ class ChatScreen(Screen):
                         # Process thinking tags across chunk boundaries
                         display_chunk = self._process_thinking_chunk(chunk)
                         if display_chunk:
-                            response_buffer.append(display_chunk)
-
+                            # Stream each chunk to TUI in real-time
+                            self._append_chat(f"{agent_header}{display_chunk}")
+                
                 # Flush any remaining buffered content from thinking-tag parser
                 leftover = self._reset_thinking_state()
                 if leftover:
-                    response_buffer.append(leftover)
+                    self._append_chat(f"{agent_header}{leftover}")
 
                 debug_write(f"_process_message: run_stream completed, chunks={chunk_count}")
-
-                # Join all chunks and write the full response as a single message
-                full_response = "".join(response_buffer)
-
-                # Blank line before agent message for spacing
-                self._append_chat("")
-
-                if full_response.strip():
-                    self._append_chat(f"{agent_header}{full_response}")
-                else:
-                    self._append_chat(f"{agent_header}[dim](no response)[/dim]")
 
             except Exception as stream_err:
                 debug_write(f"FastAgent streaming failed: {stream_err}")

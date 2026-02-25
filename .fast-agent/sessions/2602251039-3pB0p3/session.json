@@ -1,8 +1,9 @@
 {
-  "name": "2602250727-ko8eOL",
-  "created_at": "2026-02-25T07:27:42.101275",
-  "last_activity": "2026-02-25T07:27:42.101878",
+  "name": "2602251039-3pB0p3",
+  "created_at": "2026-02-25T10:39:35.058797",
+  "last_activity": "2026-02-25T10:39:57.407835",
   "history_files": [
+    "history_default_previous.json",
     "history_default.json"
   ],
   "metadata": {
@@ -11,6 +12,6 @@
     "last_history_by_agent": {
       "default": "history_default.json"
     },
-    "first_user_preview": "Say hi"
+    "first_user_preview": "hello"
   }
 }
