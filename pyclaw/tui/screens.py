@@ -262,6 +262,7 @@ class ChatScreen(Screen):
                     # Fall through to try provider streaming
             
             # Try provider streaming if FastAgent didn't succeed
+            debug_write(f"_process_message: provider={agent.provider}, has supports_streaming={hasattr(agent.provider, 'supports_streaming') if agent.provider else 'N/A'}")
             if not streaming_success and agent.provider and hasattr(agent.provider, 'supports_streaming') and agent.provider.supports_streaming:
                 # Use real streaming from provider
                 debug_write(f"_process_message: Using streaming for agent {agent.name}")
@@ -290,6 +291,8 @@ class ChatScreen(Screen):
                     content=message,
                 ))
                 
+                debug_write(f"_process_message: About to call chat_stream with {len(messages)} messages")
+                
                 # Stream response from provider
                 full_content = ""
                 try:
@@ -299,6 +302,7 @@ class ChatScreen(Screen):
                         temperature=agent.config.temperature if agent.config else 0.7,
                         max_tokens=agent.config.max_tokens if agent.config else None,
                     ):
+                        debug_write(f"_process_message: Received chunk: {chunk.content[:50] if chunk.content else 'empty'}...")
                         if chunk.content:
                             full_content += chunk.content
                             # Strip thinking tags and render
@@ -311,8 +315,11 @@ class ChatScreen(Screen):
                             )
                             self._append_chat(f"[green]{agent.name}:[/green] {display_content}")
                     streaming_success = True
+                    debug_write(f"_process_message: Streaming completed successfully")
                 except Exception as stream_err:
                     debug_write(f"Provider streaming failed: {stream_err}")
+                    import traceback
+                    debug_write(traceback.format_exc())
                     # Fall through to non-streaming
             
             # Fall back to non-streaming if neither streaming method worked
