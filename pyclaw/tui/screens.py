@@ -270,7 +270,8 @@ class ChatScreen(Screen):
         if not message.strip():
             return
 
-        # Add user message to history
+        # Add user message to history (blank line before for spacing)
+        self._append_chat("")
         self._append_chat(f"[blue]You:[/blue] {message}")
 
         # Clear input
@@ -281,11 +282,13 @@ class ChatScreen(Screen):
             self._process_message(message)
         elif self.gateway:
             # Gateway exists but no agent configured - use demo mode
+            self._append_chat("")
             self._append_chat(
                 f"[yellow]PyClaw:[/yellow] Gateway running! Configure agents in config to enable chat."
             )
         else:
             # No gateway - demo mode
+            self._append_chat("")
             self._append_chat(
                 f"[yellow]PyClaw:[/yellow] Gateway not connected. Start with --tui flag."
             )
@@ -304,12 +307,14 @@ class ChatScreen(Screen):
                 )
 
             if not session:
+                self._append_chat("")
                 self._append_chat("[red]Error:[/red] Could not create session")
                 return
 
             # Get agent
             agent = self.gateway.agent_manager.get_agent(self._current_agent_id)
             if not agent:
+                self._append_chat("")
                 self._append_chat("[red]Error:[/red] Agent not found")
                 return
 
@@ -326,6 +331,7 @@ class ChatScreen(Screen):
 
             # Use FastAgent runner for streaming
             if not agent.fast_agent_runner:
+                self._append_chat("")
                 self._append_chat(
                     f"[red]Error:[/red] Agent {agent.name} has no FastAgent runner configured"
                 )
@@ -338,11 +344,17 @@ class ChatScreen(Screen):
                 debug_write(f"_process_message: About to call run_stream")
                 chunk_count = 0
 
-                # Show agent name header once before streaming begins
-                self._append_chat(f"[green]{agent.name}:[/green]")
-
                 # Reset thinking-tag parser state for this new message
                 self._reset_thinking_state()
+
+                # Track whether we've printed the agent name header yet.
+                # We prepend it to the first visible chunk so there is no
+                # extra newline between the speaker name and the content.
+                header_printed = False
+                agent_header = f"[green]{agent.name}:[/green] "
+
+                # Blank line before agent message for spacing
+                self._append_chat("")
 
                 # Display each chunk immediately as it arrives in real-time
                 async for chunk in agent.fast_agent_runner.run_stream(message):
@@ -351,23 +363,33 @@ class ChatScreen(Screen):
                         # Process thinking tags across chunk boundaries
                         display_chunk = self._process_thinking_chunk(chunk)
                         if display_chunk:
+                            if not header_printed:
+                                display_chunk = agent_header + display_chunk
+                                header_printed = True
                             self._append_chat(display_chunk)
 
                 # Flush any remaining buffered content
                 leftover = self._reset_thinking_state()
                 if leftover:
+                    if not header_printed:
+                        leftover = agent_header + leftover
+                        header_printed = True
                     self._append_chat(leftover)
 
                 debug_write(f"_process_message: run_stream completed, chunks={chunk_count}")
 
                 if chunk_count == 0:
-                    self._append_chat("[dim](no response)[/dim]")
+                    self._append_chat(f"{agent_header}[dim](no response)[/dim]")
+                elif not header_printed:
+                    # All chunks were empty/thinking-only; still show the header
+                    self._append_chat(f"{agent_header}[dim](no response)[/dim]")
 
             except Exception as stream_err:
                 debug_write(f"FastAgent streaming failed: {stream_err}")
                 import traceback
 
                 debug_write(f"Traceback: {traceback.format_exc()}")
+                self._append_chat("")
                 self._append_chat(f"[red]Error:[/red] FastAgent streaming failed: {stream_err}")
 
         except Exception as e:
@@ -375,6 +397,7 @@ class ChatScreen(Screen):
             import traceback
 
             debug_write(traceback.format_exc())
+            self._append_chat("")
             self._append_chat(f"[red]Error:[/red] {str(e)}")
 
     def action_clear_input(self) -> None:
