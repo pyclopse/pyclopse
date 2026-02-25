@@ -760,7 +760,7 @@ class LogsScreen(Screen):
         with Vertical(id="logs-container"):
             # Log controls
             with Horizontal(id="log-controls"):
-                yield Switch("Auto-scroll", id="auto-scroll-switch", value=True)
+                yield Switch(id="auto-scroll-switch", value=True)
                 yield Button("Clear", id="clear-logs")
 
             # Log viewer
