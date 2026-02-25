@@ -226,7 +226,13 @@ class ChatScreen(Screen):
                         output.append(text)
                     text = ""
 
-        return "".join(output)
+        result = "".join(output)
+        # Strip leading spaces from every line so that wrapped LLM output
+        # (e.g. "the user\n  wants …") doesn't display with mis-aligned
+        # indentation in the TUI.
+        if result:
+            result = "\n".join(line.lstrip(" ") for line in result.split("\n"))
+        return result
 
     def _reset_thinking_state(self) -> str:
         """Reset thinking-tag parser state between messages.
