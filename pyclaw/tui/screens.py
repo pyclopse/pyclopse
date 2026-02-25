@@ -42,7 +42,7 @@ debug_write("SCREENS.PY LOADED")
 
 class ChatScreen(Screen):
     """Interactive chat screen."""
-    
+
     def __init__(self, gateway=None, app=None):
         super().__init__()
         self.gateway = gateway
@@ -50,28 +50,28 @@ class ChatScreen(Screen):
         self._current_agent_id: Optional[str] = None
         self._chat_history: List[Dict[str, str]] = []
         debug_write(f"ChatScreen.__init__ called with gateway={gateway}")
-    
+
     BINDINGS = [
         Binding("escape", "clear_input", "Clear"),
         Binding("ctrl+k", "switch_agent", "Switch Agent"),
     ]
-    
+
     def compose(self) -> ComposeResult:
         """Compose the chat screen."""
         # Header with agent selector
         yield Header()
-        
+
         with Horizontal(id="main-layout"):
             # Left sidebar - agent list
             with Vertical(id="sidebar", classes="sidebar"):
                 yield Static("[b]Agents[/b]", id="sidebar-title")
                 yield AgentListWidget(id="agent-list")
-            
+
             # Main chat area
             with Vertical(id="chat-area"):
                 # Chat history (TextArea for text selection support)
                 yield RichLog(id="chat-history", auto_scroll=True, markup=True)
-                
+
                 # Input area
                 with Horizontal(id="input-area"):
                     yield Input(
@@ -80,55 +80,51 @@ class ChatScreen(Screen):
                         validate_on=["submitted"],
                     )
                     yield Button("Send", id="send-button", variant="primary")
-        
+
         yield Footer()
-    
+
     def on_mount(self) -> None:
         """Called when screen is mounted."""
         debug_write("ChatScreen.on_mount called")
-        
+
         self._chat_input = self.query_one("#chat-input", Input)
         self._chat_history = self.query_one("#chat-history", RichLog)
         self._agent_list = self.query_one("#agent-list", AgentListWidget)
-        
+
         debug_write(f"on_mount: gateway={self.gateway}, app_ref={self.app_ref}")
-        
+
         # Load agents if gateway available
         if self.gateway:
-            debug_write(f"on_mount: calling _load_agents, agent_manager={getattr(self.gateway, 'agent_manager', 'NONE')}")
+            debug_write(
+                f"on_mount: calling _load_agents, agent_manager={getattr(self.gateway, 'agent_manager', 'NONE')}"
+            )
             self._load_agents()
         else:
             debug_write("on_mount: No gateway!")
-        
+
         # Focus input
         self._chat_input.focus()
-    
+
     def _load_agents(self) -> None:
         """Load agents from gateway."""
         debug_write("_load_agents called")
-        
+
         if self.gateway and self.gateway.agent_manager:
             agents = self.gateway.agent_manager.list_agents()
             debug_write(f"_load_agents: Found {len(agents)} agents: {[a.id for a in agents]}")
-            
+
             for agent in agents:
                 self._agent_list.add_agent(agent.id, agent.name, agent.is_running)
-            
-            # Auto-select agent with provider (prefer "main" or first with provider)
+
+            # Auto-select agent (prefer "main" or first agent)
             if agents and not self._current_agent_id:
                 # Prefer "main" agent if exists
                 main_agent = next((a for a in agents if a.id == "main"), None)
                 if main_agent:
                     self._current_agent_id = main_agent.id
                 else:
-                    # Fall back to first agent that has a provider
-                    with_provider = next((a for a in agents if a.provider is not None), None)
-                    if with_provider:
-                        self._current_agent_id = with_provider.id
-                    else:
-                        # Last resort: first agent
-                        self._current_agent_id = agents[0].id
-                
+                    self._current_agent_id = agents[0].id
+
                 debug_write(f"_load_agents: Selected agent {self._current_agent_id}")
                 # Also update the app's current agent
                 if self.app_ref:
@@ -140,13 +136,15 @@ class ChatScreen(Screen):
             if self.app_ref:
                 self.app_ref.set_current_agent(self._current_agent_id)
         else:
-            debug_write(f"_load_agents: gateway={self.gateway}, agent_manager={getattr(self.gateway, 'agent_manager', 'NONE') if self.gateway else 'N/A'}")
-    
+            debug_write(
+                f"_load_agents: gateway={self.gateway}, agent_manager={getattr(self.gateway, 'agent_manager', 'NONE') if self.gateway else 'N/A'}"
+            )
+
     def _append_chat(self, text: str) -> None:
         """Append text to chat history (RichLog with Rich markup support)."""
         # RichLog.write() parses Rich markup automatically
         self._chat_history.write(text)
-    
+
     def _chunk_text(self, text: str, chunk_size: int = 50) -> List[str]:
         """Split text into chunks for streaming effect."""
         words = text.split()
@@ -166,42 +164,47 @@ class ChatScreen(Screen):
             chunks.append(current)
         return chunks
 
-
     def on_input_submitted(self, event: Input.Submitted) -> None:
         """Handle input submission."""
         if event.input.id == "chat-input":
             self._send_message(event.value)
-    
+
     def on_button_pressed(self, event: Button.Pressed) -> None:
         """Handle button press."""
         if event.button.id == "send-button":
             message = self._chat_input.value
             if message:
                 self._send_message(message)
-    
+
     def _send_message(self, message: str) -> None:
         """Send a message."""
-        debug_write(f"_send_message: gateway={self.gateway}, current_agent_id={self._current_agent_id}")
-        
+        debug_write(
+            f"_send_message: gateway={self.gateway}, current_agent_id={self._current_agent_id}"
+        )
+
         if not message.strip():
             return
-        
+
         # Add user message to history
         self._append_chat(f"[blue]You:[/blue] {message}")
-        
+
         # Clear input
         self._chat_input.value = ""
-        
+
         # If gateway available, process message
         if self.gateway and self._current_agent_id:
             self._process_message(message)
         elif self.gateway:
             # Gateway exists but no agent configured - use demo mode
-            self._append_chat(f"[yellow]PyClaw:[/yellow] Gateway running! Configure agents in config to enable chat.")
+            self._append_chat(
+                f"[yellow]PyClaw:[/yellow] Gateway running! Configure agents in config to enable chat."
+            )
         else:
             # No gateway - demo mode
-            self._append_chat(f"[yellow]PyClaw:[/yellow] Gateway not connected. Start with --tui flag.")
-    
+            self._append_chat(
+                f"[yellow]PyClaw:[/yellow] Gateway not connected. Start with --tui flag."
+            )
+
     @work(exclusive=True)
     async def _process_message(self, message: str) -> None:
         """Process message through gateway."""
@@ -214,19 +217,20 @@ class ChatScreen(Screen):
                     channel="tui",
                     user_id="tui_user",
                 )
-            
+
             if not session:
                 self._append_chat("[red]Error:[/red] Could not create session")
                 return
-            
+
             # Get agent
             agent = self.gateway.agent_manager.get_agent(self._current_agent_id)
             if not agent:
                 self._append_chat("[red]Error:[/red] Agent not found")
                 return
-            
+
             # Create incoming message
             from pyclaw.core.router import IncomingMessage
+
             incoming = IncomingMessage(
                 id="tui_msg",
                 content=message,
@@ -234,146 +238,55 @@ class ChatScreen(Screen):
                 sender="tui_user",
                 sender_id="tui_user",
             )
-            
-            # Check if FastAgent runner is available for streaming
-            streaming_success = False
-            if agent.fast_agent_runner:
-                # Use FastAgent streaming for real-time streaming
-                debug_write(f"_process_message: Using FastAgent streaming for agent {agent.name}")
-                
-                # Stream response from FastAgent
-                full_content = ""
-                try:
-                    debug_write(f"_process_message: About to call run_stream")
-                    chunk_count = 0
-                    async for chunk in agent.fast_agent_runner.run_stream(message):
-                        chunk_count += 1
-                        if chunk:
-                            full_content += chunk
-                            # Strip thinking tags and render
-                            import re
-                            display_content = re.sub(
-                                r'<(thinking|think)>(.*?)</\1>',
-                                lambda m: f"[dim]{m.group(2)}[/dim]",
-                                full_content,
-                                flags=re.DOTALL
-                            )
-                            self._append_chat(f"[green]{agent.name}:[/green] {display_content}")
-                    debug_write(f"_process_message: run_stream completed, chunks={chunk_count}")
-                    streaming_success = True
-                    
-                    # Return here - don't fall through to provider
-                    return
-                    
-                except Exception as stream_err:
-                    debug_write(f"FastAgent streaming failed: {stream_err}")
-                    import traceback
-                    debug_write(f"Traceback: {traceback.format_exc()}")
-                    # Fall through to try provider streaming
-            
-            # Try provider streaming if FastAgent didn't succeed
-            debug_write(f"_process_message: provider={agent.provider}, has supports_streaming={hasattr(agent.provider, 'supports_streaming') if agent.provider else 'N/A'}")
-            if not streaming_success and agent.provider and hasattr(agent.provider, 'supports_streaming') and agent.provider.supports_streaming:
-                # Use real streaming from provider
-                debug_write(f"_process_message: Using streaming for agent {agent.name}")
-                
-                # Build messages the same way the agent does
-                from pyclaw.providers import Message as ProviderMessage
-                messages = []
-                
-                # Add system prompt
-                if agent.system_prompt:
-                    messages.append(ProviderMessage(
-                        role="system",
-                        content=agent.system_prompt,
-                    ))
-                
-                # Add conversation history from session
-                for msg in session.get_context_window(max_messages=20):
-                    messages.append(ProviderMessage(
-                        role=msg.role,
-                        content=msg.content,
-                    ))
-                
-                # Add the current user message
-                messages.append(ProviderMessage(
-                    role="user",
-                    content=message,
-                ))
-                
-                debug_write(f"_process_message: About to call chat_stream with {len(messages)} messages")
-                
-                # Stream response from provider
-                full_content = ""
-                try:
-                    async for chunk in agent.provider.chat_stream(
-                        messages=messages,
-                        model=agent.config.model if agent.config else None,
-                        temperature=agent.config.temperature if agent.config else 0.7,
-                        max_tokens=agent.config.max_tokens if agent.config else None,
-                    ):
-                        debug_write(f"_process_message: Received chunk: {chunk.content[:50] if chunk.content else 'empty'}...")
-                        if chunk.content:
-                            full_content += chunk.content
-                            # Strip thinking tags and render
-                            import re
-                            display_content = re.sub(
-                                r'<(thinking|think)>(.*?)</\1>',
-                                lambda m: f"[dim]{m.group(2)}[/dim]",
-                                full_content,
-                                flags=re.DOTALL
-                            )
-                            self._append_chat(f"[green]{agent.name}:[/green] {display_content}")
-                    streaming_success = True
-                    debug_write(f"_process_message: Streaming completed successfully")
-                except Exception as stream_err:
-                    debug_write(f"Provider streaming failed: {stream_err}")
-                    import traceback
-                    debug_write(traceback.format_exc())
-                    # Fall through to non-streaming
-            
-            # Fall back to non-streaming if neither streaming method worked
-            if not streaming_success:
-                # Use regular non-streaming response
-                debug_write(f"_process_message: Using non-streaming for agent {agent.name}")
-                
-                # Handle message
-                response = await agent.handle_message(incoming, session)
-                
-                # Display response (strip thinking tags and render in dim color)
-                if response:
-                    content = response.content
-                    # Support both <thinking>...</thinking> and <thinking>...</thinking>
-                    import re
-                    # Replace thinking blocks with dimmed version (no tags shown)
-                    def dim_thinking(m):
-                        inner = m.group(1)
-                        return f"[dim]{inner}[/dim]"
-                    content = re.sub(
-                        r'<(thinking|think)>(.*?)</\1>',
-                        dim_thinking,
-                        content,
-                        flags=re.DOTALL
-                    )
-                    # Stream response with simulated streaming (chunked display)
-                    full_response = ""
-                    for chunk in self._chunk_text(content, 50):  # 50 chars at a time
-                        full_response += chunk
-                        self._append_chat(f"[green]{agent.name}:[/green] {full_response}")
-                        await asyncio.sleep(0.05)  # Small delay for visual effect
-                else:
-                    self._append_chat("[yellow]No response[/yellow]")
-                
+
+            # Use FastAgent runner for streaming
+            if not agent.fast_agent_runner:
+                self._append_chat(
+                    f"[red]Error:[/red] Agent {agent.name} has no FastAgent runner configured"
+                )
+                return
+
+            debug_write(f"_process_message: Using FastAgent streaming for agent {agent.name}")
+
+            # Stream response from FastAgent
+            full_content = ""
+            try:
+                debug_write(f"_process_message: About to call run_stream")
+                chunk_count = 0
+                async for chunk in agent.fast_agent_runner.run_stream(message):
+                    chunk_count += 1
+                    if chunk:
+                        full_content += chunk
+                        # Strip thinking tags and render
+                        import re
+
+                        display_content = re.sub(
+                            r"<(thinking|think)>(.*?)</\1>",
+                            lambda m: f"[dim]{m.group(2)}[/dim]",
+                            full_content,
+                            flags=re.DOTALL,
+                        )
+                        self._append_chat(f"[green]{agent.name}:[/green] {display_content}")
+                debug_write(f"_process_message: run_stream completed, chunks={chunk_count}")
+
+            except Exception as stream_err:
+                debug_write(f"FastAgent streaming failed: {stream_err}")
+                import traceback
+
+                debug_write(f"Traceback: {traceback.format_exc()}")
+                self._append_chat(f"[red]Error:[/red] FastAgent streaming failed: {stream_err}")
+
         except Exception as e:
             debug_write(f"_process_message error: {e}")
             import traceback
+
             debug_write(traceback.format_exc())
             self._append_chat(f"[red]Error:[/red] {str(e)}")
-    
+
     def action_clear_input(self) -> None:
         """Clear the input field."""
         self._chat_input.value = ""
-    
+
     def action_switch_agent(self) -> None:
         """Switch to agent selection."""
         self.app_ref.push_screen("agents")
@@ -381,56 +294,56 @@ class ChatScreen(Screen):
 
 class AgentsScreen(Screen):
     """Agent management screen."""
-    
+
     def __init__(self, gateway=None, app=None):
         super().__init__()
         self.gateway = gateway
         self.app_ref = app
-    
+
     BINDINGS = [
         Binding("r", "refresh", "Refresh"),
         Binding("enter", "select_agent", "Select"),
         Binding("escape", "go_back", "Back"),
     ]
-    
+
     def compose(self) -> ComposeResult:
         """Compose the agents screen."""
         yield Header()
-        
+
         with Vertical(id="agents-container"):
             yield Static("[b]Agent Management[/b]", id="agents-title")
-            
+
             # Agent table
             yield DataTable(id="agents-table")
-            
+
             # Action buttons
             with Horizontal(id="agent-actions"):
                 yield Button("Start", id="start-agent", variant="success")
                 yield Button("Stop", id="stop-agent", variant="error")
                 yield Button("Refresh", id="refresh-agents")
-        
+
         yield Footer()
-    
+
     def on_mount(self) -> None:
         """Called when screen is mounted."""
         self._table = self.query_one("#agents-table", DataTable)
         self._table.add_columns("ID", "Name", "Status", "Model")
         self._load_agents()
-    
+
     def _load_agents(self) -> None:
         """Load agents from gateway."""
         self._table.clear()
-        
+
         if self.gateway and self.gateway.agent_manager:
             agents = self.gateway.agent_manager.list_agents()
             for agent in agents:
                 status = "Running" if agent.is_running else "Stopped"
                 self._table.add_row(agent.id, agent.name, status, agent.config.model)
-    
+
     def action_refresh(self) -> None:
         """Refresh agent list."""
         self._load_agents()
-    
+
     def action_select_agent(self) -> None:
         """Select an agent."""
         # Get selected row
@@ -442,37 +355,37 @@ class AgentsScreen(Screen):
                 if self.app_ref:
                     self.app_ref.set_current_agent(agent_id)
                 self.app_ref.push_screen("chat")
-    
+
     def action_go_back(self) -> None:
         """Go back to previous screen."""
         self.app_ref.pop_screen()
-    
+
     def on_button_pressed(self, event: Button.Pressed) -> None:
         """Handle button press."""
         selected = self._table.cursor_row
         if selected is None:
             return
-        
+
         row = self._table.get_row_at(selected)
         if not row:
             return
-        
+
         agent_id = row[0]
-        
+
         if event.button.id == "start-agent":
             self._start_agent(agent_id)
         elif event.button.id == "stop-agent":
             self._stop_agent(agent_id)
         elif event.button.id == "refresh-agents":
             self._load_agents()
-    
+
     @work
     async def _start_agent(self, agent_id: str) -> None:
         """Start an agent."""
         if self.gateway and self.gateway.agent_manager:
             await self.gateway.agent_manager.start_agent(agent_id)
             self._load_agents()
-    
+
     @work
     async def _stop_agent(self, agent_id: str) -> None:
         """Stop an agent."""
@@ -483,52 +396,52 @@ class AgentsScreen(Screen):
 
 class SessionsScreen(Screen):
     """Session management screen."""
-    
+
     def __init__(self, gateway=None, app=None):
         super().__init__()
         self.gateway = gateway
         self.app_ref = app
-    
+
     BINDINGS = [
         Binding("r", "refresh", "Refresh"),
         Binding("d", "delete_session", "Delete"),
         Binding("escape", "go_back", "Back"),
     ]
-    
+
     def compose(self) -> ComposeResult:
         """Compose the sessions screen."""
         yield Header()
-        
+
         with Vertical(id="sessions-container"):
             yield Static("[b]Session Management[/b]", id="sessions-title")
-            
+
             # Session table
             yield DataTable(id="sessions-table")
-            
+
             # Stats
             yield Static("", id="session-stats")
-            
+
             # Actions
             with Horizontal(id="session-actions"):
                 yield Button("Refresh", id="refresh-sessions")
                 yield Button("Delete", id="delete-session", variant="error")
-        
+
         yield Footer()
-    
+
     def on_mount(self) -> None:
         """Called when screen is mounted."""
         self._table = self.query_one("#sessions-table", DataTable)
         self._stats = self.query_one("#session-stats", Static)
         self._table.add_columns("ID", "Agent", "Channel", "User", "Messages", "Created", "Status")
         self._load_sessions()
-    
+
     def _load_sessions(self) -> None:
         """Load sessions from gateway."""
         self._table.clear()
-        
+
         if self.gateway and self.gateway.session_manager:
             sessions = self.gateway.session_manager.list_sessions()
-            
+
             for session in sessions:
                 status = "Active" if session.is_active else "Inactive"
                 created = session.created_at.strftime("%H:%M:%S")
@@ -541,22 +454,22 @@ class SessionsScreen(Screen):
                     created,
                     status,
                 )
-            
+
             # Update stats
             total = len(sessions)
             active = len([s for s in sessions if s.is_active])
             self._stats.update(f"Total: {total} | Active: {active}")
-    
+
     def action_refresh(self) -> None:
         """Refresh session list."""
         self._load_sessions()
-    
+
     def action_delete_session(self) -> None:
         """Delete selected session."""
         selected = self._table.cursor_row
         if selected is None:
             return
-        
+
         row = self._table.get_row_at(selected)
         if row:
             session_id = row[0].replace("...", "")
@@ -567,16 +480,14 @@ class SessionsScreen(Screen):
                     if s.id.startswith(session_id):
                         session_id = s.id
                         break
-                
-                asyncio.create_task(
-                    self.gateway.session_manager.delete_session(session_id)
-                )
+
+                asyncio.create_task(self.gateway.session_manager.delete_session(session_id))
                 self._load_sessions()
-    
+
     def action_go_back(self) -> None:
         """Go back to previous screen."""
         self.app_ref.pop_screen()
-    
+
     def on_button_pressed(self, event: Button.Pressed) -> None:
         """Handle button press."""
         if event.button.id == "refresh-sessions":
@@ -587,29 +498,29 @@ class SessionsScreen(Screen):
 
 class StatusScreen(Screen):
     """Gateway status dashboard."""
-    
+
     def __init__(self, gateway=None, app=None):
         super().__init__()
         self.gateway = gateway
         self.app_ref = app
-    
+
     BINDINGS = [
         Binding("r", "refresh", "Refresh"),
         Binding("escape", "go_back", "Back"),
     ]
-    
+
     def compose(self) -> ComposeResult:
         """Compose the status screen."""
         yield Header()
-        
+
         with ScrollableContainer(id="status-container"):
             yield Static("[b]Gateway Status[/b]\n", id="gateway-status")
             yield Static("[b]Agents Status[/b]\n", id="agents-status")
             yield Static("[b]Session Status[/b]\n", id="session-status")
             yield Static("[b]Config[/b]\n", id="config-status")
-        
+
         yield Footer()
-    
+
     def on_mount(self) -> None:
         """Called when screen is mounted."""
         self._gateway_status = self.query_one("#gateway-status", Static)
@@ -617,7 +528,7 @@ class StatusScreen(Screen):
         self._session_status = self.query_one("#session-status", Static)
         self._config_status = self.query_one("#config-status", Static)
         self._load_status()
-    
+
     def _load_status(self) -> None:
         """Load status from gateway."""
         # Gateway status
@@ -628,36 +539,38 @@ class StatusScreen(Screen):
                 f"Running: {self.gateway._is_running if hasattr(self.gateway, '_is_running') else 'Unknown'}"
             )
         else:
-            self._gateway_status.update(
-                "[b]Gateway Status[/b]\nGateway not initialized"
-            )
-        
+            self._gateway_status.update("[b]Gateway Status[/b]\nGateway not initialized")
+
         # Agents status
         if self.gateway and self.gateway.agent_manager:
             status = self.gateway.agent_manager.get_status()
             agents_text = f"[b]Agents Status[/b]\n"
-            agents_text += f"Total: {status['total_agents']} | Running: {status['running_agents']}\n"
-            for agent in status.get('agents', []):
-                agents_text += f"  - {agent['name']}: {'Running' if agent['is_running'] else 'Stopped'}\n"
+            agents_text += (
+                f"Total: {status['total_agents']} | Running: {status['running_agents']}\n"
+            )
+            for agent in status.get("agents", []):
+                agents_text += (
+                    f"  - {agent['name']}: {'Running' if agent['is_running'] else 'Stopped'}\n"
+                )
             self._agents_status.update(agents_text)
         else:
-            self._agents_status.update(
-                "[b]Agents Status[/b]\nNo agent manager"
-            )
-        
+            self._agents_status.update("[b]Agents Status[/b]\nNo agent manager")
+
         # Session status
         if self.gateway and self.gateway.session_manager:
             status = self.gateway.session_manager.get_status()
             sessions_text = f"[b]Session Status[/b]\n"
-            sessions_text += f"Total: {status['total_sessions']} | Active: {status['active_sessions']}\n"
-            sessions_text += f"Messages: {status['total_messages']} | Users: {status['unique_users']}\n"
+            sessions_text += (
+                f"Total: {status['total_sessions']} | Active: {status['active_sessions']}\n"
+            )
+            sessions_text += (
+                f"Messages: {status['total_messages']} | Users: {status['unique_users']}\n"
+            )
             sessions_text += f"Channels: {', '.join(status.get('channels', []))}"
             self._session_status.update(sessions_text)
         else:
-            self._session_status.update(
-                "[b]Session Status[/b]\nNo session manager"
-            )
-        
+            self._session_status.update("[b]Session Status[/b]\nNo session manager")
+
         # Config status
         if self.gateway and self.gateway.config:
             cfg = self.gateway.config
@@ -667,14 +580,12 @@ class StatusScreen(Screen):
             config_text += f"Log Level: {getattr(cfg, 'log_level', 'INFO')}"
             self._config_status.update(config_text)
         else:
-            self._config_status.update(
-                "[b]Config[/b]\nNo config loaded"
-            )
-    
+            self._config_status.update("[b]Config[/b]\nNo config loaded")
+
     def action_refresh(self) -> None:
         """Refresh status."""
         self._load_status()
-    
+
     def action_go_back(self) -> None:
         """Go back to previous screen."""
         self.app_ref.pop_screen()
@@ -682,75 +593,75 @@ class StatusScreen(Screen):
 
 class LogsScreen(Screen):
     """Real-time log viewer."""
-    
+
     BINDINGS = [
         Binding("c", "clear_logs", "Clear"),
         Binding("r", "toggle_auto_scroll", "Auto-scroll"),
         Binding("escape", "go_back", "Back"),
     ]
-    
+
     def __init__(self, gateway=None, app=None):
         super().__init__()
         self.gateway = gateway
         self.app_ref = app
         self._auto_scroll = True
-    
+
     def compose(self) -> ComposeResult:
         """Compose the logs screen."""
         yield Header()
-        
+
         with Vertical(id="logs-container"):
             # Log controls
             with Horizontal(id="log-controls"):
                 yield Switch("Auto-scroll", id="auto-scroll-switch", value=True)
                 yield Button("Clear", id="clear-logs")
-            
+
             # Log viewer
             yield Log(id="log-viewer", highlight=True)
-        
+
         yield Footer()
-    
+
     def on_mount(self) -> None:
         """Called when screen is mounted."""
         self._log_viewer = self.query_one("#log-viewer", Log)
         self._auto_scroll_switch = self.query_one("#auto-scroll-switch", Switch)
-        
+
         # Write welcome message
         self._log_viewer.write("[bold]PyClaw Log Viewer[/bold]")
         self._log_viewer.write("Press 'c' to clear, 'r' to toggle auto-scroll")
-    
+
     def action_clear_logs(self) -> None:
         """Clear the log viewer."""
         self._log_viewer.clear()
-    
+
     def action_toggle_auto_scroll(self) -> None:
         """Toggle auto-scroll."""
         self._auto_scroll = not self._auto_scroll
         self._auto_scroll_switch.value = self._auto_scroll
-    
+
     def action_go_back(self) -> None:
         """Go back to previous screen."""
         self.app_ref.pop_screen()
-    
+
     def on_switch_changed(self, event: Switch.Changed) -> None:
         """Handle switch change."""
         if event.switch.id == "auto-scroll-switch":
             self._auto_scroll = event.value
-    
+
     def on_button_pressed(self, event: Button.Pressed) -> None:
         """Handle button press."""
         if event.button.id == "clear-logs":
             self.action_clear_logs()
-    
+
     def write_log(self, message: str) -> None:
         """Write a message to the log."""
         timestamp = datetime.now().strftime("%H:%M:%S")
         self._log_viewer.write(f"[{timestamp}] {message}")
-    
+
     def write_error(self, message: str) -> None:
         """Write an error message."""
         self.write_log(f"[red]ERROR:[/red] {message}")
-    
+
     def write_warning(self, message: str) -> None:
         """Write a warning message."""
         self.write_log(f"[yellow]WARN:[/yellow] {message}")
@@ -758,17 +669,18 @@ class LogsScreen(Screen):
 
 # Widget classes
 
+
 class AgentListWidget(Static):
     """Widget to display list of agents."""
-    
+
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
         self._agents: Dict[str, Dict[str, Any]] = {}
-    
+
     def compose(self) -> ComposeResult:
         """Compose the widget."""
         yield Static("Agents", id="agent-list-title")
-    
+
     def add_agent(self, agent_id: str, name: str, is_running: bool) -> None:
         """Add an agent to the list."""
         self._agents[agent_id] = {
@@ -776,23 +688,23 @@ class AgentListWidget(Static):
             "is_running": is_running,
         }
         self._update_display()
-    
+
     def remove_agent(self, agent_id: str) -> None:
         """Remove an agent from the list."""
         self._agents.pop(agent_id, None)
         self._update_display()
-    
+
     def update_agent_status(self, agent_id: str, is_running: bool) -> None:
         """Update agent status."""
         if agent_id in self._agents:
             self._agents[agent_id]["is_running"] = is_running
             self._update_display()
-    
+
     def _update_display(self) -> None:
         """Update the display."""
         lines = ["[b]Agents[/b]", ""]
         for agent_id, info in self._agents.items():
             status = "🟢" if info["is_running"] else "🔴"
             lines.append(f"{status} {info['name']}")
-        
+
         self.update("\n".join(lines))
