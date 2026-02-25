@@ -387,24 +387,30 @@ class ChatScreen(Screen):
                 # Blank line before agent message for spacing
                 self._append_chat("")
 
-                first_chunk = True
+                # Accumulate full response text so we can re-render in place
+                accumulated_text = ""
+                prev_line_count = 0
+
                 async for chunk in agent.fast_agent_runner.run_stream(message):
                     chunk_count += 1
                     if chunk:
                         # Process thinking tags across chunk boundaries
                         display_chunk = self._process_thinking_chunk(chunk)
                         if display_chunk:
-                            # Only prepend header on first chunk
-                            if first_chunk:
-                                self._append_chat(f"{agent_header}{display_chunk}")
-                                first_chunk = False
-                            else:
-                                self._append_chat(display_chunk)
-                
+                            accumulated_text += display_chunk
+                            # Re-render the full accumulated text in place,
+                            # replacing the lines from the previous render
+                            full_display = f"{agent_header}{accumulated_text}"
+                            prev_line_count = self._stream_replace_lines(
+                                full_display, prev_line_count
+                            )
+
                 # Flush any remaining buffered content from thinking-tag parser
                 leftover = self._reset_thinking_state()
                 if leftover:
-                    self._append_chat(leftover)
+                    accumulated_text += leftover
+                    full_display = f"{agent_header}{accumulated_text}"
+                    prev_line_count = self._stream_replace_lines(full_display, prev_line_count)
 
                 debug_write(f"_process_message: run_stream completed, chunks={chunk_count}")
 
