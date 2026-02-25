@@ -68,15 +68,15 @@ class Agent:
     
     def _should_use_fastagent(self) -> bool:
         """Check if agent should use FastAgent."""
-        # Don't use FastAgent if a direct provider is configured
-        if hasattr(self, 'provider') and self.provider is not None:
-            return False
+        # Use FastAgent if explicitly configured via use_fastagent flag
+        if getattr(self.config, "use_fastagent", False):
+            return True
         
+        # Also check for workflow or model prefixes
         model = self.config.model.lower()
         return (
             model.startswith("fastagent") or
             model.startswith("fa:") or
-            getattr(self.config, "use_fastagent", False) or
             getattr(self.config, "workflow", None) is not None
         )
     
