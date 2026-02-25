@@ -244,7 +244,10 @@ class ChatScreen(Screen):
                 # Stream response from FastAgent
                 full_content = ""
                 try:
+                    debug_write(f"_process_message: About to call run_stream")
+                    chunk_count = 0
                     async for chunk in agent.fast_agent_runner.run_stream(message):
+                        chunk_count += 1
                         if chunk:
                             full_content += chunk
                             # Strip thinking tags and render
@@ -256,9 +259,12 @@ class ChatScreen(Screen):
                                 flags=re.DOTALL
                             )
                             self._append_chat(f"[green]{agent.name}:[/green] {display_content}")
+                    debug_write(f"_process_message: run_stream completed, chunks={chunk_count}")
                     streaming_success = True
                 except Exception as stream_err:
                     debug_write(f"FastAgent streaming failed: {stream_err}")
+                    import traceback
+                    debug_write(f"Traceback: {traceback.format_exc()}")
                     # Fall through to try provider streaming
             
             # Try provider streaming if FastAgent didn't succeed
