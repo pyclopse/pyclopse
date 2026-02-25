@@ -145,6 +145,9 @@ class ChatScreen(Screen):
 
     def _append_chat(self, text: str) -> None:
         """Append text to chat history (RichLog with Rich markup support)."""
+        # Strip trailing whitespace from each chunk to prevent wrapped lines
+        # from carrying over a trailing space that misaligns the next line.
+        text = text.rstrip()
         # RichLog.write() parses Rich markup automatically
         self._chat_history.write(text)
         # Refresh to show new content immediately
