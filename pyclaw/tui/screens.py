@@ -360,6 +360,10 @@ class ChatScreen(Screen):
                 async for chunk in agent.fast_agent_runner.run_stream(message):
                     chunk_count += 1
                     if chunk:
+                        # Strip leading/trailing newline characters from chunk
+                        chunk = chunk.lstrip("\n").rstrip("\n")
+                        if not chunk:
+                            continue
                         # Process thinking tags across chunk boundaries
                         display_chunk = self._process_thinking_chunk(chunk)
                         if display_chunk:
