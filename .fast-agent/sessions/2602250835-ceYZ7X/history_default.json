@@ -1,0 +1,109 @@
+{
+  "messages": [
+    {
+      "role": "user",
+      "content": [
+        {
+          "type": "text",
+          "text": "tell me a joke"
+        }
+      ],
+      "is_template": false
+    },
+    {
+      "role": "assistant",
+      "content": [
+        {
+          "type": "text",
+          "text": "<think>\nThe user wants me to tell them a joke. This is a simple request that doesn't require any tools or complex reasoning. Let me share a clean, fun joke.\n</think>\n\nWhy do programmers prefer dark mode?\n\nBecause light attracts bugs. \ud83d\udc1b"
+        }
+      ],
+      "channels": {
+        "fast-agent-timing": [
+          {
+            "type": "text",
+            "text": "{\"start_time\": 96667.006765666, \"end_time\": 96669.569268041, \"duration_ms\": 2562.5}"
+          }
+        ],
+        "fast-agent-usage": [
+          {
+            "type": "text",
+            "text": "{\"turn\": {\"provider\": \"openai\", \"model\": \"MiniMax-M2.5\", \"input_tokens\": 360, \"output_tokens\": 52, \"total_tokens\": 412, \"timestamp\": 1772026549.9222882, \"cache_usage\": {\"cache_read_tokens\": 0, \"cache_write_tokens\": 0, \"cache_hit_tokens\": 0, \"total_cache_tokens\": 0, \"has_cache_activity\": false}, \"tool_use_tokens\": 0, \"reasoning_tokens\": 0, \"tool_calls\": 0, \"current_context_tokens\": 412, \"effective_input_tokens\": 360, \"display_input_tokens\": 360}, \"raw_usage\": {\"completion_tokens\": 52, \"prompt_tokens\": 360, \"total_tokens\": 412, \"completion_tokens_details\": {\"accepted_prediction_tokens\": null, \"audio_tokens\": null, \"reasoning_tokens\": 36, \"rejected_prediction_tokens\": null}, \"prompt_tokens_details\": {\"audio_tokens\": null, \"cached_tokens\": 0}, \"total_characters\": 0}, \"summary\": {\"model\": \"MiniMax-M2.5\", \"turn_count\": 1, \"cumulative_input_tokens\": 360, \"cumulative_output_tokens\": 52, \"cumulative_billing_tokens\": 412, \"cumulative_tool_use_tokens\": 0, \"cumulative_reasoning_tokens\": 0, \"cumulative_tool_calls\": 0, \"current_context_tokens\": 412, \"context_window_size\": null, \"context_usage_percentage\": null, \"cumulative_cache_read_tokens\": 0, \"cumulative_cache_write_tokens\": 0, \"cumulative_cache_hit_tokens\": 0, \"cache_hit_rate_percent\": 0.0, \"cumulative_effective_input_tokens\": 360}}"
+          }
+        ]
+      },
+      "stop_reason": "endTurn",
+      "is_template": false
+    },
+    {
+      "role": "user",
+      "content": [
+        {
+          "type": "text",
+          "text": "tell me another one"
+        }
+      ],
+      "is_template": false
+    },
+    {
+      "role": "assistant",
+      "content": [
+        {
+          "type": "text",
+          "text": "<think>\nThe user wants another joke. Let me think of a good one.\n</think>\n\nWhy did the developer go broke?\n\nBecause they used up all their cache. \ud83d\udcb8"
+        }
+      ],
+      "channels": {
+        "fast-agent-timing": [
+          {
+            "type": "text",
+            "text": "{\"start_time\": 96846.065702416, \"end_time\": 96847.44793175, \"duration_ms\": 1382.23}"
+          }
+        ],
+        "fast-agent-usage": [
+          {
+            "type": "text",
+            "text": "{\"turn\": {\"provider\": \"openai\", \"model\": \"MiniMax-M2.5\", \"input_tokens\": 389, \"output_tokens\": 35, \"total_tokens\": 424, \"timestamp\": 1772026727.801553, \"cache_usage\": {\"cache_read_tokens\": 0, \"cache_write_tokens\": 0, \"cache_hit_tokens\": 0, \"total_cache_tokens\": 0, \"has_cache_activity\": false}, \"tool_use_tokens\": 0, \"reasoning_tokens\": 0, \"tool_calls\": 0, \"current_context_tokens\": 424, \"effective_input_tokens\": 389, \"display_input_tokens\": 389}, \"raw_usage\": {\"completion_tokens\": 35, \"prompt_tokens\": 389, \"total_tokens\": 424, \"completion_tokens_details\": {\"accepted_prediction_tokens\": null, \"audio_tokens\": null, \"reasoning_tokens\": 17, \"rejected_prediction_tokens\": null}, \"prompt_tokens_details\": {\"audio_tokens\": null, \"cached_tokens\": 0}, \"total_characters\": 0}, \"summary\": {\"model\": \"MiniMax-M2.5\", \"turn_count\": 2, \"cumulative_input_tokens\": 749, \"cumulative_output_tokens\": 87, \"cumulative_billing_tokens\": 836, \"cumulative_tool_use_tokens\": 0, \"cumulative_reasoning_tokens\": 0, \"cumulative_tool_calls\": 0, \"current_context_tokens\": 424, \"context_window_size\": null, \"context_usage_percentage\": null, \"cumulative_cache_read_tokens\": 0, \"cumulative_cache_write_tokens\": 0, \"cumulative_cache_hit_tokens\": 0, \"cache_hit_rate_percent\": 0.0, \"cumulative_effective_input_tokens\": 749}}"
+          }
+        ]
+      },
+      "stop_reason": "endTurn",
+      "is_template": false
+    },
+    {
+      "role": "user",
+      "content": [
+        {
+          "type": "text",
+          "text": "tell me a 500 mord story"
+        }
+      ],
+      "is_template": false
+    },
+    {
+      "role": "assistant",
+      "content": [
+        {
+          "type": "text",
+          "text": "<think>\nThe user is asking for a 500-word story. Let me write a short story that's approximately 500 words.\n</think>\n\n# The Last Letter\n\nThe old post office had been closed for three years when Clara finally found the courage to open the door. Dust motes danced in the slivers of light that slipped through boarded windows.\n\nShe'd been cleaning out her grandmother's house after the funeral when she discovered the key\u2014in an envelope addressed to her, with just two words: \"Post Office.\"\n\nClara had always thought she knew everything about her grandmother. Sixty-two years of Sunday dinners, of Christmas cookies, of stories about the old country. But the key was a mystery.\n\nNow, standing inside, she saw the rows of P.O. boxes still intact, the old stamp machine gathering cobwebs in the corner, and a single desk near the back with a typewriter still sitting on it.\n\nHer grandmother had been the postmaster here for forty-one years. Clara had visited as a child, watching her sort mail with methodical precision, licking her finger before each stamp. She'd thought it was the most boring job in the world.\n\nBut there was something here. Clara could feel it.\n\nShe walked to Box 247. The small key from the envelope fit perfectly. Inside, she found a single envelope\u2014yellowed with age, her name written in her grandmother's careful script.\n\nInside was a letter, dated 1987.\n\n*\"Dear Clara,*\n\n*By the time you find this, I will be gone, and you will be old enough to understand. There is something I never told you about our family.*\n\n*When I came to this country, I carried more than clothes in my suitcase. I carried letters\u2014hundreds of them\u2014from the family we left behind. But when I arrived, I learned that the war had taken them all.*\n\n*I kept the letters. And I became the postmaster here so that I could help others say the things they never got to say. Every letter that came to this office that needed an answer, I answered. Every package that arrived for someone who'd moved away, I forwarded. Every person who needed a listening ear, I listened.*\n\n*This post office is not just a building. It is a promise\u2014that no message goes unanswered, that no word is ever truly lost.*\n\n*I've saved enough for you to keep this place, should you want it. But more importantly, I've saved the letters. The ones people sent but never mailed. The ones they wrote to the dead, to the lost, to the versions of themselves they left behind.*\n\n*They are in the basement. Read them. And then decide what you want to do with them.*\n\n*I love you, my darling girl. I always have.*\n\n*Yours,*\n*Babcia*\n\nClara sat down heavily in the dusty chair. Tears streamed down her face.\n\nShe went to the basement that afternoon. And she found them\u2014boxes and boxes of unsent letters, each one a story, each one a heart.\n\nShe spent the rest of her life answering them.\n\n---\n\n*~500 words*"
+        }
+      ],
+      "channels": {
+        "fast-agent-timing": [
+          {
+            "type": "text",
+            "text": "{\"start_time\": 96857.281872208, \"end_time\": 96879.325089208, \"duration_ms\": 22043.22}"
+          }
+        ],
+        "fast-agent-usage": [
+          {
+            "type": "text",
+            "text": "{\"turn\": {\"provider\": \"openai\", \"model\": \"MiniMax-M2.5\", \"input_tokens\": 423, \"output_tokens\": 626, \"total_tokens\": 1049, \"timestamp\": 1772026759.678875, \"cache_usage\": {\"cache_read_tokens\": 0, \"cache_write_tokens\": 0, \"cache_hit_tokens\": 0, \"total_cache_tokens\": 0, \"has_cache_activity\": false}, \"tool_use_tokens\": 0, \"reasoning_tokens\": 0, \"tool_calls\": 0, \"current_context_tokens\": 1049, \"effective_input_tokens\": 423, \"display_input_tokens\": 423}, \"raw_usage\": {\"completion_tokens\": 626, \"prompt_tokens\": 423, \"total_tokens\": 1049, \"completion_tokens_details\": {\"accepted_prediction_tokens\": null, \"audio_tokens\": null, \"reasoning_tokens\": 26, \"rejected_prediction_tokens\": null}, \"prompt_tokens_details\": {\"audio_tokens\": null, \"cached_tokens\": 0}, \"total_characters\": 0}, \"summary\": {\"model\": \"MiniMax-M2.5\", \"turn_count\": 3, \"cumulative_input_tokens\": 1172, \"cumulative_output_tokens\": 713, \"cumulative_billing_tokens\": 1885, \"cumulative_tool_use_tokens\": 0, \"cumulative_reasoning_tokens\": 0, \"cumulative_tool_calls\": 0, \"current_context_tokens\": 1049, \"context_window_size\": null, \"context_usage_percentage\": null, \"cumulative_cache_read_tokens\": 0, \"cumulative_cache_write_tokens\": 0, \"cumulative_cache_hit_tokens\": 0, \"cache_hit_rate_percent\": 0.0, \"cumulative_effective_input_tokens\": 1172}}"
+          }
+        ]
+      },
+      "stop_reason": "endTurn",
+      "is_template": false
+    }
+  ]
+}

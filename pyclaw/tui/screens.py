@@ -261,6 +261,10 @@ class ChatScreen(Screen):
                             self._append_chat(f"[green]{agent.name}:[/green] {display_content}")
                     debug_write(f"_process_message: run_stream completed, chunks={chunk_count}")
                     streaming_success = True
+                    
+                    # Return here - don't fall through to provider
+                    return
+                    
                 except Exception as stream_err:
                     debug_write(f"FastAgent streaming failed: {stream_err}")
                     import traceback
