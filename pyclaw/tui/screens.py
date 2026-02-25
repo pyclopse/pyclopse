@@ -177,7 +177,10 @@ class ChatScreen(Screen):
                         # Escape any Rich markup chars in the raw thinking text
                         thinking_content = thinking_content.replace("[", "\\[")
                         output.append(f"[dim]{thinking_content}[/dim]")
-                    text = text[close_match.end() :]
+                    # Strip leading newlines from the text after the
+                    # closing tag so there is at most one line break
+                    # between thinking output and the response.
+                    text = text[close_match.end() :].lstrip("\n")
                     self._in_thinking = False
                 else:
                     # Closing tag hasn't arrived yet.  Check whether the tail
@@ -204,7 +207,10 @@ class ChatScreen(Screen):
                     before = text[: open_match.start()]
                     if before:
                         output.append(before)
-                    text = text[open_match.end() :]
+                    # Strip leading newlines from the content inside
+                    # the thinking block so the dimmed text starts
+                    # immediately after the speaker header.
+                    text = text[open_match.end() :].lstrip("\n")
                     self._in_thinking = True
                 else:
                     # No full opening tag found.  Buffer a potential partial
@@ -367,6 +373,13 @@ class ChatScreen(Screen):
                         # Process thinking tags across chunk boundaries
                         display_chunk = self._process_thinking_chunk(chunk)
                         if display_chunk:
+                            # Strip leading newlines so thinking text doesn't
+                            # drop to a new line below the speaker header, and
+                            # so the transition from thinking→response doesn't
+                            # produce a double blank line.
+                            display_chunk = display_chunk.lstrip("\n")
+                            if not display_chunk:
+                                continue
                             if not header_printed:
                                 display_chunk = agent_header + display_chunk
                                 header_printed = True
