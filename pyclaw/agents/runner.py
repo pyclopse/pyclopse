@@ -102,14 +102,14 @@ class AgentRunner:
         # Add to history
         self._message_history.append({"role": "user", "content": prompt})
         
-        async with self._context:
-            result = await self._context.send(prompt)
-            response = str(result)
-            
-            # Add response to history
-            self._message_history.append({"role": "assistant", "content": response})
-            
-            return response
+        # Run without context manager (not needed)
+        result = await self._context.send(prompt)
+        response = str(result)
+        
+        # Add response to history
+        self._message_history.append({"role": "assistant", "content": response})
+        
+        return response
     
     async def run_stream(self, prompt: str) -> AsyncIterator[str]:
         """Run a prompt and stream the response.
@@ -125,7 +125,7 @@ class AgentRunner:
         
         self._message_history.append({"role": "user", "content": prompt})
         
-        async with self._context:
+        
             async for chunk in self._context.stream(prompt):
                 yield str(chunk)
     
@@ -149,7 +149,7 @@ class AgentRunner:
         if system_prompt:
             self.instruction = f"{system_prompt}\n\n{self.instruction}"
         
-        async with self._context:
+        
             # Send each message in sequence
             for msg in messages:
                 role = msg.get("role", "user")
