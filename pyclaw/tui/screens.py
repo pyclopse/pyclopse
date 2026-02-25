@@ -236,6 +236,7 @@ class ChatScreen(Screen):
             )
             
             # Check if FastAgent runner is available for streaming
+            streaming_success = False
             if agent.fast_agent_runner:
                 # Use FastAgent streaming for real-time streaming
                 debug_write(f"_process_message: Using FastAgent streaming for agent {agent.name}")
@@ -255,12 +256,13 @@ class ChatScreen(Screen):
                                 flags=re.DOTALL
                             )
                             self._append_chat(f"[green]{agent.name}:[/green] {display_content}")
+                    streaming_success = True
                 except Exception as stream_err:
-                    debug_write(f"FastAgent streaming error: {stream_err}")
-                    self._append_chat(f"[red]Streaming error:[/red] {str(stream_err)}")
-                    return
-            # Check if provider supports streaming
-            elif agent.provider and hasattr(agent.provider, 'supports_streaming') and agent.provider.supports_streaming:
+                    debug_write(f"FastAgent streaming failed: {stream_err}")
+                    # Fall through to try provider streaming
+            
+            # Try provider streaming if FastAgent didn't succeed
+            if not streaming_success and agent.provider and hasattr(agent.provider, 'supports_streaming') and agent.provider.supports_streaming:
                 # Use real streaming from provider
                 debug_write(f"_process_message: Using streaming for agent {agent.name}")
                 
@@ -308,11 +310,13 @@ class ChatScreen(Screen):
                                 flags=re.DOTALL
                             )
                             self._append_chat(f"[green]{agent.name}:[/green] {display_content}")
+                    streaming_success = True
                 except Exception as stream_err:
-                    debug_write(f"Streaming error: {stream_err}")
-                    self._append_chat(f"[red]Streaming error:[/red] {str(stream_err)}")
-                    return
-            else:
+                    debug_write(f"Provider streaming failed: {stream_err}")
+                    # Fall through to non-streaming
+            
+            # Fall back to non-streaming if neither streaming method worked
+            if not streaming_success:
                 # Use regular non-streaming response
                 debug_write(f"_process_message: Using non-streaming for agent {agent.name}")
                 
