@@ -145,9 +145,6 @@ class ChatScreen(Screen):
 
     def _append_chat(self, text: str) -> None:
         """Append text to chat history (RichLog with Rich markup support)."""
-        # Strip trailing whitespace from each chunk to prevent wrapped lines
-        # from carrying over a trailing space that misaligns the next line.
-        text = text.rstrip()
         # RichLog.write() parses Rich markup automatically
         self._chat_history.write(text)
         # Refresh to show new content immediately
@@ -227,11 +224,6 @@ class ChatScreen(Screen):
                     text = ""
 
         result = "".join(output)
-        # Strip leading spaces from every line so that wrapped LLM output
-        # (e.g. "the user\n  wants …") doesn't display with mis-aligned
-        # indentation in the TUI.
-        if result:
-            result = "\n".join(line.lstrip(" ") for line in result.split("\n"))
         return result
 
     def _reset_thinking_state(self) -> str:
@@ -362,52 +354,37 @@ class ChatScreen(Screen):
                 # Reset thinking-tag parser state for this new message
                 self._reset_thinking_state()
 
-                # Track whether we've printed the agent name header yet.
-                # We prepend it to the first visible chunk so there is no
-                # extra newline between the speaker name and the content.
-                header_printed = False
                 agent_header = f"[green]{agent.name}:[/green] "
+
+                # Accumulate the entire streamed response into a buffer.
+                # We write it as ONE message at the end so that chunks
+                # don't each appear on their own line.
+                response_buffer: list[str] = []
+
+                async for chunk in agent.fast_agent_runner.run_stream(message):
+                    chunk_count += 1
+                    if chunk:
+                        # Process thinking tags across chunk boundaries
+                        display_chunk = self._process_thinking_chunk(chunk)
+                        if display_chunk:
+                            response_buffer.append(display_chunk)
+
+                # Flush any remaining buffered content from thinking-tag parser
+                leftover = self._reset_thinking_state()
+                if leftover:
+                    response_buffer.append(leftover)
+
+                debug_write(f"_process_message: run_stream completed, chunks={chunk_count}")
+
+                # Join all chunks and write the full response as a single message
+                full_response = "".join(response_buffer)
 
                 # Blank line before agent message for spacing
                 self._append_chat("")
 
-                # Display each chunk immediately as it arrives in real-time
-                async for chunk in agent.fast_agent_runner.run_stream(message):
-                    chunk_count += 1
-                    if chunk:
-                        # Strip leading/trailing newline characters from chunk
-                        chunk = chunk.lstrip("\n").rstrip("\n")
-                        if not chunk:
-                            continue
-                        # Process thinking tags across chunk boundaries
-                        display_chunk = self._process_thinking_chunk(chunk)
-                        if display_chunk:
-                            # Strip leading newlines so thinking text doesn't
-                            # drop to a new line below the speaker header, and
-                            # so the transition from thinking→response doesn't
-                            # produce a double blank line.
-                            display_chunk = display_chunk.lstrip("\n")
-                            if not display_chunk:
-                                continue
-                            if not header_printed:
-                                display_chunk = agent_header + display_chunk
-                                header_printed = True
-                            self._append_chat(display_chunk)
-
-                # Flush any remaining buffered content
-                leftover = self._reset_thinking_state()
-                if leftover:
-                    if not header_printed:
-                        leftover = agent_header + leftover
-                        header_printed = True
-                    self._append_chat(leftover)
-
-                debug_write(f"_process_message: run_stream completed, chunks={chunk_count}")
-
-                if chunk_count == 0:
-                    self._append_chat(f"{agent_header}[dim](no response)[/dim]")
-                elif not header_printed:
-                    # All chunks were empty/thinking-only; still show the header
+                if full_response.strip():
+                    self._append_chat(f"{agent_header}{full_response}")
+                else:
                     self._append_chat(f"{agent_header}[dim](no response)[/dim]")
 
             except Exception as stream_err:
