@@ -125,9 +125,9 @@ class AgentRunner:
         
         self._message_history.append({"role": "user", "content": prompt})
         
-        
-            async for chunk in self._context.stream(prompt):
-                yield str(chunk)
+        # Stream without context manager
+        async for chunk in self._context.stream(prompt):
+            yield str(chunk)
     
     async def run_with_history(
         self,
