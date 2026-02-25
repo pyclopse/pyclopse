@@ -98,7 +98,7 @@ class AgentRunner:
             prompt: User prompt
             
         Yields:
-            Response chunks
+            Response chunks in real-time
         """
         if self._app is None:
             await self.initialize()
@@ -110,24 +110,38 @@ class AgentRunner:
         
         # Check if agent supports streaming
         if hasattr(agent, 'add_stream_listener'):
-            # Use streaming callback
-            chunks = []
+            import asyncio
+            from collections import deque
+            
+            # Use a queue to stream chunks as they arrive
+            chunk_queue = deque()
+            send_done = False
             
             def on_chunk(chunk):
                 # Extract text from StreamChunk
                 if hasattr(chunk, 'text'):
-                    chunks.append(chunk.text)
+                    chunk_queue.append(chunk.text)
                 else:
-                    chunks.append(str(chunk))
+                    chunk_queue.append(str(chunk))
             
             remove_listener = agent.add_stream_listener(on_chunk)
             
             try:
-                await agent.send(prompt)
+                # Start send in background
+                send_task = asyncio.create_task(agent.send(prompt))
                 
-                # Yield all accumulated chunks
-                for chunk in chunks:
-                    yield chunk
+                # Yield chunks as they arrive
+                while not send_done or chunk_queue:
+                    while chunk_queue:
+                        yield chunk_queue.popleft()
+                    if send_task.done():
+                        send_done = True
+                    else:
+                        await asyncio.sleep(0.01)  # Small delay to allow chunks to arrive
+                
+                # Wait for send to complete
+                await send_task
+                
             finally:
                 remove_listener()
         else:

@@ -1,0 +1,17 @@
+{
+  "name": "2602250924-nQuime",
+  "created_at": "2026-02-25T09:24:04.670252",
+  "last_activity": "2026-02-25T09:24:24.334238",
+  "history_files": [
+    "history_default_previous.json",
+    "history_default.json"
+  ],
+  "metadata": {
+    "agent_name": "default",
+    "model": "generic.MiniMax-M2.5",
+    "last_history_by_agent": {
+      "default": "history_default.json"
+    },
+    "first_user_preview": "hello"
+  }
+}
