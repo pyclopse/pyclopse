@@ -102,12 +102,23 @@ class Agent:
             factory = get_factory()
             
             # Check if we need to use generic provider for minimax
+            # Check both the provider object and the config
             provider_type = None
+            provider_model = None
+            
             if hasattr(self, 'provider') and self.provider:
                 provider_type = type(self.provider).__name__
+                provider_model = getattr(self.provider, 'model', None)
+            
+            # Also check agent config for provider info
+            agent_provider = getattr(self.config, 'provider', None)
+            if agent_provider and isinstance(agent_provider, dict):
+                provider_type = f"{agent_provider.get('type', '')}Provider".title().replace('Provider', 'Provider')
+                if not provider_model:
+                    provider_model = agent_provider.get('model')
             
             # Configure for minimax if needed
-            if provider_type == 'MiniMaxProvider':
+            if 'MiniMax' in str(provider_type):
                 # Set up generic provider for MiniMax
                 import os
                 os.environ['GENERIC_BASE_URL'] = 'https://api.minimax.io/v1'
@@ -135,10 +146,10 @@ class Agent:
                     model = model.replace(prefix, "")
                 
                 # Use generic provider for minimax
-                if provider_type == 'MiniMaxProvider':
+                if 'MiniMax' in str(provider_type):
                     # Get the actual model from provider
-                    model = getattr(self.provider, 'model', 'MiniMax-M2.5')
-                    if not model.startswith('generic.'):
+                    model = provider_model or 'MiniMax-M2.5'
+                    if not str(model).startswith('generic.'):
                         model = f"generic.{model}"
                 
                 self.fast_agent = factory.create_agent(
@@ -153,9 +164,9 @@ class Agent:
             # Create runner for turn-based execution
             from pyclaw.agents.runner import AgentRunner
             # Use provider model for minimax, otherwise use agent model
-            if provider_type == 'MiniMaxProvider':
-                runner_model = getattr(self.provider, 'model', 'MiniMax-M2.5')
-                if not runner_model.startswith('generic.'):
+            if 'MiniMax' in str(provider_type):
+                runner_model = provider_model or 'MiniMax-M2.5'
+                if not str(runner_model).startswith('generic.'):
                     runner_model = f"generic.{runner_model}"
             else:
                 runner_model = self.config.model
