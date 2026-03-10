@@ -67,6 +67,10 @@ class AgentRunner:
         model: str = "sonnet",
         temperature: float = 0.7,
         max_tokens: Optional[int] = None,
+        top_p: Optional[float] = None,
+        max_iterations: Optional[int] = None,
+        parallel_tool_calls: Optional[bool] = None,
+        streaming_timeout: Optional[float] = None,
         servers: Optional[List[str]] = None,
         tools_config: Optional[Dict[str, Any]] = None,
         show_thinking: bool = False,
@@ -78,6 +82,10 @@ class AgentRunner:
         self.model = model
         self.temperature = temperature
         self.max_tokens = max_tokens
+        self.top_p = top_p
+        self.max_iterations = max_iterations
+        self.parallel_tool_calls = parallel_tool_calls
+        self.streaming_timeout = streaming_timeout
         # servers = list of MCP server names from fastagent.config.yaml
         self.servers: List[str] = servers or list(_DEFAULT_SERVERS)
         self.tools_config = tools_config or {}
@@ -132,7 +140,16 @@ class AgentRunner:
             logger.debug(f"Could not set X-Agent-Name header on pyclaw MCP server: {e}")
 
         from fast_agent.llm.request_params import RequestParams as FARequestParams
-        rp = FARequestParams(maxTokens=self.max_tokens) if self.max_tokens else None
+        rp_kwargs: Dict[str, Any] = {"maxTokens": self.max_tokens or 16384}
+        if self.top_p is not None:
+            rp_kwargs["top_p"] = self.top_p
+        if self.max_iterations is not None:
+            rp_kwargs["max_iterations"] = self.max_iterations
+        if self.parallel_tool_calls is not None:
+            rp_kwargs["parallel_tool_calls"] = self.parallel_tool_calls
+        if self.streaming_timeout is not None:
+            rp_kwargs["streaming_timeout"] = self.streaming_timeout
+        rp = FARequestParams(**rp_kwargs)
 
         @fast.agent(
             instruction=self.instruction,

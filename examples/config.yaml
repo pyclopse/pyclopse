@@ -157,8 +157,8 @@ agents:
   default:
     name: "Assistant"
     model: "openai/gpt-4"
-    maxTokens: 4096
-    temperature: 0.7
+    maxTokens: 4096          # max output tokens (default: 16384)
+    temperature: 0.7         # NOTE: not forwarded to FastAgent/MiniMax (no-op for those providers)
     system_prompt: "You are a helpful assistant."
     heartbeat:
       enabled: true
@@ -167,14 +167,19 @@ agents:
       activeHours:
         start: "00:00"
         end: "23:59"
-    # show_thinking: false   # strip <thinking>…</thinking> blocks before sending to user
-    # typing_mode: "none"    # "typing" sends channel typing indicator while processing
+    # show_thinking: false         # strip <thinking>…</thinking> blocks before sending to user
+    # typing_mode: "none"          # "typing" sends channel typing indicator while processing
+    # top_p: 0.9                   # nucleus sampling (provider support varies)
+    # max_iterations: 99           # max tool-call loops per turn
+    # parallel_tool_calls: true    # allow simultaneous tool calls
+    # streaming_timeout: 300       # seconds to wait for streaming completion
 
   minimax:
     name: "MiniMax"
     model: "generic.MiniMax-M2.5"
-    maxTokens: 4096
-    temperature: 0.7
+    # MiniMax-M2.5: 204,800 token context window; up to ~196,608 output tokens
+    # Reasoning tokens count against the output budget, so keep maxTokens generous.
+    maxTokens: 16384         # increase toward 65536+ for long reasoning tasks
     system_prompt: "You are a helpful assistant."
     useFastagent: true
     provider:

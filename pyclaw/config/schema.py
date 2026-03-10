@@ -225,8 +225,17 @@ class AgentConfig(BaseModel):
 
     name: str = "Assistant"
     model: str = "openai/gpt-4"
+    # Output token limit. MiniMax-M2.5 supports up to ~196,608; default covers reasoning budget.
     max_tokens: int = Field(16384, validation_alias=AliasChoices("max_tokens", "maxTokens"))
     temperature: float = 0.7
+    # Nucleus sampling — None means provider default
+    top_p: Optional[float] = Field(default=None, validation_alias=AliasChoices("top_p", "topP"))
+    # Maximum tool-call iterations per turn (FastAgent default: 99)
+    max_iterations: Optional[int] = Field(default=None, validation_alias=AliasChoices("max_iterations", "maxIterations"))
+    # Whether to allow parallel tool calls (FastAgent default: True)
+    parallel_tool_calls: Optional[bool] = Field(default=None, validation_alias=AliasChoices("parallel_tool_calls", "parallelToolCalls"))
+    # Seconds to wait for streaming completion (FastAgent default: 300)
+    streaming_timeout: Optional[float] = Field(default=None, validation_alias=AliasChoices("streaming_timeout", "streamingTimeout"))
     system_prompt: str = Field("You are a helpful assistant.", validation_alias=AliasChoices("system_prompt", "systemPrompt"))
     tools: ToolsConfig = Field(default_factory=ToolsConfig)
     heartbeat: HeartbeatConfig = Field(default_factory=HeartbeatConfig)
