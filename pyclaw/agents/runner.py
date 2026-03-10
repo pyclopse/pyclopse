@@ -42,7 +42,14 @@ def format_thinking_for_telegram(text: str) -> Optional[str]:
     safe_thinking = _html.escape(thinking_content, quote=False)
     safe_response = _html.escape(response, quote=False)
 
-    return f"<blockquote expandable><i>💭 {safe_thinking}</i></blockquote>\n\n{safe_response}"
+    # DEBUG: show both formatted blockquote and raw thinking for comparison
+    raw_section = f"\n\n🔍 <b>Raw thinking:</b>\n<code>{_html.escape(thinking_content)}</code>"
+
+    return (
+        f"<blockquote expandable><i>💭 {safe_thinking}</i></blockquote>"
+        f"\n\n{safe_response}"
+        f"{raw_section}"
+    )
 
 logger = logging.getLogger(__name__)
 
