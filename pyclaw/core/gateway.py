@@ -952,39 +952,37 @@ class Gateway:
         # ── mutable stream state ──────────────────────────────────────────
         stream_msg_id: Optional[int] = None
         last_edit_time: float = 0.0
-        was_reasoning: bool = False       # True while last chunk was reasoning
-        accumulated_thinking: str = ""
-        accumulated_response: str = ""
+        # raw accumulator — may contain <think> tags when is_reasoning is unused
+        raw_buffer: str = ""
+
+        from pyclaw.agents.runner import strip_thinking_tags, format_thinking_for_telegram
+        import re as _re
+        _THINK_RE = _re.compile(r"<(thinking|think)>.*?</(thinking|think)>", _re.DOTALL | _re.IGNORECASE)
 
         # ── stream loop ───────────────────────────────────────────────────
         session_key = f"telegram:{user_id}"
 
         async def _run_stream() -> None:
-            nonlocal stream_msg_id, last_edit_time, was_reasoning, accumulated_thinking, accumulated_response
+            nonlocal stream_msg_id, last_edit_time, raw_buffer
 
             async for chunk_text, is_reasoning in runner.run_stream(text):
                 if is_reasoning:
-                    accumulated_thinking += chunk_text
-                    was_reasoning = True
-                    # Show thinking indicator but don't send yet —
-                    # wait until response starts to avoid showing raw thinking
+                    # Provider gave us a clean reasoning chunk — skip display
+                    raw_buffer += chunk_text  # keep for final show_thinking formatting
                     continue
 
-                # ── response chunk ────────────────────────────────────────
-                accumulated_response += chunk_text
+                raw_buffer += chunk_text
                 now = time.monotonic()
 
-                if was_reasoning:
-                    # Thinking just ended — force an immediate edit/send to
-                    # start the response from scratch (user's suggestion)
-                    was_reasoning = False
-                    last_edit_time = 0.0  # force update on next iteration
+                # Live display: strip any <think> blocks from what we show
+                display = strip_thinking_tags(raw_buffer)
+                if not display:
+                    continue
 
                 if stream_msg_id is None:
-                    # Send initial message as soon as we have response text
                     try:
                         msg = await self._telegram_bot.send_message(
-                            chat_id=chat_id, text=accumulated_response
+                            chat_id=chat_id, text=display
                         )
                         stream_msg_id = msg.message_id
                         last_edit_time = now
@@ -995,24 +993,23 @@ class Gateway:
                         await self._telegram_bot.edit_message_text(
                             chat_id=chat_id,
                             message_id=stream_msg_id,
-                            text=accumulated_response,
+                            text=display,
                         )
                         last_edit_time = now
                     except Exception:
                         pass  # "message is not modified" etc. are harmless
 
             # ── final edit ────────────────────────────────────────────────
-            response_text = accumulated_response.strip()
-            if show_thinking and accumulated_thinking.strip():
-                safe_t = _html.escape(accumulated_thinking.strip(), quote=False)
-                safe_r = _html.escape(response_text, quote=False)
-                final_text = (
-                    f"<blockquote expandable><i>💭 {safe_t}</i></blockquote>"
-                    f"\n\n{safe_r}"
-                )
-                parse_mode = "HTML"
+            if show_thinking:
+                combined = format_thinking_for_telegram(raw_buffer)
+                if combined:
+                    final_text = combined
+                    parse_mode = "HTML"
+                else:
+                    final_text = strip_thinking_tags(raw_buffer)
+                    parse_mode = None
             else:
-                final_text = response_text
+                final_text = strip_thinking_tags(raw_buffer)
                 parse_mode = None
 
             if not final_text:

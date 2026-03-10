@@ -487,20 +487,40 @@ class ChatScreen(Screen):
                 self._append_chat("")
 
                 # Accumulate full response text so we can re-render in place
-                accumulated_text = ""
+                raw_buffer = ""
                 prev_line_count = 0
+
+                from pyclaw.agents.runner import strip_thinking_tags
 
                 async for chunk_text, is_reasoning in agent.fast_agent_runner.run_stream(message):
                     chunk_count += 1
                     if not chunk_text:
                         continue
+                    raw_buffer += chunk_text
+
+                    # Build display: use is_reasoning flag when available,
+                    # otherwise fall back to stripping <think> tags from the buffer.
                     if is_reasoning:
                         if self._show_thinking:
                             safe = chunk_text.replace("[", "\\[")
-                            accumulated_text += f"[dim]{safe}[/dim]"
-                        # else: strip thinking content
+                            accumulated_text = (accumulated_text or "") + f"[dim]{safe}[/dim]"
+                        # else: skip reasoning content
                     else:
-                        accumulated_text += chunk_text
+                        # Strip any <think> blocks that may be embedded in content
+                        # (generic providers like MiniMax don't set is_reasoning)
+                        clean = strip_thinking_tags(raw_buffer)
+                        if self._show_thinking:
+                            # Replace the visible portion with dim thinking + clean response
+                            from pyclaw.agents.runner import _THINKING_RE
+                            thinking_parts = _THINKING_RE.findall(raw_buffer)
+                            thinking_display = ""
+                            for _, t in thinking_parts:
+                                safe_t = t.strip().replace("[", "\\[")
+                                thinking_display += f"[dim]{safe_t}[/dim]\n\n"
+                            accumulated_text = thinking_display + clean
+                        else:
+                            accumulated_text = clean
+
                     # Re-render the full accumulated text in place
                     full_display = f"{agent_header}{accumulated_text}"
                     prev_line_count = self._stream_replace_lines(
