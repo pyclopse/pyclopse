@@ -299,6 +299,8 @@ class TelegramConfig(BaseModel):
     topics: Dict[str, int] = Field(default_factory=dict)
     # Send typing indicator while agent is processing
     typing_indicator: bool = Field(default=True, validation_alias="typingIndicator")
+    # Stream response by editing a single message in place
+    streaming: bool = Field(default=False)
 
     @field_validator("bot_token", mode="before")
     @classmethod

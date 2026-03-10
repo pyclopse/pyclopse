@@ -200,6 +200,7 @@ channels:
     allowedUsers: []
     # deniedUsers: []           # always block these user IDs
     # typingIndicator: true     # send "typing…" while agent processes
+    # streaming: false          # edit message in-place as chunks arrive (live typing effect)
     # topics:                   # forum topic name → topic ID (group chats with topics)
     #   general: 0
     #   alerts: 42

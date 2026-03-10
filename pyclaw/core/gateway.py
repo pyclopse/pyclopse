@@ -796,6 +796,17 @@ class Gateway:
                     self._logger.error(f"Failed to send command reply: {e}")
                 return
 
+        # If streaming is enabled, hand off to the streaming path immediately
+        if telegram_config and getattr(telegram_config, "streaming", False):
+            await self._stream_telegram_response(
+                chat_id=chat_id,
+                user_id=user_id,
+                sender_name=sender_name,
+                text=text,
+                message_id=str(message.message_id),
+            )
+            return
+
         # Send typing indicator while agent processes (if enabled)
         typing_indicator = (
             self.config.channels.telegram.typing_indicator
@@ -892,6 +903,207 @@ class Gateway:
                     await typing_task
                 except asyncio.CancelledError:
                     pass
+
+    async def _stream_telegram_response(
+        self,
+        chat_id: str,
+        user_id: str,
+        sender_name: str,
+        text: str,
+        message_id: str,
+    ) -> None:
+        """Stream an agent response to Telegram by editing a single message in place.
+
+        Sends a placeholder once enough text has accumulated, then edits it
+        every ~1 s as new chunks arrive.  On completion the message is replaced
+        with the final formatted text (thinking blockquote if enabled).
+        """
+        import time
+        import re as _re
+        import html as _html
+
+        THROTTLE_S = 1.0   # minimum seconds between edits
+        MIN_CHARS  = 30    # don't send the first message until we have this many chars
+
+        # ── session / agent setup ─────────────────────────────────────────
+        agent_id = (
+            next(iter(self._agent_manager.agents))
+            if self._agent_manager and self._agent_manager.agents
+            else "default"
+        )
+        session = await self._get_or_create_session(
+            agent_id=agent_id, channel="telegram", user_id=user_id
+        )
+        if session is None:
+            await self._telegram_bot.send_message(
+                chat_id=chat_id, text="Could not create session."
+            )
+            return
+
+        agent = self._agent_manager.get_agent(agent_id)
+        if agent is None:
+            await self._telegram_bot.send_message(
+                chat_id=chat_id, text="No agent available."
+            )
+            return
+
+        show_thinking = getattr(getattr(agent, "config", None), "show_thinking", False)
+        model_override = session.context.get("model_override")
+        runner = agent._get_session_runner(session.id, model_override=model_override)
+
+        # ── mutable stream state ──────────────────────────────────────────
+        stream_msg_id: Optional[int] = None
+        last_edit_time: float = 0.0
+        in_thinking: bool = False
+        tag_buffer: str = ""
+        accumulated_thinking: str = ""
+        accumulated_response: str = ""
+
+        # ── thinking-tag state machine (chunk-boundary-aware) ─────────────
+        def _process_chunk(chunk: str) -> None:
+            nonlocal in_thinking, tag_buffer, accumulated_thinking, accumulated_response
+            buf = tag_buffer + chunk
+            nonlocal_text = buf
+            tag_buffer = ""
+
+            while nonlocal_text:
+                if in_thinking:
+                    close = _re.search(r"</(thinking|think)>", nonlocal_text, _re.IGNORECASE)
+                    if close:
+                        accumulated_thinking += nonlocal_text[: close.start()]
+                        nonlocal_text = nonlocal_text[close.end() :].lstrip("\n")
+                        in_thinking = False
+                    else:
+                        partial = _re.search(
+                            r"</?(?:t(?:h(?:i(?:n(?:k(?:i(?:n(?:g)?)?)?)?)?)?)?)?$",
+                            nonlocal_text,
+                        )
+                        if partial and partial.start() < len(nonlocal_text):
+                            accumulated_thinking += nonlocal_text[: partial.start()]
+                            tag_buffer = nonlocal_text[partial.start() :]
+                        else:
+                            accumulated_thinking += nonlocal_text
+                        nonlocal_text = ""
+                else:
+                    open_m = _re.search(r"<(thinking|think)>", nonlocal_text, _re.IGNORECASE)
+                    if open_m:
+                        accumulated_response += nonlocal_text[: open_m.start()]
+                        nonlocal_text = nonlocal_text[open_m.end() :].lstrip("\n")
+                        in_thinking = True
+                    else:
+                        partial = _re.search(
+                            r"<(?:t(?:h(?:i(?:n(?:k(?:i(?:n(?:g)?)?)?)?)?)?)?)?$",
+                            nonlocal_text,
+                        )
+                        if partial and partial.start() < len(nonlocal_text):
+                            accumulated_response += nonlocal_text[: partial.start()]
+                            tag_buffer = nonlocal_text[partial.start() :]
+                        else:
+                            accumulated_response += nonlocal_text
+                        nonlocal_text = ""
+
+        def _live_display() -> str:
+            """Plain-text preview shown during streaming."""
+            if in_thinking:
+                if accumulated_response:
+                    return f"💭 _(thinking…)_\n\n{accumulated_response}"
+                return "💭 _(thinking…)_"
+            return accumulated_response or "…"
+
+        # ── stream loop ───────────────────────────────────────────────────
+        session_key = f"telegram:{user_id}"
+
+        async def _run_stream() -> None:
+            nonlocal stream_msg_id, last_edit_time
+
+            async for chunk in runner.run_stream(text):
+                _process_chunk(chunk)
+                display = _live_display()
+                now = time.monotonic()
+
+                if stream_msg_id is None:
+                    if len(display) >= MIN_CHARS:
+                        try:
+                            msg = await self._telegram_bot.send_message(
+                                chat_id=chat_id, text=display
+                            )
+                            stream_msg_id = msg.message_id
+                            last_edit_time = now
+                        except Exception as _se:
+                            self._logger.warning(f"Stream: initial send failed: {_se}")
+                elif now - last_edit_time >= THROTTLE_S:
+                    try:
+                        await self._telegram_bot.edit_message_text(
+                            chat_id=chat_id,
+                            message_id=stream_msg_id,
+                            text=display,
+                        )
+                        last_edit_time = now
+                    except Exception:
+                        pass  # "message is not modified" etc. are harmless
+
+            # ── final edit ────────────────────────────────────────────────
+            response_text = accumulated_response.strip()
+            if show_thinking and accumulated_thinking.strip():
+                safe_t = _html.escape(accumulated_thinking.strip(), quote=False)
+                safe_r = _html.escape(response_text, quote=False)
+                final_text = (
+                    f"<blockquote expandable><i>💭 {safe_t}</i></blockquote>"
+                    f"\n\n{safe_r}"
+                )
+                parse_mode = "HTML"
+            else:
+                final_text = response_text
+                parse_mode = None
+
+            if not final_text:
+                return
+
+            send_kwargs: Dict[str, Any] = {"text": final_text}
+            if parse_mode:
+                send_kwargs["parse_mode"] = parse_mode
+
+            try:
+                if stream_msg_id is not None:
+                    await self._telegram_bot.edit_message_text(
+                        chat_id=chat_id, message_id=stream_msg_id, **send_kwargs
+                    )
+                else:
+                    await self._telegram_bot.send_message(
+                        chat_id=chat_id, **send_kwargs
+                    )
+            except Exception as fe:
+                self._logger.error(f"Stream: final edit failed: {fe}")
+                # Fall back to a fresh message
+                try:
+                    await self._telegram_bot.send_message(
+                        chat_id=chat_id, **send_kwargs
+                    )
+                except Exception:
+                    pass
+
+            # Usage counters
+            self._usage["messages_total"] += 1
+            self._usage["messages_by_channel"]["telegram"] = (
+                self._usage["messages_by_channel"].get("telegram", 0) + 1
+            )
+
+        task = asyncio.create_task(_run_stream())
+        self._active_tasks[session_key] = task
+        try:
+            await task
+        except asyncio.CancelledError:
+            self._logger.info(f"Telegram stream cancelled for {user_id}")
+        except Exception as e:
+            self._logger.error(f"Telegram stream error for {user_id}: {e}")
+            try:
+                await self._telegram_bot.send_message(
+                    chat_id=chat_id, text=f"Sorry, I hit an error: {e}"
+                )
+            except Exception:
+                pass
+        finally:
+            self._active_tasks.pop(session_key, None)
 
     async def _handle_slack_message(
         self,
