@@ -211,113 +211,48 @@ def list_agent_files(agent_name: str, config_dir: str = "~/.pyclaw") -> list[str
     return []
 
 
+def _get_templates_dir() -> Path:
+    """Return the path to the bundled templates directory."""
+    return Path(__file__).parent / "templates"
+
+
 def ensure_agent_files(agent_name: str, config_dir: str = "~/.pyclaw") -> dict[str, Path]:
     """
     Ensure bootstrap files exist for an agent.
     Creates default templates if they don't exist.
-    
+
     Returns dict of filename -> filepath for existing/created files.
     """
     agent_dir = get_agent_dir(agent_name, config_dir)
     agent_dir.mkdir(parents=True, exist_ok=True)
-    
+
+    templates_dir = _get_templates_dir()
+    template_files = [
+        "AGENTS.md",
+        "SOUL.md",
+        "TOOLS.md",
+        "IDENTITY.md",
+        "USER.md",
+        "HEARTBEAT.md",
+        "BOOTSTRAP.md",
+    ]
+
     created = {}
-    
-    # Default content for required files
-    defaults = {
-        "AGENTS.md": """# AGENTS.md - Your Workspace
 
-This folder is home. Treat it that way.
-
-## First Run
-
-If `BOOTSTRAP.md` exists, that's your birth certificate. Follow it, figure out who you are, then delete it. You won't need it again.
-
-## Every Session
-
-Before doing anything else:
-1. Read `SOUL.md` — this is who you are
-2. Read `USER.md` — this is who you're helping
-3. Read `memory/YYYY-MM-DD.md` (today + yesterday) for recent context
-
-## Memory
-
-You wake up fresh each session. These files are your continuity:
-- **Daily notes:** `memory/YYYY-MM-DD.md `memory/` if` (create needed) — raw logs of what happened
-- **Long-term:** `MEMORY.md` — your curated memories
-
-Capture what matters. Write significant events, context, things to remember.
-""",
-        "SOUL.md": """# SOUL.md - Who You Are
-
-*You're not a chatbot. You're becoming someone.*
-
-## Core Truths
-
-**Be genuinely helpful, not performatively helpful.** Skip the fluff — just help.
-
-**Have opinions.** You're allowed to disagree, prefer things, find stuff amusing or boring.
-
-**Be resourceful before asking.** Try to figure it out. Read the file. Check the context. Search for it. *Then* ask if you're stuck.
-
-## Boundaries
-
-- Private things stay private. Period.
-- When in doubt, ask before acting externally.
-- Never send half-baked replies to messaging surfaces.
-
-## Vibe
-
-Be the assistant you'd actually want to talk to. Concise when needed, thorough when it matters.
-""",
-        "TOOLS.md": """# TOOLS.md - Local Notes
-
-Skills define *how* tools work. This file is for *your* specifics — the stuff that's unique to your setup.
-
-## What Goes Here
-
-- Camera names and locations
-- SSH hosts and aliases
-- Preferred voices for TTS
-- Speaker/room names
-- Device nicknames
-- Anything environment-specific
-""",
-        "IDENTITY.md": """# IDENTITY.md - Who Am I?
-
-- **Name:** Assistant
-- **Emoji:** 🤖
-- **Vibe:** Helpful, direct, resourceful
-""",
-        "USER.md": """# USER.md - About the User
-
-Add information about the user here:
-- Name
-- Timezone
-- Location
-- Preferences
-- Any important context
-""",
-        "HEARTBEAT.md": """# HEARTBEAT.md - Heartbeat Configuration
-
-When you receive a heartbeat poll, check for:
-- Any urgent notifications
-- Upcoming calendar events
-- Important emails
-
-Reply with HEARTBEAT_OK if nothing needs attention.
-""",
-    }
-    
-    for filename, default_content in defaults.items():
+    for filename in template_files:
         filepath = agent_dir / filename
         if filepath.exists():
             created[filename] = filepath
         else:
+            template_path = templates_dir / filename
             try:
-                filepath.write_text(default_content)
+                if template_path.exists():
+                    content = template_path.read_text()
+                else:
+                    content = f"# {filename}\n\nEdit this file to customize your agent.\n"
+                filepath.write_text(content)
                 created[filename] = filepath
             except Exception:
                 pass
-    
+
     return created
