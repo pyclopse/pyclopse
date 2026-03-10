@@ -37,8 +37,10 @@ def format_thinking_for_telegram(text: str) -> Optional[str]:
     thinking_content = "\n\n".join(m.group(2).strip() for m in matches)
     response = strip_thinking_tags(text)
 
-    safe_thinking = _html.escape(thinking_content)
-    safe_response = _html.escape(response)
+    # quote=False: only escape &, <, > — Telegram's HTML parser does not
+    # support &quot; in text content and will truncate at the first one.
+    safe_thinking = _html.escape(thinking_content, quote=False)
+    safe_response = _html.escape(response, quote=False)
 
     return f"<blockquote expandable><i>💭 {safe_thinking}</i></blockquote>\n\n{safe_response}"
 
