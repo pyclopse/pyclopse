@@ -52,6 +52,9 @@ class ChatScreen(Screen):
         # State for streaming thinking-tag detection across chunks
         self._in_thinking: bool = False
         self._tag_buffer: str = ""
+        # Whether to show thinking blocks (dim) or strip them entirely.
+        # Set from agent config before each stream.
+        self._show_thinking: bool = False
         debug_write(f"ChatScreen.__init__ called with gateway={gateway}")
 
     BINDINGS = [
@@ -252,9 +255,9 @@ class ChatScreen(Screen):
                 # We are inside a thinking block – look for the closing tag.
                 close_match = re.search(r"</(thinking|think)>", text)
                 if close_match:
-                    # Emit everything before the closing tag as dimmed text.
+                    # Emit thinking content as dimmed text (or strip it).
                     thinking_content = text[: close_match.start()]
-                    if thinking_content:
+                    if thinking_content and self._show_thinking:
                         # Escape any Rich markup chars in the raw thinking text
                         thinking_content = thinking_content.replace("[", "\\[")
                         output.append(f"[dim]{thinking_content}[/dim]")
@@ -276,7 +279,7 @@ class ChatScreen(Screen):
                         self._tag_buffer = text[partial.start() :]
                     else:
                         safe = text
-                    if safe:
+                    if safe and self._show_thinking:
                         safe = safe.replace("[", "\\[")
                         output.append(f"[dim]{safe}[/dim]")
                     text = ""
@@ -472,7 +475,10 @@ class ChatScreen(Screen):
                 debug_write(f"_process_message: About to call run_stream")
                 chunk_count = 0
 
-                # Reset thinking-tag parser state for this new message
+                # Reset thinking-tag parser state for this new message.
+                # Read show_thinking from the agent's runner so we dim or strip.
+                _runner = getattr(agent, "fast_agent_runner", None)
+                self._show_thinking = bool(getattr(_runner, "show_thinking", False))
                 self._reset_thinking_state()
 
                 agent_header = f"[green]{agent.name}:[/green] "

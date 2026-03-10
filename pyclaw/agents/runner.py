@@ -7,7 +7,7 @@ from pathlib import Path
 from typing import Any, AsyncIterator, Dict, List, Optional
 
 # Regex to strip <thinking>...</thinking> blocks (case-insensitive, dotall)
-_THINKING_RE = re.compile(r"<thinking>.*?</thinking>", re.DOTALL | re.IGNORECASE)
+_THINKING_RE = re.compile(r"<(thinking|think)>(.*?)</(thinking|think)>", re.DOTALL | re.IGNORECASE)
 
 
 def strip_thinking_tags(text: str) -> str:
@@ -16,6 +16,35 @@ def strip_thinking_tags(text: str) -> str:
     # Collapse more than two consecutive newlines left behind by removals
     stripped = re.sub(r"\n{3,}", "\n\n", stripped)
     return stripped.strip()
+
+
+def format_thinking_for_telegram(text: str) -> Optional[str]:
+    """Extract thinking blocks and return a Telegram HTML message showing both
+    spoiler and expandable-blockquote formats side by side (for user testing).
+
+    Returns None if the text contains no thinking blocks.
+    """
+    import html as _html
+
+    matches = list(_THINKING_RE.finditer(text))
+    if not matches:
+        return None
+
+    # Concatenate all thinking sections
+    parts = [m.group(2).strip() for m in matches]
+    thinking_content = "\n\n".join(parts)
+    safe = _html.escape(thinking_content)
+
+    lines = [
+        "💭 <b>Thinking</b>",
+        "",
+        "🫥 <b>Spoiler</b> <i>(tap to reveal)</i>",
+        f"<tg-spoiler>{safe}</tg-spoiler>",
+        "",
+        "📖 <b>Expandable blockquote</b> <i>(tap Show more)</i>",
+        f"<blockquote expandable>{safe}</blockquote>",
+    ]
+    return "\n".join(lines)
 
 logger = logging.getLogger(__name__)
 
