@@ -254,6 +254,14 @@ class AgentConfig(BaseModel):
         default="none",
         validation_alias=AliasChoices("typing_mode", "typingMode"),
     )
+    # Generic request parameters forwarded to the LLM provider.
+    # Known FastAgent params (top_p, temperature, max_iterations, etc.) are forwarded
+    # directly to RequestParams; anything else goes into extra_body for the raw API call.
+    # Example: request_params: {reasoning_split: true, frequency_penalty: 0.1}
+    request_params: Optional[Dict[str, Any]] = Field(
+        default=None,
+        validation_alias=AliasChoices("request_params", "requestParams"),
+    )
 
 
 class AgentsConfig(BaseModel):

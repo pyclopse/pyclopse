@@ -9,6 +9,60 @@ from typing import Any, AsyncIterator, Dict, List, Optional
 # Regex to strip <thinking>...</thinking> blocks (case-insensitive, dotall)
 _THINKING_RE = re.compile(r"<(thinking|think)>(.*?)</(thinking|think)>", re.DOTALL | re.IGNORECASE)
 
+# Applied once when the first generic-provider runner initialises.
+_reasoning_details_patched: bool = False
+
+
+def _patch_openai_llm_for_reasoning_details() -> None:
+    """Patch OpenAILLM once so delta.reasoning_details is emitted as is_reasoning=True chunks.
+
+    MiniMax (and potentially other providers) put thinking content in
+    ``delta.reasoning_details`` (a cumulative list) rather than in
+    ``delta.reasoning_content``.  FastAgent ignores this field entirely, so we
+    add support here by wrapping ``_process_stream_chunk_common`` at the class
+    level — no per-stream setup required.
+
+    Per-instance state (``self._reasoning_details_buf``) tracks the cumulative
+    text seen so far.  A shorter-or-mismatched value signals a new stream
+    session and resets the buffer automatically.
+    """
+    global _reasoning_details_patched
+    if _reasoning_details_patched:
+        return
+    try:
+        from fast_agent.llm.provider.openai.llm_openai import OpenAILLM
+        from fast_agent.llm.stream_types import StreamChunk
+
+        _original = OpenAILLM._process_stream_chunk_common
+
+        def _patched(self, chunk, **kw):  # noqa: ANN001
+            if chunk.choices:
+                delta = chunk.choices[0].delta
+                for detail in getattr(delta, "reasoning_details", None) or []:
+                    if isinstance(detail, dict) and "text" in detail:
+                        buf: str = getattr(self, "_reasoning_details_buf", "")
+                        new_text: str = detail["text"]
+                        # Detect a new stream session: cumulative text restarted
+                        if not new_text.startswith(buf):
+                            buf = ""
+                        incremental = new_text[len(buf):]
+                        self._reasoning_details_buf = new_text
+                        if incremental:
+                            self._notify_stream_listeners(
+                                StreamChunk(text=incremental, is_reasoning=True)
+                            )
+            return _original(self, chunk, **kw)
+
+        OpenAILLM._process_stream_chunk_common = _patched
+        _reasoning_details_patched = True
+        logging.getLogger(__name__).debug(
+            "Patched OpenAILLM._process_stream_chunk_common for delta.reasoning_details"
+        )
+    except Exception as exc:
+        logging.getLogger(__name__).debug(
+            f"Could not patch OpenAILLM for delta.reasoning_details: {exc}"
+        )
+
 
 def strip_thinking_tags(text: str) -> str:
     """Remove <thinking>...</thinking> blocks from *text* and normalise whitespace."""
@@ -76,6 +130,7 @@ class AgentRunner:
         show_thinking: bool = False,
         api_key: Optional[str] = None,
         owner_name: Optional[str] = None,
+        request_params: Optional[Dict[str, Any]] = None,
     ):
         self.agent_name = agent_name
         self.instruction = instruction
@@ -86,6 +141,8 @@ class AgentRunner:
         self.max_iterations = max_iterations
         self.parallel_tool_calls = parallel_tool_calls
         self.streaming_timeout = streaming_timeout
+        # Extra request params from config (provider-specific + FA params)
+        self.request_params: Dict[str, Any] = request_params or {}
         # servers = list of MCP server names from fastagent.config.yaml
         self.servers: List[str] = servers or list(_DEFAULT_SERVERS)
         self.tools_config = tools_config or {}
@@ -122,6 +179,9 @@ class AgentRunner:
                 os.environ["GENERIC_API_KEY"] = api_key
             os.environ["GENERIC_BASE_URL"] = "https://api.minimax.io/v1"
 
+            # Ensure OpenAILLM handles delta.reasoning_details (MiniMax extension)
+            _patch_openai_llm_for_reasoning_details()
+
         # Ensure fastagent.config.yaml is findable from CWD
         _ensure_fastagent_config()
 
@@ -140,6 +200,18 @@ class AgentRunner:
             logger.debug(f"Could not set X-Agent-Name header on pyclaw MCP server: {e}")
 
         from fast_agent.llm.request_params import RequestParams as FARequestParams
+
+        # Fields known to FARequestParams — routed directly into rp_kwargs.
+        # Anything else is forwarded as extra_body to the raw API call.
+        _FA_PARAMS = {
+            "temperature", "maxTokens", "max_tokens", "stopSequences",
+            "use_history", "max_iterations", "parallel_tool_calls",
+            "response_format", "streaming_timeout", "top_p", "top_k",
+            "min_p", "presence_penalty", "frequency_penalty",
+            "repetition_penalty", "service_tier",
+        }
+
+        # Start from individual fields (backwards compat)
         rp_kwargs: Dict[str, Any] = {"maxTokens": self.max_tokens or 16384}
         if self.top_p is not None:
             rp_kwargs["top_p"] = self.top_p
@@ -149,6 +221,18 @@ class AgentRunner:
             rp_kwargs["parallel_tool_calls"] = self.parallel_tool_calls
         if self.streaming_timeout is not None:
             rp_kwargs["streaming_timeout"] = self.streaming_timeout
+
+        # Overlay with request_params from config; unknown keys → extra_body
+        extra_body: Dict[str, Any] = {}
+        for key, val in self.request_params.items():
+            if key in _FA_PARAMS:
+                rp_kwargs[key] = val
+            else:
+                extra_body[key] = val
+
+        if extra_body:
+            rp_kwargs["metadata"] = {"extra_body": extra_body}
+
         rp = FARequestParams(**rp_kwargs)
 
         @fast.agent(

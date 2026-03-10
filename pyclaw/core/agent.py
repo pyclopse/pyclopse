@@ -205,6 +205,7 @@ class Agent:
                 tools_config=tools_cfg,
                 show_thinking=getattr(self.config, "show_thinking", False),
                 api_key=provider_api_key,
+                request_params=getattr(self.config, "request_params", None),
             )
 
             self._logger.info(
@@ -247,6 +248,7 @@ class Agent:
                 show_thinking=getattr(base, "show_thinking", False),
                 api_key=getattr(base, "api_key", None),
                 owner_name=self.name,
+                request_params=getattr(base, "request_params", None),
             )
             self._session_runners[session_id] = runner
             self._logger.debug(

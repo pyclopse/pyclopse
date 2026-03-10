@@ -949,13 +949,22 @@ class Gateway:
         model_override = session.context.get("model_override")
         runner = agent._get_session_runner(session.id, model_override=model_override)
 
+        # Send typing indicator immediately so the user sees activity
+        try:
+            await self._telegram_bot.send_chat_action(chat_id=chat_id, action="typing")
+        except Exception:
+            pass
+
         # ── mutable stream state ──────────────────────────────────────────
         stream_msg_id: Optional[int] = None
         last_edit_time: float = 0.0
-        # raw accumulator — may contain <think> tags when is_reasoning is unused
-        raw_buffer: str = ""
+        # Separate buffers: thinking_buffer has is_reasoning=True chunks (no tags),
+        # response_buffer has is_reasoning=False chunks (may have stray <think> tags
+        # from providers that leak thinking into delta.content).
+        thinking_buffer: str = ""
+        response_buffer: str = ""
 
-        from pyclaw.agents.runner import strip_thinking_tags, format_thinking_for_telegram
+        from pyclaw.agents.runner import strip_thinking_tags
         import re as _re
         _OPEN_THINK = _re.compile(r"<(thinking|think)>", _re.IGNORECASE)
 
@@ -977,25 +986,37 @@ class Gateway:
         session_key = f"telegram:{user_id}"
 
         async def _run_stream() -> None:
-            nonlocal stream_msg_id, last_edit_time, raw_buffer
+            nonlocal stream_msg_id, last_edit_time, thinking_buffer, response_buffer
 
             async for chunk_text, is_reasoning in runner.run_stream(text):
                 if is_reasoning:
-                    # Provider gave us a clean reasoning chunk — skip display
-                    raw_buffer += chunk_text  # keep for final show_thinking formatting
-                    continue
+                    thinking_buffer += chunk_text
+                else:
+                    response_buffer += chunk_text
 
-                raw_buffer += chunk_text
+                # Build a single unified HTML display — blockquote for thinking,
+                # plain text after it for the response.  Every edit sends a
+                # complete, valid HTML string so there's no phase transition.
+                if show_thinking and thinking_buffer:
+                    tail = thinking_buffer[-600:] if len(thinking_buffer) > 600 else thinking_buffer
+                    safe_t = _html.escape(tail, quote=False)
+                    display = f"<blockquote expandable><i>💭 {safe_t}</i></blockquote>"
+                    response_part = _live_display(response_buffer)
+                    if response_part:
+                        display += f"\n\n{_html.escape(response_part, quote=False)}"
+                    mid_parse_mode: Optional[str] = "HTML"
+                else:
+                    display = _live_display(response_buffer)
+                    if not display:
+                        continue
+                    mid_parse_mode = None
+
                 now = time.monotonic()
-
-                display = _live_display(raw_buffer)
-                if not display:
-                    continue
-
                 if stream_msg_id is None:
                     try:
                         msg = await self._telegram_bot.send_message(
-                            chat_id=chat_id, text=display
+                            chat_id=chat_id, text=display,
+                            **({"parse_mode": mid_parse_mode} if mid_parse_mode else {}),
                         )
                         stream_msg_id = msg.message_id
                         last_edit_time = now
@@ -1007,22 +1028,32 @@ class Gateway:
                             chat_id=chat_id,
                             message_id=stream_msg_id,
                             text=display,
+                            **({"parse_mode": mid_parse_mode} if mid_parse_mode else {}),
                         )
                         last_edit_time = now
                     except Exception:
                         pass  # "message is not modified" etc. are harmless
 
             # ── final edit ────────────────────────────────────────────────
-            if show_thinking:
-                combined = format_thinking_for_telegram(raw_buffer)
+            clean_response = strip_thinking_tags(response_buffer)
+            if show_thinking and thinking_buffer:
+                # Proper thinking came via is_reasoning=True — format as spoiler
+                safe_thinking = _html.escape(thinking_buffer.strip(), quote=False)
+                safe_response = _html.escape(clean_response, quote=False)
+                final_text = f"<blockquote expandable><i>💭 {safe_thinking}</i></blockquote>\n\n{safe_response}"
+                parse_mode = "HTML"
+            elif show_thinking:
+                # No separated thinking — try to extract <think> tags from response_buffer
+                from pyclaw.agents.runner import format_thinking_for_telegram
+                combined = format_thinking_for_telegram(response_buffer)
                 if combined:
                     final_text = combined
                     parse_mode = "HTML"
                 else:
-                    final_text = strip_thinking_tags(raw_buffer)
+                    final_text = clean_response
                     parse_mode = None
             else:
-                final_text = strip_thinking_tags(raw_buffer)
+                final_text = clean_response
                 parse_mode = None
 
             if not final_text:
@@ -1042,22 +1073,26 @@ class Gateway:
                         chat_id=chat_id, **send_kwargs
                     )
             except Exception as fe:
-                self._logger.error(f"Stream: final edit failed: {fe}")
-                # Fall back to a fresh message
-                try:
-                    await self._telegram_bot.send_message(
-                        chat_id=chat_id, **send_kwargs
-                    )
-                except Exception:
-                    pass
+                fe_str = str(fe).lower()
+                if "message is not modified" in fe_str:
+                    pass  # content already matches — not an error
+                else:
+                    self._logger.error(f"Stream: final edit failed: {fe}")
+                    # Only fall back to a fresh message for genuine failures
+                    try:
+                        await self._telegram_bot.send_message(
+                            chat_id=chat_id, **send_kwargs
+                        )
+                    except Exception:
+                        pass
 
-            # Debug: send raw buffer so we can see exactly what came from the model
+            # Debug: send raw buffers so we can see exactly what came from the model
             if getattr(getattr(self, "config", None), "gateway", None) and self.config.gateway.debug:
                 try:
-                    raw_preview = raw_buffer[:2000]
+                    debug_text = f"🔍 thinking_buffer:\n{thinking_buffer[:1000]}\n\n📝 response_buffer:\n{response_buffer[:1000]}"
                     await self._telegram_bot.send_message(
                         chat_id=chat_id,
-                        text=f"🔍 raw_buffer:\n{raw_preview}",
+                        text=debug_text[:2000],
                     )
                 except Exception:
                     pass
