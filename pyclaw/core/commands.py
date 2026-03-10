@@ -548,6 +548,19 @@ def register_builtin_commands(registry: CommandRegistry, gateway: Any) -> None:
             logger.error(f"/skill {skill_name} failed: {e}", exc_info=True)
             return f"[ERROR] {e}"
 
+    async def cmd_reboot(args: str, ctx: CommandContext) -> str:
+        """Hard-restart the pyclaw process (picks up code + config changes)."""
+        import asyncio
+        import os
+        import sys
+
+        async def _do_reboot():
+            await asyncio.sleep(0.5)
+            os.execv(sys.executable, [sys.executable] + sys.argv)
+
+        asyncio.create_task(_do_reboot())
+        return "🔄 Rebooting pyclaw… (back in a few seconds)"
+
     async def cmd_tts(args: str, ctx: CommandContext) -> str:
         """Toggle TTS output for this session. Usage: /tts [on|off|status]"""
         if ctx.session is None:
@@ -584,6 +597,7 @@ def register_builtin_commands(registry: CommandRegistry, gateway: Any) -> None:
     registry.register("export",  cmd_export,  "Export session history to a file",            usage="/export [path]")
     registry.register("verbose", cmd_verbose, "Toggle verbose output for this session",      usage="/verbose [on|off]")
     registry.register("approve", cmd_approve, "Manage exec approval allowlist",              usage="/approve [list|add|remove]")
+    registry.register("reboot",  cmd_reboot,  "Hard-restart the process (picks up code changes)", usage="/reboot")
     registry.register("tts",     cmd_tts,     "Toggle TTS output",                           usage="/tts [on|off|status]")
     registry.register("job",     cmd_job,     "Manage scheduled jobs",                       usage="/job [list|add|del|run|help]")
     registry.register("skills",  cmd_skills,  "List available skills",                        usage="/skills")

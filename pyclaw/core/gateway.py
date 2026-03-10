@@ -1499,6 +1499,50 @@ class Gateway:
                 "new": {"default": new_cc.default, "models": new_cc.models},
             }
 
+        # Agent config changes — update runners in-place
+        _am = getattr(self, "_agent_manager", None)
+        if _am:
+            old_agents = old_config.agents.model_dump() if old_config.agents else {}
+            new_agents = new_cfg.agents.model_dump() if new_cfg.agents else {}
+            for agent_id, new_agent_dict in new_agents.items():
+                old_agent_dict = old_agents.get(agent_id, {})
+                if old_agent_dict == new_agent_dict:
+                    continue
+                managed = _am.get_agent(agent_id)
+                if managed is None:
+                    continue
+                # Find which fields changed
+                agent_changes = {
+                    k: {"old": old_agent_dict.get(k), "new": v}
+                    for k, v in new_agent_dict.items()
+                    if old_agent_dict.get(k) != v
+                }
+                try:
+                    from pyclaw.config.schema import AgentConfig
+                    managed.config = AgentConfig(**new_agent_dict)
+                    # Recreate the base runner with the new config
+                    from pyclaw.agents.runner import AgentRunner
+                    old_runner = managed.fast_agent_runner
+                    managed.fast_agent_runner = AgentRunner(
+                        agent_name=managed.name,
+                        instruction=managed.system_prompt,
+                        model=managed.config.model or (old_runner.model if old_runner else "sonnet"),
+                        temperature=managed.config.temperature,
+                        max_tokens=managed.config.max_tokens,
+                        servers=old_runner.servers if old_runner else None,
+                        tools_config=old_runner.tools_config if old_runner else None,
+                        show_thinking=getattr(managed.config, "show_thinking", False),
+                        api_key=old_runner.api_key if old_runner else None,
+                    )
+                    # Clear per-session runners so they pick up the new base
+                    managed._session_runners.clear()
+                    changed[f"agents.{agent_id}"] = agent_changes
+                    self._logger.info(
+                        f"Agent '{agent_id}' runner recreated: {list(agent_changes.keys())}"
+                    )
+                except Exception as _ae:
+                    self._logger.error(f"Failed to reload agent '{agent_id}': {_ae}")
+
         if changed:
             self._logger.info(f"Config reload applied changes: {list(changed.keys())}")
         else:
