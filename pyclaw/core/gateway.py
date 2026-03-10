@@ -957,7 +957,21 @@ class Gateway:
 
         from pyclaw.agents.runner import strip_thinking_tags, format_thinking_for_telegram
         import re as _re
-        _THINK_RE = _re.compile(r"<(thinking|think)>.*?</(thinking|think)>", _re.DOTALL | _re.IGNORECASE)
+        _OPEN_THINK = _re.compile(r"<(thinking|think)>", _re.IGNORECASE)
+
+        def _live_display(buf: str) -> str:
+            """Return text safe to show mid-stream.
+
+            Strips complete <think>…</think> blocks, then hides everything
+            from any still-open <think> tag to the end of the buffer (so
+            partial thinking blocks never flash onscreen).
+            """
+            stripped = strip_thinking_tags(buf)
+            # If an opening tag remains, the block isn't closed yet — hide it
+            m = _OPEN_THINK.search(stripped)
+            if m:
+                return stripped[: m.start()].strip()
+            return stripped
 
         # ── stream loop ───────────────────────────────────────────────────
         session_key = f"telegram:{user_id}"
@@ -974,8 +988,7 @@ class Gateway:
                 raw_buffer += chunk_text
                 now = time.monotonic()
 
-                # Live display: strip any <think> blocks from what we show
-                display = strip_thinking_tags(raw_buffer)
+                display = _live_display(raw_buffer)
                 if not display:
                     continue
 

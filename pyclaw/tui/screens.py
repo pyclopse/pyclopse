@@ -488,9 +488,18 @@ class ChatScreen(Screen):
 
                 # Accumulate full response text so we can re-render in place
                 raw_buffer = ""
+                accumulated_text = ""
                 prev_line_count = 0
 
-                from pyclaw.agents.runner import strip_thinking_tags
+                from pyclaw.agents.runner import strip_thinking_tags, _THINKING_RE
+                import re as _re
+                _OPEN_THINK = _re.compile(r"<(thinking|think)>", _re.IGNORECASE)
+
+                def _tui_display(buf: str) -> str:
+                    """Strip complete think blocks; hide partial ones mid-stream."""
+                    stripped = strip_thinking_tags(buf)
+                    m = _OPEN_THINK.search(stripped)
+                    return stripped[: m.start()].strip() if m else stripped
 
                 async for chunk_text, is_reasoning in agent.fast_agent_runner.run_stream(message):
                     chunk_count += 1
@@ -498,23 +507,17 @@ class ChatScreen(Screen):
                         continue
                     raw_buffer += chunk_text
 
-                    # Build display: use is_reasoning flag when available,
-                    # otherwise fall back to stripping <think> tags from the buffer.
                     if is_reasoning:
+                        # Provider gave us a clean reasoning chunk
                         if self._show_thinking:
                             safe = chunk_text.replace("[", "\\[")
-                            accumulated_text = (accumulated_text or "") + f"[dim]{safe}[/dim]"
-                        # else: skip reasoning content
+                            accumulated_text += f"[dim]{safe}[/dim]"
                     else:
-                        # Strip any <think> blocks that may be embedded in content
-                        # (generic providers like MiniMax don't set is_reasoning)
-                        clean = strip_thinking_tags(raw_buffer)
+                        # Generic provider: <think> tags may be embedded in content
+                        clean = _tui_display(raw_buffer)
                         if self._show_thinking:
-                            # Replace the visible portion with dim thinking + clean response
-                            from pyclaw.agents.runner import _THINKING_RE
-                            thinking_parts = _THINKING_RE.findall(raw_buffer)
                             thinking_display = ""
-                            for _, t in thinking_parts:
+                            for _, t in _THINKING_RE.findall(raw_buffer):
                                 safe_t = t.strip().replace("[", "\\[")
                                 thinking_display += f"[dim]{safe_t}[/dim]\n\n"
                             accumulated_text = thinking_display + clean
