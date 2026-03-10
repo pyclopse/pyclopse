@@ -1013,9 +1013,6 @@ class Gateway:
                         pass  # "message is not modified" etc. are harmless
 
             # ── final edit ────────────────────────────────────────────────
-            self._logger.debug(
-                f"Stream final raw_buffer (len={len(raw_buffer)}):\n{repr(raw_buffer[:500])}"
-            )
             if show_thinking:
                 combined = format_thinking_for_telegram(raw_buffer)
                 if combined:
@@ -1050,6 +1047,17 @@ class Gateway:
                 try:
                     await self._telegram_bot.send_message(
                         chat_id=chat_id, **send_kwargs
+                    )
+                except Exception:
+                    pass
+
+            # Debug: send raw buffer so we can see exactly what came from the model
+            if getattr(getattr(self, "config", None), "gateway", None) and self.config.gateway.debug:
+                try:
+                    raw_preview = raw_buffer[:2000]
+                    await self._telegram_bot.send_message(
+                        chat_id=chat_id,
+                        text=f"🔍 raw_buffer:\n{raw_preview}",
                     )
                 except Exception:
                     pass
