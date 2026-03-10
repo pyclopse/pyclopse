@@ -1013,6 +1013,9 @@ class Gateway:
                         pass  # "message is not modified" etc. are harmless
 
             # ── final edit ────────────────────────────────────────────────
+            self._logger.debug(
+                f"Stream final raw_buffer (len={len(raw_buffer)}):\n{repr(raw_buffer[:500])}"
+            )
             if show_thinking:
                 combined = format_thinking_for_telegram(raw_buffer)
                 if combined:
