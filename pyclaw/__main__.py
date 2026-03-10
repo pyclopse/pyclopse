@@ -1,10 +1,11 @@
 """CLI entry point for pyclaw.
 
 Usage:
-    python -m pyclaw              # Run gateway
+    python -m pyclaw              # Run gateway + HTTP API
     python -m pyclaw --help      # Show help
     python -m pyclaw init        # Create default config
     python -m pyclaw validate     # Validate config
+    python -m pyclaw run --tui   # Run with TUI
 """
 
 import argparse
@@ -23,55 +24,60 @@ def create_parser() -> argparse.ArgumentParser:
         description="pyclaw - Python Gateway",
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
-    
+
     parser.add_argument(
-        "--version", "-v",
+        "--version",
+        "-v",
         action="version",
         version=f"pyclaw {__version__}",
     )
-    
+
     parser.add_argument(
-        "--config", "-c",
+        "--config",
+        "-c",
         type=str,
         help="Path to config file",
     )
-    
+
     parser.add_argument(
         "--debug",
         action="store_true",
         help="Enable debug mode",
     )
-    
+
     subparsers = parser.add_subparsers(dest="command", help="Commands")
-    
+
     # init command
     init_parser = subparsers.add_parser(
         "init",
         help="Create default configuration file",
     )
     init_parser.add_argument(
-        "--path", "-p",
+        "--path",
+        "-p",
         type=str,
         default="~/.pyclaw/config.yaml",
         help="Path where to create config",
     )
     init_parser.add_argument(
-        "--force", "-f",
+        "--force",
+        "-f",
         action="store_true",
         help="Overwrite existing config",
     )
-    
+
     # validate command
     validate_parser = subparsers.add_parser(
         "validate",
         help="Validate configuration file",
     )
     validate_parser.add_argument(
-        "--config", "-c",
+        "--config",
+        "-c",
         type=str,
         help="Path to config file",
     )
-    
+
     # run command
     run_parser = subparsers.add_parser(
         "run",
@@ -90,7 +96,8 @@ def create_parser() -> argparse.ArgumentParser:
         help="Port to bind to (overrides config)",
     )
     run_parser.add_argument(
-        "--tui", "-t",
+        "--tui",
+        "-t",
         action="store_true",
         help="Launch the TUI instead of API server",
     )
@@ -99,72 +106,136 @@ def create_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="Enable debug mode",
     )
-    
+
     return parser
 
 
-async def run_gateway(config_path: str = None, host: str = None, port: int = None, debug: bool = False):
-    """Run the gateway server."""
+def _register_skill_providers(mcp_server, config) -> None:
+    """Mount each skill directory as a FastMCP SkillProvider (skill:// resources)."""
+    try:
+        from pathlib import Path
+        from fastmcp.server.providers.skills import SkillProvider
+        from pyclaw.skills.registry import get_skill_dirs
+
+        extra_dirs = list(config.gateway.skills_dirs) if config.gateway.skills_dirs else []
+        skill_dirs = get_skill_dirs(extra_dirs=extra_dirs)
+        registered = 0
+        for skills_root in skill_dirs:
+            for entry in sorted(skills_root.iterdir()):
+                if entry.is_dir() and (entry / "SKILL.md").exists():
+                    try:
+                        mcp_server.add_provider(SkillProvider(entry))
+                        registered += 1
+                    except Exception as e:
+                        print(f"  [warn] Could not register skill {entry.name}: {e}")
+        if registered:
+            print(f"Registered {registered} skill(s) as MCP resources")
+    except Exception as e:
+        print(f"  [warn] Skill provider registration skipped: {e}")
+
+
+async def run_gateway(
+    config_path: str = None, host: str = None, port: int = None, debug: bool = False
+):
+    """Run the gateway + HTTP API server + pyclaw MCP server."""
     from .config import ConfigLoader
     from .core.gateway import Gateway
-    
+    from .api.app import create_app
+    import uvicorn
+
     loader = ConfigLoader(config_path)
     config = loader.load()
-    
-    # Override host/port if provided
-    if host:
-        config.gateway.host = host
-    if port:
-        config.gateway.port = port
-    
+
+    gw_host = host or config.gateway.host
+    gw_port = port or config.gateway.port
+    mcp_port = config.gateway.mcp_port
+
     print(f"pyclaw v{__version__}")
-    print(f"Starting gateway on {config.gateway.host}:{config.gateway.port}")
-    print(f"Debug: {debug}")
-    
-    # Create and start gateway
+    print(f"Starting gateway + HTTP API on {gw_host}:{gw_port}")
+    print(f"Starting pyclaw MCP server on {gw_host}:{mcp_port}")
+
     gateway = Gateway(config_path)
-    await gateway.start()
-    
-    print("\nGateway is running!")
+    await gateway.initialize()
+
+    # Start pulse runner
+    if gateway.pulse_runner:
+        await gateway.pulse_runner.start()
+    gateway._is_running = True
+
+    # Start Telegram polling
+    if gateway._telegram_bot:
+        gateway._telegram_polling_task = asyncio.create_task(gateway._telegram_poll())
+
+    # Build FastAPI app wired to this gateway instance
+    api_app = create_app(gateway)
+
+    print(f"HTTP API docs: http://{gw_host}:{gw_port}/docs")
+    print(f"MCP endpoint:  http://{gw_host}:{mcp_port}/mcp")
     print("Press Ctrl+C to stop...")
-    
-    # Keep running until interrupted
+
+    # Gateway API server
+    uv_config = uvicorn.Config(
+        api_app,
+        host=gw_host,
+        port=gw_port,
+        log_level="warning",
+    )
+    api_server = uvicorn.Server(uv_config)
+
+    # pyclaw MCP HTTP server (standalone fastmcp, streamable-http transport)
+    from .tools.server import mcp as pyclaw_mcp
+    _register_skill_providers(pyclaw_mcp, config)
+    mcp_app = pyclaw_mcp.http_app(path="/mcp", stateless_http=True)
+    mcp_uv_config = uvicorn.Config(
+        mcp_app,
+        host=gw_host,
+        port=mcp_port,
+        log_level="warning",
+    )
+    mcp_server = uvicorn.Server(mcp_uv_config)
+
     try:
-        while gateway._is_running:
-            await asyncio.sleep(1)
-    except KeyboardInterrupt:
-        print("\nShutting down...")
+        await asyncio.gather(api_server.serve(), mcp_server.serve())
+    except (KeyboardInterrupt, asyncio.CancelledError):
+        pass
+    finally:
         await gateway.stop()
 
 
-async def run_gateway_with_tui(config_path: str = None, host: str = None, port: int = None, debug: bool = False):
+async def run_gateway_with_tui(
+    config_path: str = None, host: str = None, port: int = None, debug: bool = False
+):
     """Run the gateway with TUI."""
     from .config import ConfigLoader
     from .core.gateway import Gateway
-    
+
     loader = ConfigLoader(config_path)
     config = loader.load()
-    
-    # Override host/port if provided
-    if host:
-        config.gateway.host = host
-    if port:
-        config.gateway.port = port
-    
+
     print(f"pyclaw v{__version__}")
-    print(f"Starting gateway + TUI...")
-    
+    print("Starting gateway + TUI...")
+
     # Create gateway (don't start API server, just initialize core)
     gateway = Gateway(config_path)
     await gateway.initialize()
-    
+
+    # Start pulse runner without entering the blocking run-loop;
+    # the TUI event-loop drives execution instead.
+    if gateway.pulse_runner:
+        await gateway.pulse_runner.start()
+    gateway._is_running = True
+
+    # Start Telegram polling (same as non-TUI mode)
+    if gateway._telegram_bot:
+        gateway._telegram_polling_task = asyncio.create_task(gateway._telegram_poll())
+
     # Run TUI with graceful shutdown handling
     try:
         from .tui.app import run_tui
         await run_tui(gateway)
     except KeyboardInterrupt:
         print("\nCtrl+C received, shutting down...")
-    
+
     # Cleanup (with error handling)
     try:
         await gateway.stop()
@@ -175,12 +246,11 @@ async def run_gateway_with_tui(config_path: str = None, host: str = None, port: 
 def cmd_init(args):
     """Handle init command."""
     path = Path(args.path).expanduser()
-    
+
     if path.exists() and not args.force:
         print(f"Config already exists at {path}. Use --force to overwrite.")
         sys.exit(1)
-    
-    # Create default config
+
     create_default_config(path)
     print(f"Created default config at {path}")
 
@@ -188,10 +258,10 @@ def cmd_init(args):
 def cmd_validate(args):
     """Handle validate command."""
     config_path = args.config or "~/.pyclaw/config.yaml"
-    
+
     try:
         config = load_config(config_path)
-        print(f"✓ Configuration is valid")
+        print("✓ Configuration is valid")
         print(f"  Version: {config.version}")
         print(f"  Gateway: {config.gateway.host}:{config.gateway.port}")
         print(f"  Security mode: {config.security.exec_approvals.mode}")
@@ -207,15 +277,15 @@ def main():
     """Main entry point."""
     parser = create_parser()
     args = parser.parse_args()
-    
+
     if args.command == "init":
         cmd_init(args)
         return
-    
+
     if args.command == "validate":
         cmd_validate(args)
         return
-    
+
     if args.command == "run":
         try:
             if args.tui:
@@ -225,12 +295,15 @@ def main():
         except KeyboardInterrupt:
             print("\nShutting down...")
         return
-    
-    # Default: run gateway
+
+    # Default: run gateway + HTTP API
     if args.command is None:
-        asyncio.run(run_gateway(args.config, debug=args.debug))
+        try:
+            asyncio.run(run_gateway(args.config, debug=args.debug))
+        except KeyboardInterrupt:
+            print("\nShutting down...")
         return
-    
+
     parser.print_help()
 
 

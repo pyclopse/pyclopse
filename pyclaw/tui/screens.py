@@ -75,10 +75,13 @@ class ChatScreen(Screen):
                 # Chat history (TextArea for text selection support)
                 yield RichLog(id="chat-history", auto_scroll=True, markup=True)
 
+                # Status bar: shows current agent + processing indicator
+                yield Static("", id="status-bar", classes="status-bar")
+
                 # Input area
                 with Horizontal(id="input-area"):
                     yield Input(
-                        placeholder="Type your message...",
+                        placeholder="Type a message or /command...",
                         id="chat-input",
                         validate_on=["submitted"],
                     )
@@ -93,6 +96,8 @@ class ChatScreen(Screen):
         self._chat_input = self.query_one("#chat-input", Input)
         self._chat_history = self.query_one("#chat-history", RichLog)
         self._agent_list = self.query_one("#agent-list", AgentListWidget)
+        self._status_bar = self.query_one("#status-bar", Static)
+        self._is_processing = False
 
         debug_write(f"on_mount: gateway={self.gateway}, app_ref={self.app_ref}")
 
@@ -102,9 +107,14 @@ class ChatScreen(Screen):
                 f"on_mount: calling _load_agents, agent_manager={getattr(self.gateway, 'agent_manager', 'NONE')}"
             )
             self._load_agents()
+
+            # Start timer to check for pulse results and refresh status bar
+            self._pulse_checker = self.set_interval(2, self._check_pulse_result)
+            self._status_updater = self.set_interval(5, self._update_status_bar)
         else:
             debug_write("on_mount: No gateway!")
 
+        self._update_status_bar()
         # Focus input
         self._chat_input.focus()
 
@@ -142,6 +152,49 @@ class ChatScreen(Screen):
             debug_write(
                 f"_load_agents: gateway={self.gateway}, agent_manager={getattr(self.gateway, 'agent_manager', 'NONE') if self.gateway else 'N/A'}"
             )
+
+    def _check_pulse_result(self) -> None:
+        """Check for pulse results and display in chat."""
+        if self.gateway and hasattr(self.gateway, 'last_pulse_result'):
+            result = self.gateway.last_pulse_result
+            if result:
+                self._append_chat("")
+                self._append_chat(f"[yellow]Pulse:[/yellow] {result}")
+                self.gateway.clear_pulse_result()
+
+    def _update_status_bar(self) -> None:
+        """Refresh the status bar with current agent, uptime, and message count."""
+        if not hasattr(self, "_status_bar"):
+            return
+
+        parts: List[str] = []
+
+        # Current agent
+        agent_name = self._current_agent_id or "no agent"
+        if self.gateway and self._current_agent_id:
+            agent = getattr(self.gateway, "_agent_manager", None)
+            if agent and hasattr(agent, "agents"):
+                a = agent.agents.get(self._current_agent_id)
+                if a and hasattr(a, "name"):
+                    agent_name = a.name
+        parts.append(f"[bold]Agent:[/bold] {agent_name}")
+
+        # Message count + uptime from usage counters
+        if self.gateway and hasattr(self.gateway, "_usage"):
+            usage = self.gateway._usage
+            total = usage.get("messages_total", 0)
+            parts.append(f"[bold]Msgs:[/bold] {total}")
+            import time as _time
+            uptime = int(_time.time() - usage.get("started_at", _time.time()))
+            h, rem = divmod(uptime, 3600)
+            m, s = divmod(rem, 60)
+            parts.append(f"[bold]Up:[/bold] {h:02d}:{m:02d}:{s:02d}")
+
+        # Processing indicator
+        if getattr(self, "_is_processing", False):
+            parts.append("[yellow]Processing...[/yellow]")
+
+        self._status_bar.update("  ".join(parts))
 
     def _append_chat(self, text: str) -> None:
         """Append text to chat history (RichLog with Rich markup support)."""
@@ -297,7 +350,7 @@ class ChatScreen(Screen):
                 self._send_message(message)
 
     def _send_message(self, message: str) -> None:
-        """Send a message."""
+        """Send a message or dispatch a slash command."""
         debug_write(
             f"_send_message: gateway={self.gateway}, current_agent_id={self._current_agent_id}"
         )
@@ -305,12 +358,17 @@ class ChatScreen(Screen):
         if not message.strip():
             return
 
+        # Clear input
+        self._chat_input.value = ""
+
+        # Slash command — route through CommandRegistry instead of agent
+        if message.startswith("/") and self.gateway:
+            self._dispatch_command(message)
+            return
+
         # Add user message to history (blank line before for spacing)
         self._append_chat("")
         self._append_chat(f"[blue]You:[/blue] {message}")
-
-        # Clear input
-        self._chat_input.value = ""
 
         # If gateway available, process message
         if self.gateway and self._current_agent_id:
@@ -328,9 +386,44 @@ class ChatScreen(Screen):
                 f"[yellow]PyClaw:[/yellow] Gateway not connected. Start with --tui flag."
             )
 
+    @work(exclusive=False)
+    async def _dispatch_command(self, message: str) -> None:
+        """Dispatch a slash command via the gateway's CommandRegistry."""
+        self._append_chat("")
+        self._append_chat(f"[blue]You:[/blue] {message}")
+        try:
+            from pyclaw.core.commands import CommandContext
+            # Build a minimal context — no session needed for most commands
+            session = None
+            if self.gateway.session_manager and self._current_agent_id:
+                try:
+                    session = await self.gateway.session_manager.get_or_create_session(
+                        agent_id=self._current_agent_id,
+                        channel="tui",
+                        user_id="tui_user",
+                    )
+                except Exception:
+                    pass
+            ctx = CommandContext(
+                gateway=self.gateway,
+                session=session,
+                sender_id="tui_user",
+                channel="tui",
+            )
+            result = await self.gateway._command_registry.dispatch(message, ctx)
+            self._append_chat("")
+            if result is not None:
+                self._append_chat(f"[cyan]Command:[/cyan] {result}")
+        except Exception as e:
+            debug_write(f"_dispatch_command error: {e}")
+            self._append_chat("")
+            self._append_chat(f"[red]Command error:[/red] {str(e)}")
+
     @work(exclusive=True)
     async def _process_message(self, message: str) -> None:
         """Process message through gateway."""
+        self._is_processing = True
+        self._update_status_bar()
         try:
             # Get or create session
             session = None
@@ -429,6 +522,9 @@ class ChatScreen(Screen):
             debug_write(traceback.format_exc())
             self._append_chat("")
             self._append_chat(f"[red]Error:[/red] {str(e)}")
+        finally:
+            self._is_processing = False
+            self._update_status_bar()
 
     def action_clear_input(self) -> None:
         """Clear the input field."""

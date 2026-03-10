@@ -1,9 +1,52 @@
-# Example pyclaw configuration with nodes, browser, and sandbox settings
+# Example pyclaw configuration
 # Copy to ~/.pyclaw/config.yaml and customize
+#
+# Inline secret syntax: use ${source:id} anywhere a string is expected.
+#   ${env:MY_VAR}          — read from environment variable MY_VAR
+#   ${keychain:My Account} — read from system keychain (service=pyclaw)
+#   ${file:~/.secret}      — read from a file (trimmed)
+#   ${SOME_VAR}            — legacy bare form, reads env var SOME_VAR
 
 version: "1.0"
 
-# Gateway server configuration
+# ─────────────────────────────────────────────
+# Secrets providers (optional, used by inline syntax above)
+# ─────────────────────────────────────────────
+# secrets:
+#   providers:
+#     keychain:
+#       source: keychain
+#       service: pyclaw      # macOS Keychain service name (default: pyclaw)
+#       backend: auto        # auto | keyring | macos
+#
+#     vault:
+#       source: hashicorp_vault
+#       addr: "http://localhost:8200"
+#       token: "${env:VAULT_TOKEN}"
+#       mount: "secret"
+
+# ─────────────────────────────────────────────
+# Per-model concurrency limits
+# ─────────────────────────────────────────────
+concurrency:
+  default: 3
+  models:
+    MiniMax-M2.5: 3
+    passthrough: 100
+    gpt-4: 5
+    claude-sonnet-4-5: 5
+
+# ─────────────────────────────────────────────
+# Session management
+# ─────────────────────────────────────────────
+sessions:
+  persist_dir: "~/.pyclaw/sessions"
+  ttl_hours: 24              # sessions idle > this many hours are reaped
+  reaper_interval_minutes: 60
+
+# ─────────────────────────────────────────────
+# Gateway server
+# ─────────────────────────────────────────────
 gateway:
   host: "0.0.0.0"
   port: 8080
@@ -12,30 +55,22 @@ gateway:
   cors_origins:
     - "*"
 
-# Node API configuration for peer-to-peer communication
-nodes:
-  enabled: true
-  node_id: "pyclaw-main"  # Unique ID for this instance
-  requireApproval: true  # Require manual approval for new nodes
-  # secretKey: "${NODE_SECRET}"  # Optional shared secret
-  whitelist:  # Only allow these node IDs
-    - node_id_1
-    - node_id_2
-
-# Security configuration
+# ─────────────────────────────────────────────
+# Security
+# ─────────────────────────────────────────────
 security:
   execApprovals:
-    mode: "allowlist"  # allowlist, denylist, all, none
+    mode: "allowlist"   # allowlist | denylist | all | none
     safe_bins:
       - /bin/ls
       - /bin/cat
       - /bin/echo
     always_approve:
       - localhost
-  
+
   sandbox:
     enabled: true
-    type: "docker"  # docker, none
+    type: "docker"      # docker | none
     docker:
       image: "pyclaw-sandbox:latest"
       network: "none"
@@ -45,36 +80,79 @@ security:
       readOnly: true
       tmpSize: 100
       allowedVolumes: []
-  
+
   audit:
     enabled: true
     log_file: "~/.pyclaw/logs/audit.log"
     retention_days: 90
 
-# Browser automation (Playwright)
-browser:
-  enabled: false
-  headless: true
-  slow_mo: 0
-  timeout: 30000
-  viewport_width: 1280
-  viewport_height: 720
+  # Global denylist — always blocked regardless of per-channel allowedUsers
+  # deniedUsers: [123456789]
 
-# Memory configuration
+# ─────────────────────────────────────────────
+# Memory (per-agent markdown journals + optional vector search)
+# ─────────────────────────────────────────────
 memory:
-  backend: "clawvault"
-  clawvault:
-    enabled: true
-    vault_path: "~/.claw/vault"
+  backend: "file"         # file backend stores daily journals in ~/.pyclaw/agents/
+  # persist_dir: "~/.pyclaw/agents"
 
-# Providers configuration
+  # Vector search via embeddings (optional).
+  # When enabled, memory_search ranks results by cosine similarity.
+  # Run `memory_reindex` MCP tool after enabling to index existing entries.
+  embedding:
+    enabled: false
+    provider: "openai"    # openai | gemini | local
+    model: ""             # default: text-embedding-3-small (openai), models/text-embedding-004 (gemini)
+    apiKey: "${env:OPENAI_API_KEY}"
+    # baseUrl: "http://localhost:11434"   # for local / Ollama
+    # dimensions: 0                       # 0 = provider default
+
+  # Examples for other providers:
+  # embedding:
+  #   enabled: true
+  #   provider: "gemini"
+  #   apiKey: "${keychain:Gemini API Key}"
+  #
+  # embedding:
+  #   enabled: true
+  #   provider: "local"
+  #   model: "nomic-embed-text"
+  #   baseUrl: "http://localhost:11434"
+
+# ─────────────────────────────────────────────
+# Hooks (event-driven scripts)
+# ─────────────────────────────────────────────
+# hooks:
+#   bundled:
+#     session-memory:
+#       enabled: true     # save session history to memory on command:reset
+#     boot-md:
+#       enabled: false    # inject MEMORY.md into agent context at gateway:startup
+#   custom:
+#     - event: "message:received"
+#       handler: "~/.pyclaw/hooks/my_hook.py"
+#       priority: 10
+#       description: "My custom hook"
+
+# ─────────────────────────────────────────────
+# Providers (LLM API keys)
+# ─────────────────────────────────────────────
 providers:
   openai:
     enabled: true
-    api_key: "${OPENAI_API_KEY}"
+    api_key: "${env:OPENAI_API_KEY}"
     defaultModel: "gpt-4"
 
-# Agents configuration
+  # Use inline secret syntax for ergonomic key referencing:
+  minimax:
+    enabled: true
+    api_key: "${keychain:minimax-api-key}"   # reads from macOS Keychain
+    defaultModel: "MiniMax-M2.5"
+    base_url: "https://api.minimax.io/v1"
+
+# ─────────────────────────────────────────────
+# Agents
+# ─────────────────────────────────────────────
 agents:
   default:
     name: "Assistant"
@@ -85,26 +163,82 @@ agents:
     heartbeat:
       enabled: true
       every: "30m"
+      prompt: "Pulse check"
+      activeHours:
+        start: "00:00"
+        end: "23:59"
+    # show_thinking: false   # strip <thinking>…</thinking> blocks before sending to user
+    # typing_mode: "none"    # "typing" sends channel typing indicator while processing
 
-# Jobs (cron) configuration
+  minimax:
+    name: "MiniMax"
+    model: "generic.MiniMax-M2.5"
+    maxTokens: 4096
+    temperature: 0.7
+    system_prompt: "You are a helpful assistant."
+    useFastagent: true
+    provider:
+      type: "minimax"
+      model: "MiniMax-M2.5"
+    heartbeat:
+      enabled: false
+
+# ─────────────────────────────────────────────
+# Jobs (cron)
+# ─────────────────────────────────────────────
 jobs:
   enabled: true
   persist_file: "~/.pyclaw/jobs.json"
 
-# Channels configuration
+# ─────────────────────────────────────────────
+# Channels
+# ─────────────────────────────────────────────
 channels:
   telegram:
     enabled: false
-    bot_token: "${TELEGRAM_BOT_TOKEN}"
-    allowed_users: []
+    botToken: "${env:TELEGRAM_BOT_TOKEN}"
+    allowedUsers: []
+    # deniedUsers: []           # always block these user IDs
+    # typingIndicator: true     # send "typing…" while agent processes
+    # topics:                   # forum topic name → topic ID (group chats with topics)
+    #   general: 0
+    #   alerts: 42
 
-# Plugins configuration
+  # slack:
+  #   enabled: false
+  #   botToken: "${keychain:Slack Bot Token}"
+  #   signingSecret: "${env:SLACK_SIGNING_SECRET}"
+  #   threading: true            # reply in-thread when message is in a Slack thread
+  #   allowedUsers: []           # Slack user IDs (strings) allowed to use the bot
+  #   deniedUsers: []
+  #   pulseChannel: "C1234567890"  # Slack channel ID to receive pulse/heartbeat messages
+
+# ─────────────────────────────────────────────
+# Channel plugins (third-party / custom channel adapters)
+# ─────────────────────────────────────────────
 plugins:
-  enabled: true
-  auto_enable: true
-  entries: {}
+  # Load channel plugins by Python import spec "module:ClassName"
+  # Plugins can also be discovered via entry points group "pyclaw.channels"
+  channels: []
+  # channels:
+  #   - "mypackage.channels:DiscordPlugin"
+  #   - "mypackage.channels:WhatsAppPlugin"
 
-# TUI configuration
+# ─────────────────────────────────────────────
+# TUI
+# ─────────────────────────────────────────────
 tui:
   enabled: true
   theme: "dark"
+
+# ─────────────────────────────────────────────
+# Node API (peer-to-peer, advanced)
+# ─────────────────────────────────────────────
+# nodes:
+#   enabled: true
+#   node_id: "pyclaw-main"
+#   requireApproval: true
+#   # secretKey: "${env:NODE_SECRET}"
+#   whitelist:
+#     - node_id_1
+#     - node_id_2

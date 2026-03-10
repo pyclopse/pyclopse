@@ -13,10 +13,13 @@ OpenClaw loads these bootstrap files (in order):
 These are added to the system prompt under "# Project Context".
 """
 
+import logging
 import os
 from pathlib import Path
 from typing import Optional
 from datetime import datetime
+
+logger = logging.getLogger(__name__)
 
 
 # Files to read for system prompt - pyclaw names with OpenClaw aliases
@@ -76,6 +79,7 @@ def build_system_prompt(
     default_prompt: Optional[str] = None,
     include_memory: bool = True,
     is_subagent: bool = False,
+    extra_skill_dirs: Optional[list] = None,
 ) -> str:
     """
     Build system prompt from agent files - matching OpenClaw's approach.
@@ -160,6 +164,21 @@ def build_system_prompt(
             "",
         ])
     
+    # Append lean <available_skills> block (skipped for subagents to keep prompts small)
+    if not is_subagent:
+        try:
+            from pyclaw.skills.registry import discover_skills, format_for_prompt
+            skills = discover_skills(
+                agent_name=agent_name,
+                config_dir=config_dir,
+                extra_dirs=extra_skill_dirs,
+            )
+            if skills:
+                lines.append("")
+                lines.append(format_for_prompt(skills))
+        except Exception as e:
+            logger.debug(f"Skill injection skipped: {e}")
+
     return "\n".join(lines)
 
 

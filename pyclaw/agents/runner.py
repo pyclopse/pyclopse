@@ -1,14 +1,38 @@
 """Agent runner using FastAgent."""
 import asyncio
 import logging
+import os
+import re
+from pathlib import Path
 from typing import Any, AsyncIterator, Dict, List, Optional
+
+# Regex to strip <thinking>...</thinking> blocks (case-insensitive, dotall)
+_THINKING_RE = re.compile(r"<thinking>.*?</thinking>", re.DOTALL | re.IGNORECASE)
+
+
+def strip_thinking_tags(text: str) -> str:
+    """Remove <thinking>...</thinking> blocks from *text* and normalise whitespace."""
+    stripped = _THINKING_RE.sub("", text)
+    # Collapse more than two consecutive newlines left behind by removals
+    stripped = re.sub(r"\n{3,}", "\n\n", stripped)
+    return stripped.strip()
 
 logger = logging.getLogger(__name__)
 
+# Default MCP servers every agent gets (can be extended per-agent)
+_DEFAULT_SERVERS: List[str] = []
+
+# All available server names (defined in fastagent.config.yaml)
+ALL_SERVERS = ["pyclaw", "fetch", "time", "filesystem"]
+
 
 class AgentRunner:
-    """Runner for FastAgent-based execution."""
-    
+    """
+    Runner for FastAgent-based execution.
+
+    Wires MCP servers from agent config so tools are available to the agent.
+    """
+
     def __init__(
         self,
         agent_name: str,
@@ -16,56 +40,84 @@ class AgentRunner:
         model: str = "sonnet",
         temperature: float = 0.7,
         max_tokens: Optional[int] = None,
-        servers: Optional[List[Dict[str, Any]]] = None,
+        servers: Optional[List[str]] = None,
+        tools_config: Optional[Dict[str, Any]] = None,
+        show_thinking: bool = False,
+        api_key: Optional[str] = None,
+        owner_name: Optional[str] = None,
     ):
         self.agent_name = agent_name
         self.instruction = instruction
         self.model = model
         self.temperature = temperature
         self.max_tokens = max_tokens
-        self.servers = servers or []
+        # servers = list of MCP server names from fastagent.config.yaml
+        self.servers: List[str] = servers or list(_DEFAULT_SERVERS)
+        self.tools_config = tools_config or {}
+        # When False, <thinking>…</thinking> blocks are stripped before returning
+        self.show_thinking = show_thinking
+        # Optional API key (e.g. from pyclaw.yaml providers.minimax.api_key)
+        self.api_key = api_key
+        # The agent name sent as X-Agent-Name header to the pyclaw MCP server.
+        # Defaults to agent_name but session runners override to the base agent name.
+        self.owner_name: str = owner_name or agent_name
         self._app: Optional[Any] = None
         self._message_history: List[Dict[str, str]] = []
-    
+
     async def initialize(self):
-        """Initialize the FastAgent app."""
+        """Initialize the FastAgent app with configured MCP servers."""
         if self._app is not None:
             return
-        
-        import os
+
         # Set up MiniMax generic provider if needed
-        if 'generic.' in self.model:
-            # Get API key from environment or keychain
-            api_key = os.environ.get('MINIMAX_API_KEY')
+        if "generic." in self.model:
+            # Priority: explicit api_key arg → MINIMAX_API_KEY env → keychain
+            api_key = self.api_key or os.environ.get("MINIMAX_API_KEY")
             if not api_key:
                 try:
                     import subprocess
                     api_key = subprocess.check_output(
-                        ["security", "find-generic-password", "-s", "pyclaw", "-a", "minimax-api-key", "-w"],
-                        text=True
+                        ["security", "find-generic-password", "-s", "pyclaw",
+                         "-a", "minimax-api-key", "-w"],
+                        text=True,
                     ).strip()
-                except:
+                except Exception:
                     pass
             if api_key:
-                os.environ['GENERIC_API_KEY'] = api_key
-            os.environ['GENERIC_BASE_URL'] = 'https://api.minimax.io/v1'
-            
+                os.environ["GENERIC_API_KEY"] = api_key
+            os.environ["GENERIC_BASE_URL"] = "https://api.minimax.io/v1"
+
+        # Ensure fastagent.config.yaml is findable from CWD
+        _ensure_fastagent_config()
+
         from fast_agent import FastAgent
-        
-        # Create FastAgent and run it to get the app
+
         fast = FastAgent(self.agent_name)
-        
+
+        # Inject X-Agent-Name header into the pyclaw HTTP MCP server config
+        # so the server can identify which agent is calling.
+        try:
+            pyclaw_cfg = fast.config.get("mcp", {}).get("servers", {}).get("pyclaw")
+            if pyclaw_cfg is not None and isinstance(pyclaw_cfg, dict):
+                existing = pyclaw_cfg.get("headers") or {}
+                pyclaw_cfg["headers"] = {**existing, "x-agent-name": self.owner_name}
+        except Exception as e:
+            logger.debug(f"Could not set X-Agent-Name header on pyclaw MCP server: {e}")
+
         @fast.agent(
             instruction=self.instruction,
             model=self.model,
+            servers=self.servers,
         )
         async def main():
             pass
-        
-        # Run to get the app instance
+
         async with fast.run() as app:
             self._app = app
-            logger.info(f"Initialized agent runner: {self.agent_name}")
+            logger.info(
+                f"Initialized agent runner: {self.agent_name} "
+                f"(model={self.model}, servers={self.servers})"
+            )
     
     async def run(self, prompt: str) -> str:
         """Run a single prompt through the agent.
@@ -81,10 +133,16 @@ class AgentRunner:
         
         # Add to history
         self._message_history.append({"role": "user", "content": prompt})
-        
-        # Send message via app
-        result = await self._app.send(prompt)
+
+        # Enforce per-model concurrency limit
+        from pyclaw.core.concurrency import get_manager
+        async with get_manager().acquire(self.model):
+            result = await self._app.send(prompt)
         response = str(result)
+
+        # Strip <thinking> blocks unless explicitly shown
+        if not self.show_thinking:
+            response = strip_thinking_tags(response)
         
         # Add response to history
         self._message_history.append({"role": "assistant", "content": response})
@@ -149,58 +207,40 @@ class AgentRunner:
             result = await self._app.send(prompt)
             yield str(result)
     
-    async def run_with_history(
-        self,
-        messages: List[Dict[str, str]],
-        system_prompt: Optional[str] = None,
-    ) -> str:
-        """Run with explicit message history.
-        
-        Args:
-            messages: List of messages with 'role' and 'content'
-            system_prompt: Optional system prompt to prepend
-            
-        Returns:
-            Agent response
-        """
-        if self._app is None:
-            await self.initialize()
-        
-        # Build conversation
-        for msg in messages:
-            role = msg.get("role", "user")
-            content = msg.get("content", "")
-            if role == "user":
-                await self._app.send(content)
-        
-        # Get final response
-        return self._message_history[-1]["content"] if self._message_history else ""
-    
     def get_history(self) -> List[Dict[str, str]]:
         """Get message history."""
         return self._message_history.copy()
 
 
-async def run_agent_turn(
-    agent_config: Dict[str, Any],
-    messages: List[Dict[str, str]],
-) -> str:
-    """Run a single agent turn.
-    
-    Args:
-        agent_config: Agent configuration
-        messages: List of messages
-        
-    Returns:
-        Agent response
+def _ensure_fastagent_config() -> None:
     """
-    runner = AgentRunner(
-        agent_name=agent_config.get("name", "agent"),
-        instruction=agent_config.get("instruction", ""),
-        model=agent_config.get("model", "sonnet"),
-        temperature=agent_config.get("temperature", 0.7),
-        max_tokens=agent_config.get("max_tokens"),
-        servers=agent_config.get("servers", []),
-    )
-    
-    return await runner.run_with_history(messages)
+    Make sure a fastagent.config.yaml is findable from the current directory.
+    FastAgent looks in CWD, then walks up. We also check ~/.pyclaw/.
+    """
+    cwd = Path.cwd()
+    # Already present in cwd or a parent?
+    for p in [cwd, *cwd.parents]:
+        if (p / "fastagent.config.yaml").exists():
+            return
+
+    # Try ~/.pyclaw/fastagent.config.yaml — symlink into CWD if found
+    user_cfg = Path("~/.pyclaw/fastagent.config.yaml").expanduser()
+    if user_cfg.exists():
+        target = cwd / "fastagent.config.yaml"
+        try:
+            target.symlink_to(user_cfg)
+            logger.debug(f"Symlinked fastagent.config.yaml → {user_cfg}")
+        except (FileExistsError, OSError):
+            pass
+        return
+
+    # Fall back: check the project source tree
+    src_cfg = Path(__file__).parent.parent.parent / "fastagent.config.yaml"
+    if src_cfg.exists():
+        target = cwd / "fastagent.config.yaml"
+        try:
+            target.symlink_to(src_cfg.resolve())
+        except (FileExistsError, OSError):
+            pass
+
+

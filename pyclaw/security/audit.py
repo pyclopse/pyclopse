@@ -6,7 +6,7 @@ import os
 from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any, Dict, List, Optional
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, asdict
 
 
 @dataclass
@@ -86,7 +86,7 @@ class AuditLogger:
         )
         
         # Log as JSON
-        self._logger.info(json.dumps(event.model_dump()))
+        self._logger.info(json.dumps(asdict(event)))
     
     async def log_command_execution(
         self,

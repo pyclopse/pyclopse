@@ -4,7 +4,19 @@ import os
 import yaml
 from pathlib import Path
 from typing import Optional, Union, Dict, Any
+from dotenv import load_dotenv
 from .schema import Config
+from pyclaw.secrets.manager import SecretsManager
+
+# Load .env file from common locations
+for env_path in [
+    Path.home() / ".pyclaw" / ".env",
+    Path.home() / ".env",
+    Path(".env"),
+]:
+    if env_path.exists():
+        load_dotenv(env_path)
+        break
 
 
 DEFAULT_CONFIG_PATHS = [
@@ -54,9 +66,10 @@ def find_config_file(search_paths: Optional[list] = None) -> Optional[Path]:
 
 class ConfigLoader:
     """Loads and manages pyclaw configuration."""
-    
+
     def __init__(self, config_path: Optional[Union[str, Path]] = None):
-        self.config_path = config_path
+        # Convert to Path object for consistency
+        self.config_path = expand_path(config_path) if config_path else None
         self._config: Optional[Config] = None
     
     def load(self, config_path: Optional[Union[str, Path]] = None) -> Config:
@@ -74,7 +87,11 @@ class ConfigLoader:
         
         # Load YAML
         data = load_yaml(path)
-        
+
+        # Resolve secrets before Pydantic validation
+        manager = SecretsManager(data.get("secrets", {}))
+        data = manager.resolve_raw(data)
+
         # Validate with Pydantic
         self._config = Config(**data)
         

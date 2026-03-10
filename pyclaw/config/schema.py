@@ -1,9 +1,11 @@
 """Configuration schema definitions using Pydantic."""
 
-from pydantic import BaseModel, Field, field_validator, ConfigDict
+from pydantic import BaseModel, Field, field_validator, ConfigDict, AliasChoices
 from typing import Optional, List, Dict, Any
 from enum import Enum
 import os
+
+from pyclaw.secrets.models import SecretsConfig
 
 
 class SecurityMode(str, Enum):
@@ -55,6 +57,8 @@ class SecurityConfig(BaseModel):
     )
     sandbox: SandboxConfig = Field(default_factory=SandboxConfig)
     audit: AuditConfig = Field(default_factory=AuditConfig)
+    # Global user denylist — always blocked regardless of allowed_users per channel
+    denied_users: List[int] = Field(default_factory=list, validation_alias="deniedUsers")
 
 
 class ClawVaultConfig(BaseModel):
@@ -63,17 +67,79 @@ class ClawVaultConfig(BaseModel):
     enabled: bool = True
 
 
+class FileMemoryConfig(BaseModel):
+    """
+    File-based per-agent memory backend configuration.
+
+    Each agent stores memory under its own directory::
+
+        ~/.pyclaw/agents/{agent_name}/
+            MEMORY.md        # curated notes; injected into sessions
+            memory/
+                2026-03-10.md  # daily journal written by memory tools
+    """
+    # Inject MEMORY.md content into each session's system prompt
+    inject_curated: bool = Field(
+        default=True,
+        validation_alias=AliasChoices("inject_curated", "injectCurated"),
+    )
+
+
+class EmbeddingConfig(BaseModel):
+    """
+    Embedding model configuration for vector-based memory search.
+
+    When ``enabled = True`` the memory backend indexes every stored entry and
+    uses cosine similarity at search time.  Falls back to keyword scoring when
+    disabled or when a queried key has no vector yet.
+
+    Example (OpenAI)::
+
+        memory:
+          embedding:
+            enabled: true
+            provider: openai
+            model: text-embedding-3-small
+            apiKey: ${OPENAI_API_KEY}
+
+    Example (local llama.cpp / Ollama)::
+
+        memory:
+          embedding:
+            enabled: true
+            provider: local
+            model: nomic-embed-text
+            baseUrl: http://localhost:11434
+    """
+    enabled: bool = False
+    provider: str = "openai"        # openai | gemini | local
+    model: str = ""                 # "" → provider default
+    api_key: str = Field(
+        default="",
+        validation_alias=AliasChoices("api_key", "apiKey"),
+    )
+    base_url: str = Field(
+        default="",
+        validation_alias=AliasChoices("base_url", "baseUrl"),
+    )
+    # Override embedding dimensionality (0 = use provider default)
+    dimensions: int = 0
+
+
 class MemoryConfig(BaseModel):
     """Memory configuration."""
-    backend: str = "clawvault"
+    # "file" uses the built-in markdown journal; "clawvault" uses ClawVault CLI
+    backend: str = "file"
+    file: FileMemoryConfig = Field(default_factory=FileMemoryConfig)
     clawvault: ClawVaultConfig = Field(default_factory=ClawVaultConfig)
+    embedding: EmbeddingConfig = Field(default_factory=EmbeddingConfig)
 
 
 class ProviderConfig(BaseModel):
     """Base provider configuration."""
     enabled: bool = True
-    api_key: Optional[str] = Field(default=None, validation_alias="apiKey")
-    default_model: Optional[str] = Field(default=None, validation_alias="defaultModel")
+    api_key: Optional[str] = Field(default=None, validation_alias=AliasChoices("api_key", "apiKey"))
+    default_model: Optional[str] = Field(default=None, validation_alias=AliasChoices("default_model", "defaultModel"))
 
     @field_validator("api_key", mode="before")
     @classmethod
@@ -130,28 +196,63 @@ class HeartbeatConfig(BaseModel):
 
 
 class ToolsConfig(BaseModel):
-    """Tools configuration for an agent."""
+    """
+    Tools configuration for an agent.
+
+    Examples:
+        tools:
+          profile: coding           # named profile
+          allow: [web_search]       # add on top of profile
+          deny: [bash]              # remove from profile
+
+        tools:
+          allow: [bash, read_file]  # explicit allowlist (no profile)
+
+        tools:
+          profile: full             # all tools
+    """
     enabled: bool = True
+    profile: Optional[str] = None           # minimal | coding | web | messaging | full
+    allow: List[str] = Field(default_factory=list)   # tool names or group: prefixes
+    deny: List[str] = Field(default_factory=list)
+    # Legacy field kept for backwards compat
     allowlist: List[str] = Field(default_factory=list)
 
 
 class AgentConfig(BaseModel):
     """Agent configuration."""
+    model_config = ConfigDict(extra="allow")  # Allow additional fields like use_fastagent, workflow
+
     name: str = "Assistant"
     model: str = "openai/gpt-4"
-    max_tokens: int = Field(4096, validation_alias="maxTokens")
+    max_tokens: int = Field(4096, validation_alias=AliasChoices("max_tokens", "maxTokens"))
     temperature: float = 0.7
-    system_prompt: str = Field("You are a helpful assistant.", validation_alias="systemPrompt")
+    system_prompt: str = Field("You are a helpful assistant.", validation_alias=AliasChoices("system_prompt", "systemPrompt"))
     tools: ToolsConfig = Field(default_factory=ToolsConfig)
     heartbeat: HeartbeatConfig = Field(default_factory=HeartbeatConfig)
+    # FastAgent-specific config (extra fields allowed)
+    use_fastagent: bool = Field(default=False, validation_alias=AliasChoices("use_fastagent", "useFastagent"))
+    workflow: Optional[str] = None
+    agents: Optional[List[str]] = None
+    mcp_servers: Optional[List[str]] = Field(default=None, validation_alias=AliasChoices("mcp_servers", "mcpServers"))
+    # Response post-processing
+    show_thinking: bool = Field(
+        default=False,
+        validation_alias=AliasChoices("show_thinking", "showThinking"),
+    )
+    # Typing indicator mode: "none" | "typing" (send channel typing action while processing)
+    typing_mode: str = Field(
+        default="none",
+        validation_alias=AliasChoices("typing_mode", "typingMode"),
+    )
 
 
 class AgentsConfig(BaseModel):
     """Agents configuration (dict of agent configs)."""
     model_config = ConfigDict(extra="allow")  # Allow additional agents
     
-    # Default agent
-    default: AgentConfig = Field(default_factory=AgentConfig)
+    # Note: No default agent - all agents must be defined in config file
+    # The extra="allow" setting permits any number of named agents
 
 
 class NodeConfig(BaseModel):
@@ -179,11 +280,25 @@ class JobsConfig(BaseModel):
     persist_file: str = Field("~/.pyclaw/jobs.json", validation_alias="persistFile")
 
 
+class TodosConfig(BaseModel):
+    """TODO registry configuration."""
+    enabled: bool = True
+    persist_file: str = Field(
+        "~/.pyclaw/todos.json",
+        validation_alias=AliasChoices("persist_file", "persistFile"),
+    )
+
+
 class TelegramConfig(BaseModel):
     """Telegram channel configuration."""
     enabled: bool = True
     bot_token: Optional[str] = Field(default=None, validation_alias="botToken")
     allowed_users: List[int] = Field(default_factory=list, validation_alias="allowedUsers")
+    denied_users: List[int] = Field(default_factory=list, validation_alias="deniedUsers")
+    # Map topic names → Telegram forum topic IDs for group chats with topics
+    topics: Dict[str, int] = Field(default_factory=dict)
+    # Send typing indicator while agent is processing
+    typing_indicator: bool = Field(default=True, validation_alias="typingIndicator")
 
     @field_validator("bot_token", mode="before")
     @classmethod
@@ -218,6 +333,14 @@ class SlackConfig(BaseModel):
     enabled: bool = False
     bot_token: Optional[str] = Field(default=None, validation_alias="botToken")
     signing_secret: Optional[str] = Field(default=None, validation_alias="signingSecret")
+    allowed_users: List[str] = Field(default_factory=list, validation_alias="allowedUsers")
+    denied_users: List[str] = Field(default_factory=list, validation_alias="deniedUsers")
+    # Reply in thread when message is part of a Slack thread
+    threading: bool = True
+    # Slack channel ID to post pulse/heartbeat messages to (e.g. "C1234567890")
+    pulse_channel: Optional[str] = Field(
+        default=None, validation_alias=AliasChoices("pulse_channel", "pulseChannel")
+    )
 
     @field_validator("bot_token", mode="before")
     @classmethod
@@ -235,6 +358,8 @@ class WhatsAppConfig(BaseModel):
     enabled: bool = False
     phone_id: Optional[str] = Field(default=None, validation_alias="phoneId")
     access_token: Optional[str] = Field(default=None, validation_alias="accessToken")
+    allowed_users: List[str] = Field(default_factory=list, validation_alias="allowedUsers")
+    denied_users: List[str] = Field(default_factory=list, validation_alias="deniedUsers")
 
     @field_validator("access_token", mode="before")
     @classmethod
@@ -285,6 +410,10 @@ class PluginsConfig(BaseModel):
     enabled: bool = True
     auto_enable: bool = Field(True, validation_alias="autoEnable")
     entries: Dict[str, PluginEntryConfig] = Field(default_factory=dict)
+    # List of channel plugin specs in "module.path:ClassName" format.
+    # Entry-point plugins (pyclaw.channels group) are always discovered
+    # automatically; this list adds to them.
+    channels: List[str] = Field(default_factory=list)
 
 
 class HookEntryConfig(BaseModel):
@@ -328,25 +457,68 @@ class MemoryQmdConfig(BaseModel):
     paths: List[MemoryQmdPathConfig] = Field(default_factory=list)
 
 
+class SessionsConfig(BaseModel):
+    """Session management configuration."""
+    persist_dir: str = Field(
+        default="~/.pyclaw/sessions",
+        validation_alias=AliasChoices("persist_dir", "persistDir"),
+    )
+    # Sessions idle longer than ttl_hours will be cleaned up by the reaper
+    ttl_hours: int = Field(
+        default=24,
+        validation_alias=AliasChoices("ttl_hours", "ttlHours"),
+    )
+    # How often the reaper runs (minutes)
+    reaper_interval_minutes: int = Field(
+        default=60,
+        validation_alias=AliasChoices("reaper_interval_minutes", "reaperIntervalMinutes"),
+    )
+
+
+class ConcurrencyConfig(BaseModel):
+    """Per-model concurrency limits.
+
+    Example:
+        concurrency:
+          default: 3
+          models:
+            MiniMax-M2.5: 3
+            gpt-4: 5
+            passthrough: 100
+    """
+    default: int = 3
+    models: Dict[str, int] = Field(default_factory=dict)
+
+
 class GatewayConfig(BaseModel):
     """Gateway server configuration."""
     host: str = "0.0.0.0"
     port: int = 8080
+    mcp_port: int = Field(default=8081, validation_alias=AliasChoices("mcp_port", "mcpPort"))
     debug: bool = False
     log_level: str = "info"
     webhook_url: Optional[str] = Field(default=None, validation_alias="webhookUrl")
     cors_origins: List[str] = Field(default_factory=lambda: ["*"], validation_alias="corsOrigins")
+    # Additional skill search directories (on top of ~/.pyclaw/skills/)
+    skills_dirs: List[str] = Field(
+        default_factory=list,
+        validation_alias=AliasChoices("skills_dirs", "skillsDirs"),
+    )
 
 
 class Config(BaseModel):
     """Root configuration model."""
     version: str = "1.0"
+    secrets: SecretsConfig = Field(default_factory=SecretsConfig)
+    concurrency: ConcurrencyConfig = Field(default_factory=ConcurrencyConfig)
+    sessions: SessionsConfig = Field(default_factory=SessionsConfig)
     gateway: GatewayConfig = Field(default_factory=GatewayConfig)
     security: SecurityConfig = Field(default_factory=SecurityConfig)
     memory: MemoryConfig = Field(default_factory=MemoryConfig)
     providers: ProvidersConfig = Field(default_factory=ProvidersConfig)
     agents: AgentsConfig = Field(default_factory=AgentsConfig)
     jobs: JobsConfig = Field(default_factory=JobsConfig)
+    todos: TodosConfig = Field(default_factory=TodosConfig)
     nodes: NodeConfig = Field(default_factory=NodeConfig)
     browser: BrowserAutomationConfig = Field(default_factory=BrowserAutomationConfig)
     channels: ChannelsConfig = Field(default_factory=ChannelsConfig)

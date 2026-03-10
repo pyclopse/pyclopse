@@ -1,18 +1,23 @@
 """FastAPI application for pyclaw."""
 import logging
 from contextlib import asynccontextmanager
-from typing import Optional
+from typing import Any, Optional
 
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
-from .routes import agents, channels, jobs, nodes
+from .routes import agents, channels, jobs, sessions, todos as todos_routes
+from .routes import config as config_routes
+from .routes import usage as usage_routes
+from .routes import tools as tools_routes
+from .routes import health as health_routes
+from .routes import hooks as hooks_routes
 
 logger = logging.getLogger("pyclaw.api")
 
 
-# Global gateway reference (set by gateway.py)
+# Global gateway reference (set by create_app)
 _gateway: Optional[Any] = None
 
 
@@ -69,9 +74,15 @@ def create_app(gateway: Optional[Any] = None) -> FastAPI:
     # Include routers
     app.include_router(agents.router, prefix="/api/v1/agents", tags=["agents"])
     app.include_router(channels.router, prefix="/api/v1/channels", tags=["channels"])
+    app.include_router(config_routes.router, prefix="/api/v1/config", tags=["config"])
     app.include_router(jobs.router, prefix="/api/v1/jobs", tags=["jobs"])
-    app.include_router(nodes.router, prefix="/api/v1/nodes", tags=["nodes"])
-    
+    app.include_router(sessions.router, prefix="/api/v1/sessions", tags=["sessions"])
+    app.include_router(usage_routes.router, prefix="/api/v1/usage", tags=["usage"])
+    app.include_router(tools_routes.router, prefix="/api/v1/tools", tags=["tools"])
+    app.include_router(health_routes.router, prefix="/api/v1/health", tags=["health"])
+    app.include_router(todos_routes.router, prefix="/api/v1/todos", tags=["todos"])
+    app.include_router(hooks_routes.router, prefix="/api/v1/hooks", tags=["hooks"])
+
     # Health check
     @app.get("/health")
     async def health_check():
@@ -95,7 +106,3 @@ def create_app(gateway: Optional[Any] = None) -> FastAPI:
         )
     
     return app
-
-
-# Default app instance
-app = create_app()

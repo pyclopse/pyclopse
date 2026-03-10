@@ -1,348 +1,346 @@
 """Job scheduler for pyclaw."""
 
 import asyncio
-import json
 import logging
 import os
+import uuid
 from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional, Set
-import uuid
 
 from pyclaw.config.schema import JobsConfig
-from .models import Job, JobRun, JobStatus, JobTrigger
+from .models import (
+    AtSchedule, CronSchedule, IntervalSchedule,
+    Job, JobRun, JobStatus,
+    append_run_log, load_jobs, read_run_log, save_jobs,
+)
 
 
 class JobScheduler:
-    """Job scheduler with cron-like functionality."""
-    
+    """Async job scheduler supporting cron, interval, and one-shot jobs."""
+
     def __init__(
         self,
         config: JobsConfig,
-        job_executor: Optional[Callable] = None,
+        agent_executor: Optional[Callable] = None,
+        notify_callback: Optional[Callable] = None,
     ):
         self.config = config
         self.jobs: Dict[str, Job] = {}
-        self.runs: List[JobRun] = []
         self._running_jobs: Set[str] = set()
-        self._executor = job_executor or self._default_executor
+        self._agent_executor = agent_executor      # async (job: Job) -> dict
+        self._notify_callback = notify_callback    # async (job: Job, run: JobRun) -> None
         self._scheduler_task: Optional[asyncio.Task] = None
         self._stop_event = asyncio.Event()
         self._logger = logging.getLogger("pyclaw.jobs")
         self._persist_path = Path(os.path.expanduser(config.persist_file))
-    
+        self._runs_dir = self._persist_path.parent / "runs"
+
+    # ------------------------------------------------------------------
+    # Lifecycle
+    # ------------------------------------------------------------------
+
     async def start(self) -> None:
-        """Start the scheduler."""
         if not self.config.enabled:
-            self._logger.info("Jobs scheduler is disabled")
+            self._logger.info("Job scheduler disabled")
             return
-        
-        # Load persisted jobs
-        await self._load_jobs()
-        
-        # Calculate initial next_run times
+        self.jobs = load_jobs(self._persist_path)
         for job in self.jobs.values():
             if job.enabled and job.next_run is None:
-                self._calculate_next_run(job)
-        
-        # Start scheduler loop
+                self._recalc_next_run(job)
         self._stop_event.clear()
-        self._scheduler_task = asyncio.create_task(self._scheduler_loop())
+        self._scheduler_task = asyncio.create_task(self._loop())
         self._logger.info(f"Job scheduler started with {len(self.jobs)} jobs")
-    
+
     async def stop(self) -> None:
-        """Stop the scheduler."""
         self._stop_event.set()
         if self._scheduler_task:
-            await self._scheduler_task
-        await self._save_jobs()
+            try:
+                await asyncio.wait_for(self._scheduler_task, timeout=5.0)
+            except asyncio.TimeoutError:
+                pass
+        save_jobs(self.jobs, self._persist_path)
         self._logger.info("Job scheduler stopped")
-    
-    async def _scheduler_loop(self) -> None:
-        """Main scheduler loop."""
+
+    # ------------------------------------------------------------------
+    # Main loop
+    # ------------------------------------------------------------------
+
+    async def _loop(self) -> None:
         while not self._stop_event.is_set():
             try:
-                await self._check_and_run_jobs()
+                await self._tick()
             except Exception as e:
-                self._logger.error(f"Scheduler error: {e}")
-            
-            # Sleep for 10 seconds between checks
-            await asyncio.sleep(10)
-    
-    async def _check_and_run_jobs(self) -> None:
-        """Check for jobs that need to run and execute them."""
+                self._logger.error(f"Scheduler tick error: {e}")
+            try:
+                await asyncio.wait_for(
+                    asyncio.shield(self._stop_event.wait()), timeout=10.0
+                )
+                break
+            except asyncio.TimeoutError:
+                pass
+
+    async def _tick(self) -> None:
         now = datetime.utcnow()
-        
-        for job in self.jobs.values():
-            if not job.enabled:
+        for job in list(self.jobs.values()):
+            if not job.enabled or job.id in self._running_jobs:
                 continue
-            
-            if job.status == JobStatus.RUNNING:
-                continue
-            
-            if job.id in self._running_jobs:
-                continue
-            
             if job.next_run and job.next_run <= now:
                 asyncio.create_task(self._run_job(job))
-    
+
+    # ------------------------------------------------------------------
+    # Execution
+    # ------------------------------------------------------------------
+
     async def _run_job(self, job: Job) -> None:
-        """Run a single job."""
         if job.id in self._running_jobs:
             return
-        
         self._running_jobs.add(job.id)
-        
+        run = JobRun(
+            id=str(uuid.uuid4()),
+            job_id=job.id,
+            job_name=job.name,
+            started_at=datetime.utcnow(),
+            status=JobStatus.RUNNING,
+        )
+        job.status = JobStatus.RUNNING
+        job.last_run = run.started_at
+        job.run_count += 1
+        job.updated_at = datetime.utcnow()
+        save_jobs(self.jobs, self._persist_path)
+
         try:
-            job.update_status(JobStatus.RUNNING)
-            await self._save_jobs()
-            
-            run_id = str(uuid.uuid4())
-            run = JobRun(
-                id=run_id,
-                job_id=job.id,
-                started_at=datetime.utcnow(),
-                status=JobStatus.RUNNING,
-            )
-            self.runs.append(run)
-            
-            self._logger.info(f"Running job: {job.name} ({job.id})")
-            
-            # Execute the job
-            result = await self._executor(job)
-            
+            self._logger.info(f"Running job: {job.name} [{job.run.kind}]")
+            result = await self._execute(job)
+
             run.ended_at = datetime.utcnow()
-            run.status = JobStatus.COMPLETED if result.get("success") else JobStatus.FAILED
             run.stdout = result.get("stdout", "")
             run.stderr = result.get("stderr", "")
-            run.exit_code = result.get("exit_code", 0)
+            run.exit_code = result.get("exit_code")
             run.error = result.get("error")
-            
+            run.status = JobStatus.COMPLETED if result.get("success") else JobStatus.FAILED
+
             job.last_result = {
-                "run_id": run_id,
+                "run_id": run.id,
                 "success": run.status == JobStatus.COMPLETED,
-                "duration_ms": (
-                    (run.ended_at - run.started_at).total_seconds() * 1000
-                ),
+                "duration_ms": run.duration_ms(),
             }
-            
-            job.update_status(
-                JobStatus.COMPLETED if run.status == JobStatus.COMPLETED else JobStatus.FAILED,
-                job.last_result,
-            )
-            
-            # Calculate next run
-            self._calculate_next_run(job)
-            await self._save_jobs()
-            
+
+            if run.status == JobStatus.COMPLETED:
+                job.status = JobStatus.COMPLETED
+                job.consecutive_errors = 0
+                # One-shot: delete or disable after success
+                if job.delete_after_run and isinstance(job.schedule, AtSchedule):
+                    self.jobs.pop(job.id, None)
+                    save_jobs(self.jobs, self._persist_path)
+                    append_run_log(run, self._runs_dir)
+                    if self._notify_callback:
+                        asyncio.create_task(self._notify_callback(job, run))
+                    return
+            else:
+                job.status = JobStatus.FAILED
+                job.failure_count += 1
+                job.consecutive_errors += 1
+
+            self._recalc_next_run(job)
+            job.updated_at = datetime.utcnow()
+            save_jobs(self.jobs, self._persist_path)
+            append_run_log(run, self._runs_dir)
+
             self._logger.info(
                 f"Job {job.name} {run.status.value} "
-                f"(exit code: {run.exit_code})"
+                f"({run.duration_ms():.0f}ms)"
             )
-            
+
         except Exception as e:
-            self._logger.error(f"Job {job.name} failed: {e}")
-            job.update_status(JobStatus.FAILED, {"error": str(e)})
-            await self._save_jobs()
-        
+            self._logger.error(f"Job {job.name} exception: {e}")
+            run.ended_at = datetime.utcnow()
+            run.error = str(e)
+            run.status = JobStatus.FAILED
+            job.status = JobStatus.FAILED
+            job.failure_count += 1
+            job.consecutive_errors += 1
+            self._recalc_next_run(job)
+            job.updated_at = datetime.utcnow()
+            save_jobs(self.jobs, self._persist_path)
+            append_run_log(run, self._runs_dir)
+
         finally:
             self._running_jobs.discard(job.id)
-    
-    async def _default_executor(self, job: Job) -> Dict[str, Any]:
-        """Default job executor using subprocess."""
-        import time
-        start_time = time.time()
-        
+            if self._notify_callback:
+                asyncio.create_task(self._notify_callback(job, run))
+
+    async def _execute(self, job: Job) -> Dict[str, Any]:
+        """Dispatch to the right executor based on run kind."""
+        if job.run.kind == "command":
+            return await self._run_command(job)
+        elif job.run.kind == "agent":
+            return await self._run_agent(job)
+        return {"success": False, "error": f"Unknown run kind: {job.run.kind}"}
+
+    async def _run_command(self, job: Job) -> Dict[str, Any]:
+        """Execute a shell command."""
         try:
-            process = await asyncio.create_subprocess_shell(
-                job.command,
+            proc = await asyncio.create_subprocess_shell(
+                job.run.command,
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE,
             )
-            
             try:
                 stdout, stderr = await asyncio.wait_for(
-                    process.communicate(),
-                    timeout=job.timeout,
+                    proc.communicate(), timeout=job.timeout_seconds
                 )
             except asyncio.TimeoutError:
-                process.kill()
-                await process.wait()
-                return {
-                    "success": False,
-                    "error": f"Job timed out after {job.timeout}s",
-                    "exit_code": -1,
-                }
-            
+                proc.kill()
+                await proc.wait()
+                return {"success": False, "error": f"Timed out after {job.timeout_seconds}s", "exit_code": -1}
+
             return {
-                "success": process.returncode == 0,
+                "success": proc.returncode == 0,
                 "stdout": stdout.decode("utf-8", errors="replace"),
                 "stderr": stderr.decode("utf-8", errors="replace"),
-                "exit_code": process.returncode,
+                "exit_code": proc.returncode,
             }
-            
         except Exception as e:
-            return {
-                "success": False,
-                "error": str(e),
-                "exit_code": -1,
-            }
-    
-    def _calculate_next_run(self, job: Job) -> None:
-        """Calculate next run time based on trigger."""
+            return {"success": False, "error": str(e), "exit_code": -1}
+
+    async def _run_agent(self, job: Job) -> Dict[str, Any]:
+        """Send a message to an agent and return its response as stdout."""
+        if not self._agent_executor:
+            return {"success": False, "error": "No agent executor configured"}
+        try:
+            result = await asyncio.wait_for(
+                self._agent_executor(job),
+                timeout=job.timeout_seconds,
+            )
+            return result
+        except asyncio.TimeoutError:
+            return {"success": False, "error": f"Agent timed out after {job.timeout_seconds}s"}
+        except Exception as e:
+            return {"success": False, "error": str(e)}
+
+    # ------------------------------------------------------------------
+    # Scheduling
+    # ------------------------------------------------------------------
+
+    def _recalc_next_run(self, job: Job) -> None:
+        if not job.enabled:
+            job.next_run = None
+            return
         now = datetime.utcnow()
-        
-        if job.trigger == JobTrigger.CRON and job.cron_expression:
-            # Simple cron parsing (basic support)
-            job.next_run = self._parse_cron_next(job.cron_expression, now)
-        
-        elif job.trigger == JobTrigger.INTERVAL and job.interval_seconds:
-            job.next_run = now + timedelta(seconds=job.interval_seconds)
-        
-        elif job.trigger == JobTrigger.ONESHOT:
-            # One-shot jobs don't repeat
-            job.next_run = None
-        
-        elif job.trigger == JobTrigger.MANUAL:
-            # Manual jobs don't auto-schedule
-            job.next_run = None
-        
+        s = job.schedule
+        if isinstance(s, CronSchedule):
+            job.next_run = self._cron_next(s.expr, now, s.timezone, s.stagger_seconds)
+        elif isinstance(s, IntervalSchedule):
+            job.next_run = now + timedelta(seconds=s.seconds)
+        elif isinstance(s, AtSchedule):
+            job.next_run = s.at if s.at > now else None
         else:
             job.next_run = None
-    
-    def _parse_cron_next(self, expression: str, now: datetime) -> Optional[datetime]:
-        """Parse basic cron expression and calculate next run."""
-        # Basic cron: minute hour day month weekday
-        # This is simplified - full cron is complex
-        parts = expression.split()
-        if len(parts) < 5:
-            return None
-        
-        # For now, just add 1 minute for any cron expression
-        # A full implementation would use a cron library
-        return now + timedelta(minutes=1)
-    
-    # Public API
-    
-    async def add_job(self, job: Job) -> None:
-        """Add a new job."""
-        if job.id in self.jobs:
-            raise ValueError(f"Job {job.id} already exists")
-        
-        if job.next_run is None:
-            self._calculate_next_run(job)
-        
-        self.jobs[job.id] = job
-        await self._save_jobs()
-        self._logger.info(f"Added job: {job.name} ({job.id})")
-    
-    async def remove_job(self, job_id: str) -> Optional[Job]:
-        """Remove a job."""
-        job = self.jobs.pop(job_id, None)
-        if job:
-            await self._save_jobs()
-            self._logger.info(f"Removed job: {job.name} ({job_id})")
-        return job
-    
-    async def get_job(self, job_id: str) -> Optional[Job]:
-        """Get a job by ID."""
-        return self.jobs.get(job_id)
-    
-    async def list_jobs(self) -> List[Job]:
-        """List all jobs."""
-        return list(self.jobs.values())
-    
-    async def enable_job(self, job_id: str) -> bool:
-        """Enable a job."""
-        job = self.jobs.get(job_id)
-        if job:
-            job.enabled = True
-            if job.next_run is None:
-                self._calculate_next_run(job)
-            await self._save_jobs()
-            return True
-        return False
-    
-    async def disable_job(self, job_id: str) -> bool:
-        """Disable a job."""
-        job = self.jobs.get(job_id)
-        if job:
-            job.enabled = False
-            job.next_run = None
-            await self._save_jobs()
-            return True
-        return False
-    
-    async def run_job_now(self, job_id: str) -> bool:
-        """Trigger a job to run immediately."""
-        job = self.jobs.get(job_id)
-        if job and job.enabled:
-            asyncio.create_task(self._run_job(job))
-            return True
-        return False
-    
-    async def get_job_runs(
-        self,
-        job_id: Optional[str] = None,
-        limit: int = 10,
-    ) -> List[JobRun]:
-        """Get job run history."""
-        runs = self.runs
-        if job_id:
-            runs = [r for r in runs if r.job_id == job_id]
-        return runs[-limit:]
-    
-    # Persistence
-    
-    async def _load_jobs(self) -> None:
-        """Load jobs from file."""
-        if not self._persist_path.exists():
-            return
-        
+
+    def _cron_next(
+        self, expr: str, after: datetime, timezone: str = "UTC", stagger: int = 0
+    ) -> Optional[datetime]:
         try:
-            with open(self._persist_path, "r") as f:
-                data = json.load(f)
-            
-            jobs_data = data.get("jobs", [])
-            for job_data in jobs_data:
-                job = Job.from_dict(job_data)
-                self.jobs[job.id] = job
-            
-            runs_data = data.get("runs", [])
-            for run_data in runs_data:
-                run = JobRun.from_dict(run_data)
-                self.runs.append(run)
-            
-            self._logger.info(f"Loaded {len(self.jobs)} jobs from {self._persist_path}")
-            
+            from croniter import croniter
+            if not croniter.is_valid(expr):
+                self._logger.warning(f"Invalid cron expression: {expr!r}")
+                return after + timedelta(minutes=5)
+            if timezone and timezone != "UTC":
+                try:
+                    from zoneinfo import ZoneInfo
+                    tz = ZoneInfo(timezone)
+                    after_local = after.replace(tzinfo=ZoneInfo("UTC")).astimezone(tz)
+                    next_local = croniter(expr, after_local).get_next(datetime)
+                    next_utc = next_local.astimezone(ZoneInfo("UTC")).replace(tzinfo=None)
+                except Exception:
+                    next_utc = croniter(expr, after).get_next(datetime)
+            else:
+                next_utc = croniter(expr, after).get_next(datetime)
+            if stagger > 0:
+                import random
+                next_utc += timedelta(seconds=random.randint(0, stagger))
+            return next_utc
         except Exception as e:
-            self._logger.error(f"Error loading jobs: {e}")
-    
-    async def _save_jobs(self) -> None:
-        """Save jobs to file."""
-        try:
-            self._persist_path.parent.mkdir(parents=True, exist_ok=True)
-            
-            data = {
-                "jobs": [job.to_dict() for job in self.jobs.values()],
-                "runs": [run.to_dict() for run in self.runs[-100:]],  # Keep last 100 runs
-            }
-            
-            # Write atomically
-            temp_path = self._persist_path.with_suffix(".tmp")
-            with open(temp_path, "w") as f:
-                json.dump(data, f, indent=2)
-            temp_path.replace(self._persist_path)
-            
-        except Exception as e:
-            self._logger.error(f"Error saving jobs: {e}")
-    
+            self._logger.warning(f"Cron parse error {expr!r}: {e}")
+            return after + timedelta(minutes=5)
+
+    # ------------------------------------------------------------------
+    # Public API (called by HTTP routes)
+    # ------------------------------------------------------------------
+
     def get_status(self) -> Dict[str, Any]:
-        """Get scheduler status."""
         return {
             "enabled": self.config.enabled,
-            "jobs_total": len(self.jobs),
-            "jobs_enabled": len([j for j in self.jobs.values() if j.enabled]),
-            "jobs_running": len(self._running_jobs),
-            "jobs_pending": len([j for j in self.jobs.values() if j.status == JobStatus.PENDING]),
+            "total": len(self.jobs),
+            "enabled_count": sum(1 for j in self.jobs.values() if j.enabled),
+            "running": len(self._running_jobs),
         }
+
+    def resolve(self, name_or_id: str) -> Optional[Job]:
+        """Find a job by ID or by name (case-insensitive)."""
+        if name_or_id in self.jobs:
+            return self.jobs[name_or_id]
+        needle = name_or_id.lower()
+        for job in self.jobs.values():
+            if job.name.lower() == needle:
+                return job
+        return None
+
+    async def add_job(self, job: Job) -> None:
+        if job.next_run is None:
+            self._recalc_next_run(job)
+        self.jobs[job.id] = job
+        save_jobs(self.jobs, self._persist_path)
+        self._logger.info(f"Added job: {job.name}")
+
+    async def update_job(self, job: Job) -> None:
+        self.jobs[job.id] = job
+        self._recalc_next_run(job)
+        job.updated_at = datetime.utcnow()
+        save_jobs(self.jobs, self._persist_path)
+
+    async def remove_job(self, job_id: str) -> Optional[Job]:
+        job = self.jobs.pop(job_id, None)
+        if job:
+            save_jobs(self.jobs, self._persist_path)
+            self._logger.info(f"Removed job: {job.name}")
+        return job
+
+    async def enable_job(self, job_id: str) -> bool:
+        job = self.jobs.get(job_id)
+        if not job:
+            return False
+        job.enabled = True
+        job.status = JobStatus.PENDING
+        self._recalc_next_run(job)
+        job.updated_at = datetime.utcnow()
+        save_jobs(self.jobs, self._persist_path)
+        return True
+
+    async def disable_job(self, job_id: str) -> bool:
+        job = self.jobs.get(job_id)
+        if not job:
+            return False
+        job.enabled = False
+        job.next_run = None
+        job.status = JobStatus.DISABLED
+        job.updated_at = datetime.utcnow()
+        save_jobs(self.jobs, self._persist_path)
+        return True
+
+    async def run_job_now(self, job_id: str) -> bool:
+        job = self.jobs.get(job_id)
+        if not job:
+            return False
+        asyncio.create_task(self._run_job(job))
+        return True
+
+    async def list_jobs(self, owner: Optional[str] = None) -> List[Job]:
+        jobs = list(self.jobs.values())
+        if owner is not None:
+            jobs = [j for j in jobs if j.owner == owner]
+        return jobs
+
+    def get_run_history(self, job_id: str, limit: int = 20) -> List[JobRun]:
+        return read_run_log(job_id, self._runs_dir, limit)

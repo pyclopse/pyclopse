@@ -49,6 +49,7 @@ class Agent:
     # FastAgent integration
     fast_agent: Optional[Any] = None  # FastAgent instance
     fast_agent_runner: Optional[Any] = None  # AgentRunner instance
+    _session_runners: Dict[str, Any] = field(default_factory=dict)
 
     # Runtime state
     is_running: bool = False
@@ -58,6 +59,7 @@ class Agent:
 
     def __post_init__(self):
         object.__setattr__(self, "_logger", logging.getLogger(f"pyclaw.agent.{self.id}"))
+        object.__setattr__(self, "_session_runners", {})
 
         # Initialize FastAgent if available and configured
         if FASTAGENT_AVAILABLE and self._should_use_fastagent():
@@ -117,7 +119,7 @@ class Agent:
                     provider_model = agent_provider.get("model")
 
             # Configure for minimax if needed
-            if "MiniMax" in str(provider_type):
+            if "minimax" in str(provider_type).lower():
                 # Set up generic provider for MiniMax
                 import os
 
@@ -146,7 +148,7 @@ class Agent:
                     model = model.replace(prefix, "")
 
                 # Use generic provider for minimax
-                if "MiniMax" in str(provider_type):
+                if "minimax" in str(provider_type).lower():
                     # Get the actual model from provider
                     model = provider_model or "MiniMax-M2.5"
                     if not str(model).startswith("generic."):
@@ -165,7 +167,7 @@ class Agent:
             from pyclaw.agents.runner import AgentRunner
 
             # Use provider model for minimax, otherwise use agent model
-            if "MiniMax" in str(provider_type):
+            if "minimax" in str(provider_type).lower():
                 runner_model = provider_model or "MiniMax-M2.5"
                 if not str(runner_model).startswith("generic."):
                     runner_model = f"generic.{runner_model}"
@@ -173,19 +175,77 @@ class Agent:
                 runner_model = self.config.model
                 for prefix in ["fastagent:", "fa:", "fastagent/"]:
                     runner_model = runner_model.replace(prefix, "")
+            # Resolve MCP servers: from agent config, falling back to none
+            mcp_servers = getattr(self.config, "mcp_servers", None) or []
+            tools_cfg = {}
+            if hasattr(self.config, "tools") and self.config.tools:
+                t = self.config.tools
+                tools_cfg = {
+                    "profile": getattr(t, "profile", None),
+                    "allow": getattr(t, "allow", []) or getattr(t, "allowlist", []),
+                    "deny": getattr(t, "deny", []),
+                }
+
+            # Extract API key from provider if available (e.g. pyclaw.yaml providers.minimax.api_key)
+            provider_api_key = None
+            if hasattr(self, "provider") and self.provider:
+                provider_api_key = getattr(self.provider, "api_key", None)
+
             self.fast_agent_runner = AgentRunner(
                 agent_name=self.name,
                 instruction=self.system_prompt,
                 model=runner_model or "sonnet",
                 temperature=self.config.temperature,
                 max_tokens=self.config.max_tokens,
-                servers=getattr(self.config, "mcp_servers", []),
+                servers=mcp_servers,
+                tools_config=tools_cfg,
+                show_thinking=getattr(self.config, "show_thinking", False),
+                api_key=provider_api_key,
             )
 
-            self._logger.info(f"Initialized FastAgent for {self.name}")
+            self._logger.info(
+                f"Initialized FastAgent for {self.name} "
+                f"(servers={mcp_servers})"
+            )
 
         except Exception as e:
             self._logger.error(f"Failed to initialize FastAgent: {e}")
+
+    def _get_session_runner(
+        self, session_id: str, model_override: Optional[str] = None
+    ) -> Any:
+        """Get or create a dedicated AgentRunner for a session.
+
+        Each session gets its own runner so conversation histories
+        are properly isolated across users.  Pass *model_override* to
+        use a different model than the agent default for this session.
+        """
+        if not self.fast_agent_runner:
+            raise RuntimeError(
+                f"Agent {self.name} has no FastAgent runner configured"
+            )
+        if session_id not in self._session_runners:
+            from pyclaw.agents.runner import AgentRunner
+            base = self.fast_agent_runner
+            effective_model = model_override or base.model
+            runner = AgentRunner(
+                agent_name=f"{self.name}-{session_id[:8]}",
+                instruction=self.system_prompt,
+                model=effective_model,
+                temperature=self.config.temperature,
+                max_tokens=self.config.max_tokens,
+                servers=base.servers,
+                tools_config=base.tools_config,
+                show_thinking=getattr(base, "show_thinking", False),
+                api_key=getattr(base, "api_key", None),
+                owner_name=self.name,
+            )
+            self._session_runners[session_id] = runner
+            self._logger.debug(
+                f"Created session runner for session {session_id[:8]} "
+                f"(model={effective_model})"
+            )
+        return self._session_runners[session_id]
 
     async def start(self) -> None:
         """Start the agent."""
@@ -265,22 +325,10 @@ class Agent:
         prompt: str,
         session: Session,
     ) -> str:
-        """Handle message using FastAgent."""
-        # Build message history for context
-        messages = []
-        for msg in session.get_context_window(max_messages=20):
-            messages.append(
-                {
-                    "role": msg.role,
-                    "content": msg.content,
-                }
-            )
-
-        # Add current prompt
-        messages.append({"role": "user", "content": prompt})
-
-        # Run with FastAgent
-        return await self.fast_agent_runner.run(messages)
+        """Handle message using a per-session FastAgent runner."""
+        model_override = session.context.get("model_override")
+        runner = self._get_session_runner(session.id, model_override=model_override)
+        return await runner.run(prompt)
 
     async def execute_tool(
         self,
@@ -386,7 +434,7 @@ class AgentManager:
         # Create provider if config provided
         provider = None
         if provider_config:
-            print(f"DEBUG: provider_config = {provider_config}")
+            self._logger.debug(f"provider_config = {provider_config}")
             provider_type = provider_config.get("type", "openai")
             provider = create_provider(provider_type, provider_config)
 

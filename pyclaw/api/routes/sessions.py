@@ -1,0 +1,121 @@
+"""Sessions API routes."""
+
+import logging
+from typing import Any, Dict, List, Optional
+
+from fastapi import APIRouter, HTTPException
+from pydantic import BaseModel
+
+logger = logging.getLogger("pyclaw.api.sessions")
+
+router = APIRouter()
+
+
+# ---------------------------------------------------------------------------
+# Response models
+# ---------------------------------------------------------------------------
+
+class MessageOut(BaseModel):
+    id: str
+    role: str
+    content: str
+    timestamp: str
+
+
+class SessionSummary(BaseModel):
+    id: str
+    agent_id: str
+    channel: str
+    user_id: str
+    created_at: str
+    updated_at: str
+    message_count: int
+    is_active: bool
+
+
+class SessionDetail(SessionSummary):
+    messages: List[MessageOut]
+
+
+# ---------------------------------------------------------------------------
+# Dependency
+# ---------------------------------------------------------------------------
+
+def _session_manager():
+    from pyclaw.api.app import get_gateway
+    return get_gateway().session_manager
+
+
+# ---------------------------------------------------------------------------
+# Endpoints
+# ---------------------------------------------------------------------------
+
+@router.get("/", response_model=Dict[str, Any])
+async def list_sessions(
+    agent_id: Optional[str] = None,
+    channel: Optional[str] = None,
+    user_id: Optional[str] = None,
+    active_only: bool = True,
+):
+    """List sessions with optional filters."""
+    sm = _session_manager()
+    sessions = await sm.list_sessions(
+        agent_id=agent_id,
+        channel=channel,
+        user_id=user_id,
+        active_only=active_only,
+    )
+    return {
+        "sessions": [
+            SessionSummary(
+                id=s.id,
+                agent_id=s.agent_id,
+                channel=s.channel,
+                user_id=s.user_id,
+                created_at=s.created_at.isoformat(),
+                updated_at=s.updated_at.isoformat(),
+                message_count=s.message_count,
+                is_active=s.is_active,
+            ).model_dump()
+            for s in sessions
+        ],
+        "total": len(sessions),
+    }
+
+
+@router.get("/{session_id}", response_model=SessionDetail)
+async def get_session(session_id: str):
+    """Get a session by ID, including full message history."""
+    sm = _session_manager()
+    session = await sm.get_session(session_id)
+    if session is None:
+        raise HTTPException(status_code=404, detail=f"Session '{session_id}' not found")
+    return SessionDetail(
+        id=session.id,
+        agent_id=session.agent_id,
+        channel=session.channel,
+        user_id=session.user_id,
+        created_at=session.created_at.isoformat(),
+        updated_at=session.updated_at.isoformat(),
+        message_count=session.message_count,
+        is_active=session.is_active,
+        messages=[
+            MessageOut(
+                id=m.id,
+                role=m.role,
+                content=m.content,
+                timestamp=m.timestamp.isoformat(),
+            )
+            for m in session.messages
+        ],
+    )
+
+
+@router.delete("/{session_id}", response_model=Dict[str, Any])
+async def delete_session(session_id: str):
+    """Delete a session and remove its persisted state."""
+    sm = _session_manager()
+    deleted = await sm.delete_session(session_id)
+    if not deleted:
+        raise HTTPException(status_code=404, detail=f"Session '{session_id}' not found")
+    return {"deleted": True, "session_id": session_id}

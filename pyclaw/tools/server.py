@@ -1,0 +1,1721 @@
+"""
+pyclaw MCP tool server.
+
+Exposes pyclaw-native tools via the MCP protocol so FastAgent can use them.
+Run as: uv run python -m pyclaw.tools.server
+
+Tools provided:
+  bash             - shell execution with security policy
+  web_search       - DuckDuckGo search (no API key needed)
+  send_message     - send to configured channels (Telegram)
+  sessions_list    - list active gateway sessions
+  sessions_history - get conversation history for a session
+  sessions_send    - send a message into another session via gateway API
+  sessions_spawn   - spawn a sub-agent session
+  memory_search    - search long-term memory
+  memory_store     - store a key/value entry in long-term memory
+  memory_get       - get a memory entry by key
+  memory_delete    - delete a memory entry by key
+  memory_list      - list memory keys
+  memory_reindex   - rebuild vector search index for all memory entries
+  agents_list      - list configured agents
+  process          - manage background processes (list/kill)
+  image            - image understanding via vision model
+  tts              - text-to-speech via MiniMax TTS
+  session_status   - current session info
+"""
+import asyncio
+import json
+import logging
+import os
+import shlex
+from datetime import datetime
+from pathlib import Path
+from typing import Any, Optional
+
+from fastmcp import FastMCP, Context
+from fastmcp.server.dependencies import get_http_headers
+
+logger = logging.getLogger(__name__)
+
+mcp = FastMCP("pyclaw")
+
+# ---------------------------------------------------------------------------
+# bash / exec
+# ---------------------------------------------------------------------------
+
+_SHELL_TIMEOUT = int(os.environ.get("PYCLAW_EXEC_TIMEOUT", "30"))
+_EXEC_SECURITY = os.environ.get("PYCLAW_EXEC_SECURITY", "allowlist")  # allowlist|all|none
+_SAFE_BINS_ENV = os.environ.get("PYCLAW_SAFE_BINS", "")
+_SAFE_BINS: set[str] = (
+    set(_SAFE_BINS_ENV.split(",")) if _SAFE_BINS_ENV else set()
+)
+
+# Registry of background PIDs started via bash(background=True)
+_bg_processes: dict[int, str] = {}
+
+_ALWAYS_BLOCKED = {
+    "rm -rf /", "rm -rf /*", ":(){ :|:& };:",  # fork bomb
+    "dd if=/dev/random", "mkfs",
+}
+
+
+def _is_safe(command: str) -> tuple[bool, str]:
+    """Return (allowed, reason)."""
+    cmd_lower = command.strip().lower()
+
+    # Block known destructive patterns
+    for blocked in _ALWAYS_BLOCKED:
+        if blocked in cmd_lower:
+            return False, f"Command matches blocked pattern: {blocked!r}"
+
+    if _EXEC_SECURITY == "all":
+        return True, "all mode"
+
+    if _EXEC_SECURITY == "none":
+        return False, "exec disabled (security=none)"
+
+    # allowlist mode: check first token against safe_bins
+    if _SAFE_BINS:
+        try:
+            first = shlex.split(command)[0]
+        except ValueError:
+            first = command.split()[0] if command.split() else ""
+        # Accept both full path (/usr/bin/ls) and base name (ls)
+        bin_name = Path(first).name
+        if first in _SAFE_BINS or bin_name in _SAFE_BINS:
+            return True, f"safe bin: {bin_name}"
+        return False, f"{bin_name!r} not in safe_bins allowlist"
+
+    # allowlist mode but no safe_bins configured → permit everything
+    return True, "no safe_bins restriction"
+
+
+@mcp.tool()
+async def bash(
+    command: str,
+    cwd: Optional[str] = None,
+    timeout: Optional[int] = None,
+    background: bool = False,
+) -> str:
+    """
+    Execute a shell command and return its output.
+
+    Args:
+        command: Shell command to run (passed to /bin/sh -c)
+        cwd: Working directory (defaults to current dir)
+        timeout: Seconds before timeout (default 30)
+        background: If True, start process and return PID immediately
+    """
+    allowed, reason = _is_safe(command)
+    if not allowed:
+        return f"[DENIED] {reason}"
+
+    effective_timeout = timeout or _SHELL_TIMEOUT
+    work_dir = cwd or os.getcwd()
+
+    try:
+        if background:
+            proc = await asyncio.create_subprocess_shell(
+                command,
+                cwd=work_dir,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
+            )
+            _bg_processes[proc.pid] = command
+            return f"[BACKGROUND] PID={proc.pid} started: {command}"
+
+        proc = await asyncio.create_subprocess_shell(
+            command,
+            cwd=work_dir,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+        )
+        try:
+            stdout, stderr = await asyncio.wait_for(
+                proc.communicate(), timeout=effective_timeout
+            )
+        except asyncio.TimeoutError:
+            proc.kill()
+            return f"[TIMEOUT] Command exceeded {effective_timeout}s: {command}"
+
+        out = stdout.decode(errors="replace").rstrip()
+        err = stderr.decode(errors="replace").rstrip()
+        code = proc.returncode
+
+        parts = []
+        if out:
+            parts.append(out)
+        if err:
+            parts.append(f"[stderr]\n{err}")
+        if code != 0:
+            parts.append(f"[exit {code}]")
+        return "\n".join(parts) if parts else f"[exit {code}]"
+
+    except FileNotFoundError as e:
+        return f"[ERROR] {e}"
+    except Exception as e:
+        return f"[ERROR] {type(e).__name__}: {e}"
+
+
+# ---------------------------------------------------------------------------
+# web_search  (DuckDuckGo, no API key)
+# ---------------------------------------------------------------------------
+
+@mcp.tool()
+async def web_search(
+    query: str,
+    max_results: int = 8,
+    region: str = "us-en",
+) -> str:
+    """
+    Search the web using DuckDuckGo. Returns titles, URLs, and snippets.
+
+    Args:
+        query: Search query
+        max_results: Number of results to return (max 20)
+        region: Search region (e.g. us-en, uk-en, de-de)
+    """
+    try:
+        try:
+            from ddgs import DDGS
+        except ImportError:
+            from duckduckgo_search import DDGS  # fallback
+
+        results = []
+        ddg = DDGS()
+        for r in ddg.text(query, region=region, max_results=min(max_results, 20)):
+            results.append(
+                f"**{r.get('title', 'No title')}**\n"
+                f"{r.get('href', '')}\n"
+                f"{r.get('body', '')}"
+            )
+        if not results:
+            return f"No results found for: {query}"
+        return f"Search results for: {query}\n\n" + "\n\n---\n\n".join(results)
+
+    except Exception as e:
+        return f"[ERROR] web_search failed: {e}"
+
+
+# ---------------------------------------------------------------------------
+# send_message  (Telegram via bot token in env)
+# ---------------------------------------------------------------------------
+
+@mcp.tool()
+async def send_message(
+    text: str,
+    channel: str = "telegram",
+    chat_id: Optional[str] = None,
+) -> str:
+    """
+    Send a message to a configured channel (Telegram by default).
+
+    Args:
+        text: Message text to send
+        channel: Channel name (currently: telegram)
+        chat_id: Override chat ID (uses default from config if not provided)
+    """
+    if channel != "telegram":
+        return f"[ERROR] Channel {channel!r} not yet implemented. Use 'telegram'."
+
+    bot_token = os.environ.get("TELEGRAM_BOT_TOKEN", "")
+    target_chat_id = chat_id or os.environ.get("PYCLAW_TELEGRAM_CHAT_ID", "")
+
+    if not bot_token:
+        return "[ERROR] TELEGRAM_BOT_TOKEN not configured"
+    if not target_chat_id:
+        return "[ERROR] No chat_id provided and PYCLAW_TELEGRAM_CHAT_ID not set"
+
+    try:
+        import httpx
+        async with httpx.AsyncClient() as client:
+            resp = await client.post(
+                f"https://api.telegram.org/bot{bot_token}/sendMessage",
+                json={"chat_id": target_chat_id, "text": text, "parse_mode": "Markdown"},
+                timeout=10,
+            )
+            if resp.status_code == 200:
+                return f"[OK] Message sent to {channel}:{target_chat_id}"
+            return f"[ERROR] Telegram API returned {resp.status_code}: {resp.text[:200]}"
+    except Exception as e:
+        return f"[ERROR] send_message failed: {e}"
+
+
+# ---------------------------------------------------------------------------
+# sessions tools
+# ---------------------------------------------------------------------------
+
+@mcp.tool()
+async def sessions_list() -> str:
+    """List all active pyclaw sessions with their agent, channel, and status."""
+    try:
+        from pyclaw.config.loader import ConfigLoader
+
+        loader = ConfigLoader()
+        sessions_dir = Path("~/.pyclaw/sessions").expanduser()
+        if not sessions_dir.exists():
+            return "No sessions directory found."
+
+        sessions = []
+        for f in sorted(sessions_dir.glob("*.json"))[-20:]:  # last 20
+            import json
+            try:
+                data = json.loads(f.read_text())
+                sessions.append(
+                    f"• {data.get('id', f.stem)[:12]} | "
+                    f"agent={data.get('agent_id', '?')} | "
+                    f"channel={data.get('channel', '?')} | "
+                    f"msgs={len(data.get('messages', []))} | "
+                    f"updated={data.get('updated_at', '?')[:16]}"
+                )
+            except Exception:
+                sessions.append(f"• {f.stem} [parse error]")
+
+        return f"Active sessions ({len(sessions)}):\n" + "\n".join(sessions) if sessions else "No sessions found."
+    except Exception as e:
+        return f"[ERROR] sessions_list failed: {e}"
+
+
+@mcp.tool()
+async def sessions_history(session_id: str, max_messages: int = 20) -> str:
+    """
+    Get conversation history for a session.
+
+    Args:
+        session_id: Session ID (partial match supported)
+        max_messages: Max messages to return
+    """
+    try:
+        sessions_dir = Path("~/.pyclaw/sessions").expanduser()
+        matches = list(sessions_dir.glob(f"*{session_id}*.json"))
+        if not matches:
+            return f"No session found matching: {session_id}"
+
+        import json
+        data = json.loads(matches[0].read_text())
+        messages = data.get("messages", [])[-max_messages:]
+
+        lines = [f"Session: {data.get('id', 'unknown')} | agent: {data.get('agent_id', '?')}"]
+        for msg in messages:
+            role = msg.get("role", "?").upper()[:9]
+            content = msg.get("content", "")[:300]
+            lines.append(f"\n[{role}] {content}")
+
+        return "\n".join(lines)
+    except Exception as e:
+        return f"[ERROR] sessions_history failed: {e}"
+
+
+# ---------------------------------------------------------------------------
+# memory tools
+# ---------------------------------------------------------------------------
+
+def _agent_memory_service(agent_name: Optional[str] = None):
+    """
+    Return a memory accessor for the given agent.
+
+    If the gateway has already initialised a MemoryService (in-process mode),
+    we create an ephemeral MemoryService that shares the global HookRegistry
+    and the configured embedding backend, but uses the agent-specific
+    FileMemoryBackend directory.  This ensures that plugin hooks registered
+    for ``memory:*`` events are respected and that vector search works.
+
+    When running as a standalone MCP process (no gateway in this process), the
+    function falls back to using FileMemoryBackend directly — the interface is
+    identical so all call sites work unchanged.
+    """
+    from pyclaw.memory.file_backend import FileMemoryBackend
+
+    config_dir = os.environ.get("PYCLAW_CONFIG_DIR", "~/.pyclaw")
+    name = agent_name or os.environ.get("PYCLAW_AGENT_NAME", "default")
+    agent_dir = str(Path(config_dir).expanduser() / "agents" / name)
+
+    # Try to reuse the global hook registry and embedding backend
+    embedding_backend = None
+    try:
+        from pyclaw.memory.service import get_memory_service, MemoryService
+        global_svc = get_memory_service()
+        if global_svc is not None:
+            # Borrow embedding backend from the global service's default backend
+            existing = global_svc._default
+            if hasattr(existing, "_embedding_backend"):
+                embedding_backend = existing._embedding_backend
+            backend = FileMemoryBackend(
+                base_dir=agent_dir,
+                embedding_backend=embedding_backend,
+            )
+            return MemoryService(
+                registry=global_svc._registry,
+                default_backend=backend,
+            )
+    except Exception:
+        pass
+
+    return FileMemoryBackend(base_dir=agent_dir)
+
+
+@mcp.tool()
+async def memory_search(ctx: Context, query: str, limit: int = 10) -> str:
+    """
+    Search long-term memory for relevant context.
+
+    Args:
+        query: Search query (keywords)
+        limit: Maximum number of results to return
+    """
+    try:
+        headers = get_http_headers()
+        agent_name = headers.get("x-agent-name") if headers else None
+        backend = _agent_memory_service(agent_name)
+        results = await backend.search(query, limit=limit)
+        if not results:
+            return "No memory results found."
+        lines = []
+        for r in results:
+            header = f"**{r['key']}** ({r['date']})"
+            if r.get("tags"):
+                header += f" — tags: {', '.join(r['tags'])}"
+            lines.append(header)
+            lines.append(r["content"])
+            lines.append("")
+        return "\n".join(lines).strip()
+    except Exception as e:
+        return f"[ERROR] memory_search failed: {e}"
+
+
+@mcp.tool()
+async def memory_get(ctx: Context, key: str) -> str:
+    """
+    Get a specific memory entry by key.
+
+    Args:
+        key: Memory key to retrieve
+    """
+    try:
+        headers = get_http_headers()
+        agent_name = headers.get("x-agent-name") if headers else None
+        backend = _agent_memory_service(agent_name)
+        entry = await backend.read(key)
+        if entry is None:
+            return f"No memory entry found for key: {key}"
+        result = f"**{key}** ({entry['date']})\n\n{entry['content']}"
+        if entry.get("tags"):
+            result += f"\n\nTags: {', '.join(entry['tags'])}"
+        return result
+    except Exception as e:
+        return f"[ERROR] memory_get failed: {e}"
+
+
+# ---------------------------------------------------------------------------
+# session_status
+# ---------------------------------------------------------------------------
+
+@mcp.tool()
+async def session_status() -> str:
+    """Return current gateway status: uptime, active sessions, loaded agents."""
+    try:
+        import json
+        status_file = Path("~/.pyclaw/status.json").expanduser()
+        if status_file.exists():
+            data = json.loads(status_file.read_text())
+            return json.dumps(data, indent=2)
+        return "Gateway status unavailable (not running or status file missing)."
+    except Exception as e:
+        return f"[ERROR] session_status failed: {e}"
+
+
+# ---------------------------------------------------------------------------
+# memory_store / memory_delete / memory_list
+# ---------------------------------------------------------------------------
+
+@mcp.tool()
+async def memory_store(ctx: Context, key: str, value: str, tags: Optional[str] = None) -> str:
+    """
+    Store or update a key/value entry in long-term memory.
+
+    Args:
+        key: Memory key (e.g. "user-preference-theme")
+        value: Content to store
+        tags: Optional comma-separated tags for retrieval
+    """
+    try:
+        headers = get_http_headers()
+        agent_name = headers.get("x-agent-name") if headers else None
+        backend = _agent_memory_service(agent_name)
+        tag_list = [t.strip() for t in tags.split(",")] if tags else []
+        await backend.write(key, {"content": value, "tags": tag_list})
+        return f"[OK] Stored: {key}"
+    except Exception as e:
+        return f"[ERROR] memory_store failed: {e}"
+
+
+@mcp.tool()
+async def memory_delete(ctx: Context, key: str) -> str:
+    """
+    Delete a memory entry by key.
+
+    Args:
+        key: Memory key to delete
+    """
+    try:
+        headers = get_http_headers()
+        agent_name = headers.get("x-agent-name") if headers else None
+        backend = _agent_memory_service(agent_name)
+        deleted = await backend.delete(key)
+        if deleted:
+            return f"[OK] Deleted: {key}"
+        return f"[NOT FOUND] No entry found for key: {key}"
+    except Exception as e:
+        return f"[ERROR] memory_delete failed: {e}"
+
+
+@mcp.tool()
+async def memory_list(ctx: Context, prefix: str = "") -> str:
+    """
+    List all memory keys, optionally filtered by prefix.
+
+    Args:
+        prefix: Optional key prefix filter
+    """
+    try:
+        headers = get_http_headers()
+        agent_name = headers.get("x-agent-name") if headers else None
+        backend = _agent_memory_service(agent_name)
+        keys = await backend.list(prefix=prefix)
+        if not keys:
+            return "No memory entries found."
+        return "\n".join(f"- {k}" for k in keys)
+    except Exception as e:
+        return f"[ERROR] memory_list failed: {e}"
+
+
+@mcp.tool()
+async def memory_reindex(ctx: Context, batch_size: int = 32) -> str:
+    """
+    Rebuild the vector search index for all memory entries.
+
+    Use this after enabling embeddings on an existing memory directory, or
+    after switching embedding models.  Has no effect if no embedding backend
+    is configured (returns a message explaining this).
+
+    Args:
+        batch_size: Number of entries to embed per API call (default 32)
+    """
+    try:
+        headers = get_http_headers()
+        agent_name = headers.get("x-agent-name") if headers else None
+        backend = _agent_memory_service(agent_name)
+
+        # Unwrap MemoryService → FileMemoryBackend if needed
+        from pyclaw.memory.file_backend import FileMemoryBackend
+        fb: Any = backend
+        if not isinstance(fb, FileMemoryBackend):
+            fb = getattr(fb, "_default", backend)
+
+        if not isinstance(fb, FileMemoryBackend):
+            return "[ERROR] memory_reindex requires a FileMemoryBackend"
+
+        result = await fb.reindex(batch_size=batch_size)
+        if result["indexed"] == 0 and result["errors"] == 0:
+            # No embedding backend configured
+            return (
+                "No embedding backend configured. "
+                "Set memory.embedding.enabled: true in your config to enable vector search."
+            )
+        return (
+            f"[OK] Reindex complete: indexed={result['indexed']} "
+            f"errors={result['errors']}"
+        )
+    except Exception as e:
+        return f"[ERROR] memory_reindex failed: {e}"
+
+
+# ---------------------------------------------------------------------------
+# sessions_send
+# ---------------------------------------------------------------------------
+
+_GATEWAY_BASE = os.environ.get("PYCLAW_GATEWAY_URL", "http://localhost:8080")
+
+
+@mcp.tool()
+async def sessions_send(
+    message: str,
+    agent_id: Optional[str] = None,
+    session_id: Optional[str] = None,
+    channel: str = "internal",
+) -> str:
+    """
+    Send a message into another pyclaw session via the gateway API.
+
+    Args:
+        message: The message to send
+        agent_id: Target agent ID (uses default agent if not specified)
+        session_id: Optional existing session ID to send into
+        channel: Channel label for the message (default: internal)
+    """
+    try:
+        import httpx
+
+        # Resolve agent_id from config if not provided
+        if not agent_id:
+            cfg_path = Path("~/.pyclaw/config/pyclaw.yaml").expanduser()
+            if cfg_path.exists():
+                import yaml  # type: ignore
+                cfg = yaml.safe_load(cfg_path.read_text())
+                agents = cfg.get("agents", {})
+                agent_id = next(iter(agents), "main")
+            else:
+                agent_id = "main"
+
+        url = f"{_GATEWAY_BASE}/api/v1/agents/{agent_id}/messages"
+        payload: dict = {"content": message, "channel": channel}
+        if session_id:
+            payload["session_id"] = session_id
+
+        async with httpx.AsyncClient(timeout=60) as client:
+            resp = await client.post(url, json=payload)
+            if resp.status_code == 200:
+                data = resp.json()
+                response_text = data.get("response", data.get("content", str(data)))
+                return f"[OK] Response: {response_text}"
+            return f"[ERROR] Gateway returned {resp.status_code}: {resp.text[:300]}"
+    except Exception as e:
+        return f"[ERROR] sessions_send failed: {e}"
+
+
+# ---------------------------------------------------------------------------
+# sessions_spawn
+# ---------------------------------------------------------------------------
+
+@mcp.tool()
+async def sessions_spawn(
+    task: str,
+    agent_id: Optional[str] = None,
+    label: Optional[str] = None,
+    timeout_seconds: int = 120,
+) -> str:
+    """
+    Spawn a new sub-agent session to handle a task and return the result.
+
+    Args:
+        task: The task or prompt to give the spawned agent
+        agent_id: Agent to use (defaults to main agent)
+        label: Optional label for the spawned session
+        timeout_seconds: Max seconds to wait for response
+    """
+    try:
+        import httpx
+
+        if not agent_id:
+            cfg_path = Path("~/.pyclaw/config/pyclaw.yaml").expanduser()
+            if cfg_path.exists():
+                import yaml  # type: ignore
+                cfg = yaml.safe_load(cfg_path.read_text())
+                agents = cfg.get("agents", {})
+                agent_id = next(iter(agents), "main")
+            else:
+                agent_id = "main"
+
+        url = f"{_GATEWAY_BASE}/api/v1/agents/{agent_id}/messages"
+        payload: dict = {
+            "content": task,
+            "channel": "spawn",
+        }
+        if label:
+            payload["label"] = label
+
+        async with httpx.AsyncClient(timeout=timeout_seconds + 10) as client:
+            resp = await client.post(url, json=payload)
+            if resp.status_code == 200:
+                data = resp.json()
+                response_text = data.get("response", data.get("content", str(data)))
+                session = data.get("session_id", "unknown")
+                return f"[SPAWNED session={session}]\n{response_text}"
+            return f"[ERROR] Gateway returned {resp.status_code}: {resp.text[:300]}"
+    except Exception as e:
+        return f"[ERROR] sessions_spawn failed: {e}"
+
+
+# ---------------------------------------------------------------------------
+# agents_list
+# ---------------------------------------------------------------------------
+
+@mcp.tool()
+async def agents_list() -> str:
+    """List all configured pyclaw agents with their model and status."""
+    try:
+        cfg_path = Path("~/.pyclaw/config/pyclaw.yaml").expanduser()
+        if not cfg_path.exists():
+            return "No pyclaw config found."
+
+        import yaml  # type: ignore
+        cfg = yaml.safe_load(cfg_path.read_text())
+        agents = cfg.get("agents", {})
+        if not agents:
+            return "No agents configured."
+
+        lines = [f"Configured agents ({len(agents)}):"]
+        for agent_id, agent_cfg in agents.items():
+            if not isinstance(agent_cfg, dict):
+                continue
+            model = agent_cfg.get("model", "?")
+            heartbeat = agent_cfg.get("heartbeat", {})
+            hb_enabled = heartbeat.get("enabled", False) if isinstance(heartbeat, dict) else False
+            mcp = agent_cfg.get("mcp_servers", [])
+            lines.append(
+                f"• {agent_id} | model={model} | mcp={mcp} | heartbeat={'on' if hb_enabled else 'off'}"
+            )
+        return "\n".join(lines)
+    except Exception as e:
+        return f"[ERROR] agents_list failed: {e}"
+
+
+# ---------------------------------------------------------------------------
+# process  (background process management)
+# ---------------------------------------------------------------------------
+
+@mcp.tool()
+async def process(
+    action: str,
+    pid: Optional[int] = None,
+    signal: str = "TERM",
+) -> str:
+    """
+    Manage background processes started with bash(background=True).
+
+    Args:
+        action: One of: list, kill, status
+        pid: Process ID (required for kill/status)
+        signal: Signal name for kill: TERM (default), KILL, INT, HUP
+    """
+    import signal as signal_module
+
+    if action == "list":
+        if not _bg_processes:
+            return "No tracked background processes."
+        lines = ["Background processes:"]
+        for p, cmd in list(_bg_processes.items()):
+            try:
+                os.kill(p, 0)  # check alive
+                lines.append(f"• PID={p} running: {cmd[:80]}")
+            except ProcessLookupError:
+                lines.append(f"• PID={p} exited: {cmd[:80]}")
+                _bg_processes.pop(p, None)
+        return "\n".join(lines)
+
+    if pid is None:
+        return "[ERROR] pid is required for action: " + action
+
+    if action in ("kill", "stop"):
+        sig_map = {"TERM": signal_module.SIGTERM, "KILL": signal_module.SIGKILL,
+                   "INT": signal_module.SIGINT, "HUP": signal_module.SIGHUP}
+        sig = sig_map.get(signal.upper(), signal_module.SIGTERM)
+        try:
+            os.kill(pid, sig)
+            _bg_processes.pop(pid, None)
+            return f"[OK] Sent {signal} to PID {pid}"
+        except ProcessLookupError:
+            return f"[ERROR] No such process: PID {pid}"
+        except PermissionError:
+            return f"[ERROR] Permission denied to signal PID {pid}"
+
+    if action == "status":
+        try:
+            os.kill(pid, 0)
+            cmd = _bg_processes.get(pid, "unknown command")
+            return f"PID {pid}: running | cmd: {cmd}"
+        except ProcessLookupError:
+            _bg_processes.pop(pid, None)
+            return f"PID {pid}: not running (exited)"
+
+    return f"[ERROR] Unknown action: {action!r}. Use: list, kill, status"
+
+
+# ---------------------------------------------------------------------------
+# image  (vision / image understanding)
+# ---------------------------------------------------------------------------
+
+@mcp.tool()
+async def image(
+    path: str,
+    prompt: str = "Describe this image in detail.",
+) -> str:
+    """
+    Understand or analyse an image using a vision model (MiniMax VLM).
+
+    Args:
+        path: Local file path or URL to the image
+        prompt: Question or instruction about the image
+    """
+    try:
+        import base64
+        import httpx
+
+        api_key = os.environ.get("GENERIC_API_KEY") or os.environ.get("MINIMAX_API_KEY", "")
+        base_url = os.environ.get("GENERIC_BASE_URL", "https://api.minimax.io/v1")
+        if not api_key:
+            return "[ERROR] No API key configured (GENERIC_API_KEY / MINIMAX_API_KEY)"
+
+        # Load image
+        if path.startswith("http://") or path.startswith("https://"):
+            async with httpx.AsyncClient(timeout=30) as client:
+                r = await client.get(path)
+                r.raise_for_status()
+                image_bytes = r.content
+                content_type = r.headers.get("content-type", "image/jpeg").split(";")[0]
+        else:
+            image_path = Path(path).expanduser()
+            if not image_path.exists():
+                return f"[ERROR] File not found: {path}"
+            image_bytes = image_path.read_bytes()
+            suffix = image_path.suffix.lower()
+            content_type = {"jpg": "image/jpeg", "jpeg": "image/jpeg",
+                            "png": "image/png", "gif": "image/gif",
+                            "webp": "image/webp"}.get(suffix.lstrip("."), "image/jpeg")
+
+        b64 = base64.b64encode(image_bytes).decode()
+        data_url = f"data:{content_type};base64,{b64}"
+
+        payload = {
+            "model": "MiniMax-VL-01",
+            "messages": [
+                {
+                    "role": "user",
+                    "content": [
+                        {"type": "image_url", "image_url": {"url": data_url}},
+                        {"type": "text", "text": prompt},
+                    ],
+                }
+            ],
+            "max_tokens": 1024,
+        }
+
+        async with httpx.AsyncClient(timeout=60) as client:
+            resp = await client.post(
+                f"{base_url}/chat/completions",
+                headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"},
+                json=payload,
+            )
+            if resp.status_code == 200:
+                data = resp.json()
+                text = data["choices"][0]["message"]["content"]
+                return text
+            return f"[ERROR] Vision API returned {resp.status_code}: {resp.text[:300]}"
+    except Exception as e:
+        return f"[ERROR] image tool failed: {e}"
+
+
+# ---------------------------------------------------------------------------
+# tts  (text-to-speech via MiniMax)
+# ---------------------------------------------------------------------------
+
+@mcp.tool()
+async def tts(
+    text: str,
+    output_path: Optional[str] = None,
+    voice_id: str = "Calm_Woman",
+    speed: float = 1.0,
+) -> str:
+    """
+    Convert text to speech using MiniMax TTS and save to a file.
+
+    Args:
+        text: Text to convert to speech
+        output_path: Where to save the audio file (default: /tmp/tts_<timestamp>.mp3)
+        voice_id: Voice ID to use (default: Calm_Woman)
+        speed: Speech speed multiplier (0.5 – 2.0, default 1.0)
+    """
+    try:
+        import httpx
+        from datetime import datetime as _dt
+
+        api_key = os.environ.get("GENERIC_API_KEY") or os.environ.get("MINIMAX_API_KEY", "")
+        if not api_key:
+            return "[ERROR] No API key configured (GENERIC_API_KEY / MINIMAX_API_KEY)"
+
+        if not output_path:
+            ts = _dt.now().strftime("%Y%m%d_%H%M%S")
+            output_path = f"/tmp/tts_{ts}.mp3"
+
+        payload = {
+            "model": "speech-02-hd",
+            "text": text,
+            "stream": False,
+            "voice_setting": {
+                "voice_id": voice_id,
+                "speed": speed,
+                "vol": 1.0,
+                "pitch": 0,
+            },
+            "audio_setting": {
+                "sample_rate": 32000,
+                "bitrate": 128000,
+                "format": "mp3",
+            },
+        }
+
+        async with httpx.AsyncClient(timeout=60) as client:
+            resp = await client.post(
+                "https://api.minimax.io/v1/t2a_v2",
+                headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"},
+                json=payload,
+            )
+            if resp.status_code != 200:
+                return f"[ERROR] TTS API returned {resp.status_code}: {resp.text[:300]}"
+
+            data = resp.json()
+            audio_hex = data.get("data", {}).get("audio", "")
+            if not audio_hex:
+                return f"[ERROR] No audio in response: {str(data)[:200]}"
+
+            audio_bytes = bytes.fromhex(audio_hex)
+            Path(output_path).write_bytes(audio_bytes)
+            size_kb = len(audio_bytes) // 1024
+            return f"[OK] Audio saved to {output_path} ({size_kb}KB)"
+    except Exception as e:
+        return f"[ERROR] tts failed: {e}"
+
+
+# ---------------------------------------------------------------------------
+# Jobs — CRUD via gateway HTTP API
+# ---------------------------------------------------------------------------
+
+def _jobs_api(path: str, method: str = "GET", **kwargs) -> dict:
+    """Call the jobs HTTP API synchronously."""
+    import httpx
+    url = f"{_GATEWAY_BASE}/api/v1/jobs{path}"
+    with httpx.Client(timeout=15) as client:
+        resp = getattr(client, method.lower())(url, **kwargs)
+        resp.raise_for_status()
+        return resp.json()
+
+
+def _get_caller_agent() -> Optional[str]:
+    """Read X-Agent-Name from the MCP HTTP request headers."""
+    return get_http_headers().get("x-agent-name") or None
+
+
+@mcp.tool()
+def jobs_list(all_agents: bool = False) -> str:
+    """
+    List scheduled jobs with status, next run time, and run counts.
+
+    By default shows only jobs owned by the calling agent.
+    Set all_agents=True to list every job across all agents.
+    """
+    try:
+        agent = _get_caller_agent()
+        if all_agents or not agent:
+            data = _jobs_api("/")
+        else:
+            data = _jobs_api(f"/?owner={agent}")
+        jobs = data.get("jobs", [])
+        if not jobs:
+            return "No jobs scheduled."
+        lines = [f"Scheduled jobs ({len(jobs)}):"]
+        for j in jobs:
+            icon = "✅" if j.get("enabled") else "⏸"
+            run = j.get("run", {})
+            sched = j.get("schedule", {})
+            sched_str = sched.get("expr") or (f"{sched.get('seconds')}s" if sched.get("seconds") else sched.get("at", "?"))
+            lines.append(
+                f"  {icon} {j['name']} [{run.get('kind','?')}] "
+                f"schedule={sched_str} next={j.get('next_run','—')} runs={j.get('run_count',0)}"
+            )
+        return "\n".join(lines)
+    except Exception as e:
+        return f"[ERROR] {e}"
+
+
+@mcp.tool()
+def jobs_get(job: str) -> str:
+    """
+    Get full details of a job by name or ID.
+
+    Args:
+        job: Job name or ID
+    """
+    try:
+        return json.dumps(_jobs_api(f"/{job}"), indent=2, default=str)
+    except Exception as e:
+        return f"[ERROR] {e}"
+
+
+@mcp.tool()
+def jobs_create_command(
+    name: str,
+    schedule: str,
+    command: str,
+    description: str = "",
+    timeout_seconds: int = 300,
+    deliver_channel: str = "",
+    deliver_chat_id: str = "",
+) -> str:
+    """
+    Create a scheduled shell command job.
+
+    Args:
+        name: Unique job name (e.g. "cleanup-tmp")
+        schedule: When to run:
+                  "0 9 * * *"               cron — 9am daily UTC
+                  "0 9 * * * America/New_York"  cron with timezone
+                  "30m" / "2h" / "1d"       fixed interval
+                  "2026-03-10T09:00:00Z"    one-shot datetime
+        command: Shell command to execute
+        description: Optional description
+        timeout_seconds: Max execution time in seconds (default 300)
+        deliver_channel: "telegram", "slack", or "" for gateway default
+        deliver_chat_id: Specific recipient ID (optional)
+    """
+    try:
+        data = _jobs_api("/command", method="POST", json={
+            "name": name, "schedule": schedule, "command": command,
+            "description": description or None, "timeout_seconds": timeout_seconds,
+            "deliver_channel": deliver_channel or None,
+            "deliver_chat_id": deliver_chat_id or None,
+            "owner": _get_caller_agent(),
+        })
+        j = data.get("job", {})
+        return f"[OK] Created command job '{j.get('name')}' (id={j.get('id')}) next_run={j.get('next_run')}"
+    except Exception as e:
+        return f"[ERROR] {e}"
+
+
+@mcp.tool()
+def jobs_create_agent(
+    name: str,
+    schedule: str,
+    agent: str,
+    message: str,
+    model: str = "",
+    description: str = "",
+    timeout_seconds: int = 300,
+    deliver_channel: str = "",
+    deliver_chat_id: str = "",
+) -> str:
+    """
+    Create a scheduled agent job that sends a prompt to an agent and delivers its response.
+
+    Args:
+        name: Unique job name (e.g. "daily-news")
+        schedule: When to run:
+                  "0 8 * * *"               cron — 8am daily UTC
+                  "0 8 * * * America/New_York"  cron with timezone
+                  "1h"                      every hour
+                  "2026-03-10T09:00:00Z"    one-shot
+        agent: Agent name from config (e.g. "assistant")
+        message: Prompt to send to the agent each run
+        model: Optional model override, empty = use agent default
+        description: Optional description
+        timeout_seconds: Max agent response time (default 300)
+        deliver_channel: "telegram", "slack", or "" for gateway default
+        deliver_chat_id: Specific recipient ID (optional)
+    """
+    try:
+        data = _jobs_api("/agent", method="POST", json={
+            "name": name, "schedule": schedule, "agent": agent,
+            "message": message, "model": model or None,
+            "description": description or None, "timeout_seconds": timeout_seconds,
+            "deliver_channel": deliver_channel or None,
+            "deliver_chat_id": deliver_chat_id or None,
+            "owner": _get_caller_agent(),
+        })
+        j = data.get("job", {})
+        return f"[OK] Created agent job '{j.get('name')}' (id={j.get('id')}) next_run={j.get('next_run')}"
+    except Exception as e:
+        return f"[ERROR] {e}"
+
+
+@mcp.tool()
+def jobs_update(
+    job: str,
+    schedule: str = "",
+    enabled: str = "",
+    timeout_seconds: int = 0,
+    deliver_channel: str = "",
+    deliver_chat_id: str = "",
+) -> str:
+    """
+    Update a job's schedule, enabled state, or delivery config.
+
+    Args:
+        job: Job name or ID
+        schedule: New schedule string (empty = keep current)
+        enabled: "true" or "false" (empty = keep current)
+        timeout_seconds: New timeout in seconds (0 = keep current)
+        deliver_channel: New delivery channel (empty = keep current)
+        deliver_chat_id: New delivery chat ID (empty = keep current)
+    """
+    try:
+        payload: dict = {}
+        if schedule:
+            payload["schedule"] = schedule
+        if enabled in ("true", "false"):
+            payload["enabled"] = enabled == "true"
+        if timeout_seconds > 0:
+            payload["timeout_seconds"] = timeout_seconds
+        if deliver_channel:
+            payload["deliver_channel"] = deliver_channel
+        if deliver_chat_id:
+            payload["deliver_chat_id"] = deliver_chat_id
+        if not payload:
+            return "[ERROR] No update fields provided."
+        data = _jobs_api(f"/{job}", method="PATCH", json=payload)
+        j = data.get("job", {})
+        return f"[OK] Updated '{j.get('name')}' next_run={j.get('next_run')}"
+    except Exception as e:
+        return f"[ERROR] {e}"
+
+
+@mcp.tool()
+def jobs_delete(job: str) -> str:
+    """
+    Permanently delete a scheduled job.
+
+    Args:
+        job: Job name or ID
+    """
+    try:
+        data = _jobs_api(f"/{job}", method="DELETE")
+        return f"[OK] Deleted job '{data.get('deleted')}'"
+    except Exception as e:
+        return f"[ERROR] {e}"
+
+
+@mcp.tool()
+def jobs_enable(job: str) -> str:
+    """
+    Enable a disabled job.
+
+    Args:
+        job: Job name or ID
+    """
+    try:
+        data = _jobs_api(f"/{job}/enable", method="POST")
+        return f"[OK] Enabled '{data.get('job')}' next_run={data.get('next_run')}"
+    except Exception as e:
+        return f"[ERROR] {e}"
+
+
+@mcp.tool()
+def jobs_disable(job: str) -> str:
+    """
+    Disable a job without deleting it.
+
+    Args:
+        job: Job name or ID
+    """
+    try:
+        data = _jobs_api(f"/{job}/disable", method="POST")
+        return f"[OK] Disabled '{data.get('job')}'"
+    except Exception as e:
+        return f"[ERROR] {e}"
+
+
+@mcp.tool()
+def jobs_run_now(job: str) -> str:
+    """
+    Trigger a job to run immediately regardless of schedule.
+
+    Args:
+        job: Job name or ID
+    """
+    try:
+        data = _jobs_api(f"/{job}/run", method="POST")
+        return f"[OK] Triggered '{data.get('job')}'"
+    except Exception as e:
+        return f"[ERROR] {e}"
+
+
+@mcp.tool()
+def jobs_history(job: str, limit: int = 10) -> str:
+    """
+    Get recent run history for a job.
+
+    Args:
+        job: Job name or ID
+        limit: Number of recent runs to show (default 10)
+    """
+    try:
+        data = _jobs_api(f"/{job}/history?limit={limit}")
+        runs = data.get("runs", [])
+        if not runs:
+            return f"No run history for '{data.get('job_name', job)}'."
+        lines = [f"History for '{data.get('job_name')}' (last {len(runs)}):"]
+        for r in runs:
+            icon = "✅" if r.get("status") == "completed" else "❌"
+            dur = f"{r.get('duration_ms') or 0:.0f}ms"
+            started = (r.get("started_at") or "")[:19]
+            lines.append(f"  {icon} {started} ({dur})")
+            if r.get("error"):
+                lines.append(f"      error: {r['error'][:120]}")
+            elif r.get("stdout"):
+                lines.append(f"      output: {r['stdout'].strip()[:120]}")
+        return "\n".join(lines)
+    except Exception as e:
+        return f"[ERROR] {e}"
+
+
+@mcp.tool()
+def jobs_status() -> str:
+    """Get overall job scheduler status (total, enabled, running counts)."""
+    try:
+        return json.dumps(_jobs_api("/status"), indent=2)
+    except Exception as e:
+        return f"[ERROR] {e}"
+
+
+# ---------------------------------------------------------------------------
+# TODOs — CRUD via gateway HTTP API
+# ---------------------------------------------------------------------------
+
+def _todos_api(path: str, method: str = "GET", **kwargs) -> dict:
+    """Call the todos HTTP API synchronously."""
+    import httpx
+    url = f"{_GATEWAY_BASE}/api/v1/todos{path}"
+    with httpx.Client(timeout=15) as client:
+        resp = getattr(client, method.lower())(url, **kwargs)
+        resp.raise_for_status()
+        return resp.json()
+
+
+def _fmt_todo(t: dict) -> str:
+    priority = t.get("priority", "?").upper()
+    status = t.get("status", "?")
+    due = f" due={t['due_date'][:10]}" if t.get("due_date") else ""
+    tags = f" [{','.join(t['tags'])}]" if t.get("tags") else ""
+    owner = f" @{t['owner']}" if t.get("owner") else ""
+    notes = f"\n    notes: {t['notes'][:80]}" if t.get("notes") else ""
+    blocked = f" blocked_by={t['blocked_by']}" if t.get("blocked_by") else ""
+    return (
+        f"[{t['id']}] [{priority}] [{status}] {t['title']}"
+        f"{due}{tags}{owner}{blocked}{notes}"
+    )
+
+
+@mcp.tool()
+def todos_list(
+    status: str = "",
+    priority: str = "",
+    tags: str = "",
+    all_agents: bool = False,
+) -> str:
+    """
+    List TODO items with optional filters.
+
+    By default shows todos owned by the calling agent plus human-created ones.
+    Set all_agents=True to see all todos regardless of owner.
+
+    Args:
+        status:     Filter by status: open, in_progress, done, cancelled, blocked
+        priority:   Filter by priority: low, medium, high, critical
+        tags:       Comma-separated tags to filter by
+        all_agents: If True, include todos from all agents
+    """
+    try:
+        agent = _get_caller_agent()
+        params: dict = {"all_owners": all_agents}
+        if not all_agents and agent:
+            params["owner"] = agent
+        if status:
+            params["status"] = status
+        if priority:
+            params["priority"] = priority
+        if tags:
+            params["tags"] = tags
+        qs = "&".join(f"{k}={v}" for k, v in params.items())
+        data = _todos_api(f"/?{qs}" if qs else "/")
+        todos = data.get("todos", [])
+        if not todos:
+            return "No todos found."
+        lines = [f"Todos ({len(todos)}):"]
+        for t in todos:
+            lines.append("  " + _fmt_todo(t))
+        return "\n".join(lines)
+    except Exception as e:
+        return f"[ERROR] {e}"
+
+
+@mcp.tool()
+def todo_get(todo_id: str) -> str:
+    """
+    Get full details of a TODO by ID.
+
+    Args:
+        todo_id: The 8-character TODO ID
+    """
+    try:
+        data = _todos_api(f"/{todo_id}")
+        return json.dumps(data.get("todo", data), indent=2, default=str)
+    except Exception as e:
+        return f"[ERROR] {e}"
+
+
+@mcp.tool()
+def todo_create(
+    title: str,
+    description: str = "",
+    priority: str = "medium",
+    tags: str = "",
+    due_date: str = "",
+    blocked_by: str = "",
+) -> str:
+    """
+    Create a new TODO item. Ownership is set automatically from the calling agent.
+
+    Args:
+        title:       Short title for the task
+        description: Detailed description (optional)
+        priority:    low | medium | high | critical  (default: medium)
+        tags:        Comma-separated tags, e.g. "infra,urgent"
+        due_date:    Optional deadline in ISO format: "2026-04-01" or "2026-04-01T09:00:00"
+        blocked_by:  ID of another TODO this depends on (optional)
+    """
+    try:
+        payload: dict = {
+            "title": title,
+            "description": description or None,
+            "priority": priority,
+            "tags": [t.strip() for t in tags.split(",") if t.strip()],
+            "owner": _get_caller_agent(),
+        }
+        if due_date:
+            payload["due_date"] = due_date
+        if blocked_by:
+            payload["blocked_by"] = blocked_by
+        data = _todos_api("/", method="POST", json=payload)
+        t = data.get("todo", {})
+        return f"[OK] Created todo [{t.get('id')}] {t.get('title')} (priority={t.get('priority')})"
+    except Exception as e:
+        return f"[ERROR] {e}"
+
+
+@mcp.tool()
+def todo_update(
+    todo_id: str,
+    title: str = "",
+    description: str = "",
+    priority: str = "",
+    tags: str = "",
+    due_date: str = "",
+    blocked_by: str = "",
+    notes: str = "",
+) -> str:
+    """
+    Update fields on a TODO. Only provided (non-empty) fields are changed.
+
+    Args:
+        todo_id:     The 8-character TODO ID
+        title:       New title
+        description: New description
+        priority:    low | medium | high | critical
+        tags:        New comma-separated tags (replaces existing)
+        due_date:    New deadline in ISO format, or "none" to clear
+        blocked_by:  Dependency TODO ID, or "none" to clear
+        notes:       Progress or context notes
+    """
+    try:
+        payload: dict = {}
+        if title:
+            payload["title"] = title
+        if description:
+            payload["description"] = description
+        if priority:
+            payload["priority"] = priority
+        if tags:
+            payload["tags"] = [t.strip() for t in tags.split(",") if t.strip()]
+        if due_date:
+            payload["due_date"] = None if due_date.lower() == "none" else due_date
+        if blocked_by:
+            payload["blocked_by"] = None if blocked_by.lower() == "none" else blocked_by
+        if notes:
+            payload["notes"] = notes
+        if not payload:
+            return "[ERROR] No fields provided to update."
+        data = _todos_api(f"/{todo_id}", method="PATCH", json=payload)
+        t = data.get("todo", {})
+        return f"[OK] Updated [{t.get('id')}] {t.get('title')}"
+    except Exception as e:
+        return f"[ERROR] {e}"
+
+
+@mcp.tool()
+def todo_mark(todo_id: str, status: str, notes: str = "") -> str:
+    """
+    Set the status of a TODO.
+
+    Args:
+        todo_id: The 8-character TODO ID
+        status:  New status: open | in_progress | done | cancelled | blocked
+        notes:   Optional note explaining the transition (e.g. completion summary,
+                 reason for blocking/cancellation)
+    """
+    try:
+        payload: dict = {"status": status}
+        if notes:
+            payload["notes"] = notes
+        data = _todos_api(f"/{todo_id}/mark", method="POST", json=payload)
+        t = data.get("todo", {})
+        return f"[OK] Marked [{t.get('id')}] {t.get('title')} → {t.get('status')}"
+    except Exception as e:
+        return f"[ERROR] {e}"
+
+
+@mcp.tool()
+def todo_delete(todo_id: str) -> str:
+    """
+    Permanently delete a TODO.
+
+    Args:
+        todo_id: The 8-character TODO ID
+    """
+    try:
+        data = _todos_api(f"/{todo_id}", method="DELETE")
+        return f"[OK] Deleted todo '{data.get('deleted')}'"
+    except Exception as e:
+        return f"[ERROR] {e}"
+
+
+@mcp.tool()
+def todos_next(all_agents: bool = False) -> str:
+    """
+    Return the oldest highest-priority open unblocked TODO to work on next.
+
+    Todos are ranked by priority (critical → high → medium → low) then by
+    creation time ascending — so the oldest item at each priority level is
+    returned first.  Blocked todos (where the dependency is still open) are
+    skipped automatically.
+
+    By default scoped to the calling agent plus human-created todos.
+    Set all_agents=True to consider todos from all agents.
+    """
+    try:
+        agent = _get_caller_agent()
+        params: dict = {"all_owners": all_agents}
+        if not all_agents and agent:
+            params["owner"] = agent
+        qs = "&".join(f"{k}={v}" for k, v in params.items())
+        data = _todos_api(f"/next?{qs}" if qs else "/next")
+        t = data.get("todo")
+        if not t:
+            return data.get("message", "No open unblocked todos found.")
+        return (
+            f"Next todo:\n  " + _fmt_todo(t) +
+            f"\n\nDescription: {t.get('description') or '(none)'}"
+        )
+    except Exception as e:
+        return f"[ERROR] {e}"
+
+
+# ---------------------------------------------------------------------------
+# Skills — discover and read agent skills (agentskills.io format)
+# ---------------------------------------------------------------------------
+
+@mcp.tool()
+def skills_list(all_agents: bool = False) -> str:
+    """
+    List all available skills with their names and descriptions.
+
+    By default, lists skills for the calling agent (global + agent-specific).
+    Set all_agents=True to list global skills only.
+
+    Use skill_read(name) to get the full instructions for a specific skill.
+    """
+    try:
+        from pyclaw.skills.registry import discover_skills
+        agent = None if all_agents else _get_caller_agent()
+        skills = discover_skills(agent_name=agent)
+        if not skills:
+            return "No skills installed. Add skill directories to ~/.pyclaw/skills/."
+        lines = [f"Available skills ({len(skills)}):"]
+        for s in sorted(skills, key=lambda x: x.name):
+            ver = f" v{s.version}" if s.version else ""
+            lines.append(f"  • {s.name}{ver} — {s.description}")
+            if s.allowed_tools:
+                lines.append(f"    allowed-tools: {', '.join(s.allowed_tools)}")
+        return "\n".join(lines)
+    except Exception as e:
+        return f"[ERROR] skills_list failed: {e}"
+
+
+@mcp.tool()
+def skill_read(name: str) -> str:
+    """
+    Read the full SKILL.md for a skill by name.
+
+    The content includes instructions, usage examples, and script references.
+    Script paths use the absolute path to the skill directory so you can run
+    them directly with the bash tool.
+
+    Args:
+        name: Skill name (case-insensitive, as listed by skills_list)
+    """
+    try:
+        from pyclaw.skills.registry import find_skill
+        agent = _get_caller_agent()
+        skill = find_skill(name, agent_name=agent)
+        if skill is None:
+            # Try global fallback
+            skill = find_skill(name)
+        if skill is None:
+            return f"[ERROR] Skill {name!r} not found. Use skills_list() to see available skills."
+        return skill.read_content()
+    except Exception as e:
+        return f"[ERROR] skill_read failed: {e}"
+
+
+# ---------------------------------------------------------------------------
+# Config — CRUD on pyclaw.yaml, validate, reload
+# ---------------------------------------------------------------------------
+
+def _find_config_path() -> Optional[Path]:
+    """Locate the active pyclaw config file (same search order as ConfigLoader)."""
+    from pyclaw.config.loader import DEFAULT_CONFIG_PATHS, expand_path
+    for p in DEFAULT_CONFIG_PATHS:
+        path = expand_path(p)
+        if path.exists():
+            return path
+    return None
+
+
+def _ruamel_load(path: Path):
+    """Load YAML preserving comments via ruamel.yaml. Returns (yaml_instance, data)."""
+    from ruamel.yaml import YAML
+    ry = YAML()
+    ry.preserve_quotes = True
+    with open(path, "r") as f:
+        data = ry.load(f)
+    return ry, data or {}
+
+
+def _ruamel_save(ry, data, path: Path) -> None:
+    """Write back YAML via ruamel.yaml (comments preserved)."""
+    import io
+    buf = io.StringIO()
+    ry.dump(data, buf)
+    path.write_text(buf.getvalue())
+
+
+def _nav_path(data: dict, parts: list[str], *, create: bool = False):
+    """Walk dot-notation path into nested dict. Returns (parent, last_key)."""
+    node = data
+    for part in parts[:-1]:
+        if part not in node:
+            if not create:
+                raise KeyError(f"Key not found: {part!r}")
+            node[part] = {}
+        node = node[part]
+        if not isinstance(node, dict):
+            raise TypeError(f"Cannot descend into non-dict at {part!r}")
+    return node, parts[-1]
+
+
+def _parse_value(raw: str) -> Any:
+    """Try JSON parse, fall back to string."""
+    try:
+        return json.loads(raw)
+    except (json.JSONDecodeError, ValueError):
+        return raw
+
+
+def _config_api(path: str, method: str = "GET", **kwargs) -> dict:
+    """Call the config HTTP API synchronously."""
+    import httpx
+    url = f"{_GATEWAY_BASE}/api/v1/config{path}"
+    with httpx.Client(timeout=15) as client:
+        resp = getattr(client, method.lower())(url, **kwargs)
+        resp.raise_for_status()
+        return resp.json()
+
+
+@mcp.tool()
+def config_get() -> str:
+    """
+    Return the current pyclaw configuration (sensitive fields redacted).
+    Reads live config from the running gateway.
+    """
+    try:
+        data = _config_api("/")
+        return json.dumps(data.get("config", data), indent=2)
+    except Exception as e:
+        return f"[ERROR] config_get failed: {e}"
+
+
+@mcp.tool()
+def config_set(path: str, value: str) -> str:
+    """
+    Set a config value using dot-notation path and reload (where hot-reloadable).
+
+    Hot-reloadable (no restart): system_prompt, model, temperature, max_tokens,
+      heartbeat settings, job schedules, security exec_approvals mode.
+    Requires restart: new agents, host/port, bot tokens, mcp_port.
+
+    Args:
+        path:  Dot-notation key path, e.g. "agents.assistant.model"
+               or "gateway.port" or "agents.assistant.heartbeat.enabled"
+        value: New value as JSON or a plain string.
+               Use JSON for booleans (true/false), numbers, lists, dicts.
+               Examples:
+                 "claude-opus-4-6"           → string
+                 "true" / "false"            → boolean
+                 "2048"                      → integer
+                 '["pyclaw","fetch"]'        → list
+    """
+    try:
+        cfg_path = _find_config_path()
+        if cfg_path is None:
+            return "[ERROR] No pyclaw config file found."
+
+        ry, data = _ruamel_load(cfg_path)
+        parts = [p for p in path.split(".") if p]
+        if not parts:
+            return "[ERROR] Empty path."
+
+        parent, last_key = _nav_path(data, parts, create=True)
+        parsed = _parse_value(value)
+        parent[last_key] = parsed
+
+        # Validate before writing
+        import yaml as _yaml
+        import io
+        buf = io.StringIO()
+        ry.dump(data, buf)
+        raw_dict = _yaml.safe_load(buf.getvalue()) or {}
+        from pyclaw.config.schema import Config
+        Config(**raw_dict)  # raises ValidationError if invalid
+
+        _ruamel_save(ry, data, cfg_path)
+        return f"[OK] Set {path} = {parsed!r} in {cfg_path}"
+    except Exception as e:
+        return f"[ERROR] config_set failed: {e}"
+
+
+@mcp.tool()
+def config_delete(path: str) -> str:
+    """
+    Delete a config key using dot-notation path.
+
+    Args:
+        path: Dot-notation key path, e.g. "agents.old_agent"
+    """
+    try:
+        cfg_path = _find_config_path()
+        if cfg_path is None:
+            return "[ERROR] No pyclaw config file found."
+
+        ry, data = _ruamel_load(cfg_path)
+        parts = [p for p in path.split(".") if p]
+        if not parts:
+            return "[ERROR] Empty path."
+
+        parent, last_key = _nav_path(data, parts)
+        if last_key not in parent:
+            return f"[ERROR] Key not found: {path!r}"
+        del parent[last_key]
+
+        # Validate before writing
+        import yaml as _yaml
+        import io
+        buf = io.StringIO()
+        ry.dump(data, buf)
+        raw_dict = _yaml.safe_load(buf.getvalue()) or {}
+        from pyclaw.config.schema import Config
+        Config(**raw_dict)  # raises ValidationError if invalid
+
+        _ruamel_save(ry, data, cfg_path)
+        return f"[OK] Deleted {path!r} from {cfg_path}"
+    except Exception as e:
+        return f"[ERROR] config_delete failed: {e}"
+
+
+@mcp.tool()
+def config_validate() -> str:
+    """
+    Validate the current config file against the schema without reloading.
+    Returns 'valid' or describes what is wrong.
+    """
+    try:
+        cfg_path = _find_config_path()
+        if cfg_path is None:
+            return "[ERROR] No pyclaw config file found."
+
+        import yaml as _yaml
+        raw = _yaml.safe_load(cfg_path.read_text()) or {}
+        from pyclaw.config.schema import Config
+        Config(**raw)
+        return f"[OK] Config is valid: {cfg_path}"
+    except Exception as e:
+        return f"[INVALID] {e}"
+
+
+@mcp.tool()
+def config_reload() -> str:
+    """
+    Reload configuration from disk and apply all hot-reloadable changes.
+    Hot-reloadable: model, temperature, max_tokens, system_prompt, heartbeat,
+    security exec_approvals mode.  Changes to host/port/tokens need a restart.
+    """
+    try:
+        data = _config_api("/reload", method="post")
+        changed = data.get("changed", [])
+        if changed:
+            return f"[OK] Reloaded. Changed: {', '.join(str(c) for c in changed)}"
+        return "[OK] Reloaded. No changes detected."
+    except Exception as e:
+        return f"[ERROR] config_reload failed: {e}"
+
+
+@mcp.tool()
+def config_schema(section: str = "") -> str:
+    """
+    Return the JSON schema for the pyclaw configuration (or a specific section).
+    Useful for understanding what fields are available before calling config_set.
+
+    Args:
+        section: Optional top-level section name, e.g. "gateway", "agents",
+                 "security", "sessions". Leave empty for the full schema.
+    """
+    try:
+        from pyclaw.config.schema import Config
+        full_schema = Config.model_json_schema()
+
+        if not section:
+            return json.dumps(full_schema, indent=2)
+
+        # Try to find the section in $defs or properties
+        defs = full_schema.get("$defs", {})
+        props = full_schema.get("properties", {})
+
+        if section in props:
+            ref = props[section]
+            # Resolve $ref if present
+            if "$ref" in ref:
+                def_name = ref["$ref"].split("/")[-1]
+                return json.dumps(defs.get(def_name, ref), indent=2)
+            return json.dumps(ref, indent=2)
+
+        # Search $defs directly by name (case-insensitive)
+        for name, schema_def in defs.items():
+            if name.lower() == section.lower() or name.lower().startswith(section.lower()):
+                return json.dumps(schema_def, indent=2)
+
+        available = list(props.keys())
+        return f"[ERROR] Section {section!r} not found. Available: {available}"
+    except Exception as e:
+        return f"[ERROR] config_schema failed: {e}"
+
+
+# ---------------------------------------------------------------------------
+# Entry point — transport controlled by PYCLAW_MCP_TRANSPORT env var
+#   streamable-http (default): HTTP server on PYCLAW_MCP_PORT (default 8081)
+#   stdio: stdio transport for direct subprocess use (e.g. tests)
+# ---------------------------------------------------------------------------
+
+if __name__ == "__main__":
+    transport = os.environ.get("PYCLAW_MCP_TRANSPORT", "http")
+    if transport == "stdio":
+        mcp.run(transport="stdio")
+    else:
+        port = int(os.environ.get("PYCLAW_MCP_PORT", "8081"))
+        mcp.run(transport="http", host="0.0.0.0", port=port)

@@ -2,7 +2,7 @@
 name = "pyclaw"
 version = "0.1.0"
 description = "Python gateway - rewrite of OpenClaw"
-requires-python = ">=3.11"
+requires-python = ">=3.13.5"
 dependencies = [
     "pydantic>=2.0.0",
     "pydantic-settings>=2.0.0",
@@ -20,6 +20,12 @@ dependencies = [
     "cryptography>=41.0.0",
     "anthropic>=0.18.0",
     "openai>=1.12.0",
+    "python-telegram-bot>=20.0",
+    "duckduckgo-search>=8.1.1",
+    "ddgs>=9.11.2",
+    "croniter>=6.0.0",
+    "fastmcp>=3.1.0",
+    "ruamel-yaml>=0.18.0",
 ]
 
 [project.optional-dependencies]
@@ -49,3 +55,9 @@ testpaths = ["tests"]
 [tool.mypy]
 python_version = "3.11"
 strict = true
+
+[dependency-groups]
+dev = [
+    "anyio>=4.12.1",
+    "pytest-asyncio>=1.3.0",
+]

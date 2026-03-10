@@ -27,9 +27,7 @@ class MiniMaxProvider(Provider):
             except:
                 pass
         
-        if not api_key:
-            raise ValueError("MINIMAX_API_KEY is required - set in config, env, or Keychain")
-        
+        # Store key (may be None - raises lazily when chat() is called)
         self.base_url = config.get("base_url", "https://api.minimax.io/v1/text/chatcompletion_v2")
         self.api_key = api_key
         self.model = config.get("model", "MiniMax-M2.5")
@@ -52,8 +50,10 @@ class MiniMaxProvider(Provider):
         **kwargs,
     ) -> ChatResponse:
         """Send a non-streaming chat completion request."""
+        if not self.api_key:
+            raise ValueError("MINIMAX_API_KEY is required - set in config, env, or Keychain")
         model = model or self.default_model or "MiniMax-M2.5"
-        
+
         headers = self._get_headers()
         
         payload: Dict[str, Any] = {
