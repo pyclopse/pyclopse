@@ -19,8 +19,11 @@ def strip_thinking_tags(text: str) -> str:
 
 
 def format_thinking_for_telegram(text: str) -> Optional[str]:
-    """Extract thinking blocks and return a Telegram HTML message showing both
-    spoiler and expandable-blockquote formats side by side (for user testing).
+    """Return a single HTML-formatted Telegram message with thinking shown
+    as an inline spoiler followed by the response.
+
+    The thinking block is hidden behind a tap-to-reveal spoiler; the response
+    follows immediately after so everything arrives in one message.
 
     Returns None if the text contains no thinking blocks.
     """
@@ -30,21 +33,14 @@ def format_thinking_for_telegram(text: str) -> Optional[str]:
     if not matches:
         return None
 
-    # Concatenate all thinking sections
-    parts = [m.group(2).strip() for m in matches]
-    thinking_content = "\n\n".join(parts)
-    safe = _html.escape(thinking_content)
+    # Collect all thinking sections
+    thinking_content = "\n\n".join(m.group(2).strip() for m in matches)
+    response = strip_thinking_tags(text)
 
-    lines = [
-        "💭 <b>Thinking</b>",
-        "",
-        "🫥 <b>Spoiler</b> <i>(tap to reveal)</i>",
-        f"<tg-spoiler>{safe}</tg-spoiler>",
-        "",
-        "📖 <b>Expandable blockquote</b> <i>(tap Show more)</i>",
-        f"<blockquote expandable>{safe}</blockquote>",
-    ]
-    return "\n".join(lines)
+    safe_thinking = _html.escape(thinking_content)
+    safe_response = _html.escape(response)
+
+    return f"<tg-spoiler>💭 {safe_thinking}</tg-spoiler>\n\n{safe_response}"
 
 logger = logging.getLogger(__name__)
 

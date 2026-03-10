@@ -840,9 +840,6 @@ class Gateway:
             finally:
                 self._active_tasks.pop(session_key, None)
             if response:
-                # When show_thinking is enabled, send thinking blocks as a
-                # separate HTML message (spoiler + expandable blockquote),
-                # then strip them from the main response.
                 _agent_id = (
                     next(iter(self._agent_manager.agents))
                     if self._agent_manager and self._agent_manager.agents
@@ -851,23 +848,29 @@ class Gateway:
                 _agent = self._agent_manager.get_agent(_agent_id) if _agent_id and self._agent_manager else None
                 _show_thinking = getattr(getattr(_agent, "config", None), "show_thinking", False)
                 if _show_thinking:
-                    from pyclaw.agents.runner import format_thinking_for_telegram, strip_thinking_tags
-                    thinking_html = format_thinking_for_telegram(response)
-                    if thinking_html:
-                        try:
+                    from pyclaw.agents.runner import format_thinking_for_telegram
+                    combined = format_thinking_for_telegram(response)
+                    if combined:
+                        # Thinking found — send as single HTML message (spoiler + response)
+                        for chunk in self._split_message(combined):
                             await self._telegram_bot.send_message(
                                 chat_id=chat_id,
-                                text=thinking_html,
+                                text=chunk,
                                 parse_mode="HTML",
                             )
-                        except Exception as _te:
-                            self._logger.warning(f"Failed to send thinking message: {_te}")
-                    response = strip_thinking_tags(response)
-                for chunk in self._split_message(response):
-                    await self._telegram_bot.send_message(
-                        chat_id=chat_id,
-                        text=chunk,
-                    )
+                    else:
+                        # No thinking blocks — send response as plain text
+                        for chunk in self._split_message(response):
+                            await self._telegram_bot.send_message(
+                                chat_id=chat_id,
+                                text=chunk,
+                            )
+                else:
+                    for chunk in self._split_message(response):
+                        await self._telegram_bot.send_message(
+                            chat_id=chat_id,
+                            text=chunk,
+                        )
         except asyncio.CancelledError:
             self._logger.info(f"Telegram message cancelled for {user_id}")
         except Exception as e:
