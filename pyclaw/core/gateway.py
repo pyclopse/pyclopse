@@ -606,7 +606,8 @@ class Gateway:
                 if agent:
                     agent_result = await agent.run_heartbeat(prompt)
                     if agent_result and not agent_result.startswith("I hit an internal error"):
-                        result = agent_result
+                        from pyclaw.agents.runner import strip_thinking_tags
+                        result = strip_thinking_tags(agent_result)
                     else:
                         self._logger.warning(f"Agent heartbeat failed: {agent_result}")
                 else:
