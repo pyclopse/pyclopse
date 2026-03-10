@@ -40,7 +40,7 @@ def format_thinking_for_telegram(text: str) -> Optional[str]:
     safe_thinking = _html.escape(thinking_content)
     safe_response = _html.escape(response)
 
-    return f"<tg-spoiler>💭 {safe_thinking}</tg-spoiler>\n\n{safe_response}"
+    return f"<blockquote expandable><i>💭 {safe_thinking}</i></blockquote>\n\n{safe_response}"
 
 logger = logging.getLogger(__name__)
 
