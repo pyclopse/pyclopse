@@ -225,7 +225,7 @@ class AgentConfig(BaseModel):
 
     name: str = "Assistant"
     model: str = "openai/gpt-4"
-    max_tokens: int = Field(4096, validation_alias=AliasChoices("max_tokens", "maxTokens"))
+    max_tokens: int = Field(16384, validation_alias=AliasChoices("max_tokens", "maxTokens"))
     temperature: float = 0.7
     system_prompt: str = Field("You are a helpful assistant.", validation_alias=AliasChoices("system_prompt", "systemPrompt"))
     tools: ToolsConfig = Field(default_factory=ToolsConfig)

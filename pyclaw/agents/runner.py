@@ -131,10 +131,14 @@ class AgentRunner:
         except Exception as e:
             logger.debug(f"Could not set X-Agent-Name header on pyclaw MCP server: {e}")
 
+        from fast_agent.llm.request_params import RequestParams as FARequestParams
+        rp = FARequestParams(maxTokens=self.max_tokens) if self.max_tokens else None
+
         @fast.agent(
             instruction=self.instruction,
             model=self.model,
             servers=self.servers,
+            request_params=rp,
         )
         async def main():
             pass
