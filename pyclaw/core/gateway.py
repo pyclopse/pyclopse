@@ -914,16 +914,14 @@ class Gateway:
     ) -> None:
         """Stream an agent response to Telegram by editing a single message in place.
 
-        Sends a placeholder once enough text has accumulated, then edits it
+        Sends the first message as soon as any content arrives, then edits it
         every ~1 s as new chunks arrive.  On completion the message is replaced
         with the final formatted text (thinking blockquote if enabled).
         """
         import time
-        import re as _re
         import html as _html
 
         THROTTLE_S = 1.0   # minimum seconds between edits
-        MIN_CHARS  = 30    # don't send the first message until we have this many chars
 
         # ── session / agent setup ─────────────────────────────────────────
         agent_id = (
@@ -954,89 +952,50 @@ class Gateway:
         # ── mutable stream state ──────────────────────────────────────────
         stream_msg_id: Optional[int] = None
         last_edit_time: float = 0.0
-        in_thinking: bool = False
-        tag_buffer: str = ""
+        was_reasoning: bool = False       # True while last chunk was reasoning
         accumulated_thinking: str = ""
         accumulated_response: str = ""
-
-        # ── thinking-tag state machine (chunk-boundary-aware) ─────────────
-        def _process_chunk(chunk: str) -> None:
-            nonlocal in_thinking, tag_buffer, accumulated_thinking, accumulated_response
-            buf = tag_buffer + chunk
-            nonlocal_text = buf
-            tag_buffer = ""
-
-            while nonlocal_text:
-                if in_thinking:
-                    close = _re.search(r"</(thinking|think)>", nonlocal_text, _re.IGNORECASE)
-                    if close:
-                        accumulated_thinking += nonlocal_text[: close.start()]
-                        nonlocal_text = nonlocal_text[close.end() :].lstrip("\n")
-                        in_thinking = False
-                    else:
-                        partial = _re.search(
-                            r"</?(?:t(?:h(?:i(?:n(?:k(?:i(?:n(?:g)?)?)?)?)?)?)?)?$",
-                            nonlocal_text,
-                        )
-                        if partial and partial.start() < len(nonlocal_text):
-                            accumulated_thinking += nonlocal_text[: partial.start()]
-                            tag_buffer = nonlocal_text[partial.start() :]
-                        else:
-                            accumulated_thinking += nonlocal_text
-                        nonlocal_text = ""
-                else:
-                    open_m = _re.search(r"<(thinking|think)>", nonlocal_text, _re.IGNORECASE)
-                    if open_m:
-                        accumulated_response += nonlocal_text[: open_m.start()]
-                        nonlocal_text = nonlocal_text[open_m.end() :].lstrip("\n")
-                        in_thinking = True
-                    else:
-                        partial = _re.search(
-                            r"<(?:t(?:h(?:i(?:n(?:k(?:i(?:n(?:g)?)?)?)?)?)?)?)?$",
-                            nonlocal_text,
-                        )
-                        if partial and partial.start() < len(nonlocal_text):
-                            accumulated_response += nonlocal_text[: partial.start()]
-                            tag_buffer = nonlocal_text[partial.start() :]
-                        else:
-                            accumulated_response += nonlocal_text
-                        nonlocal_text = ""
-
-        def _live_display() -> str:
-            """Plain-text preview shown during streaming."""
-            if in_thinking:
-                if accumulated_response:
-                    return f"💭 _(thinking…)_\n\n{accumulated_response}"
-                return "💭 _(thinking…)_"
-            return accumulated_response or "…"
 
         # ── stream loop ───────────────────────────────────────────────────
         session_key = f"telegram:{user_id}"
 
         async def _run_stream() -> None:
-            nonlocal stream_msg_id, last_edit_time
+            nonlocal stream_msg_id, last_edit_time, was_reasoning
 
-            async for chunk in runner.run_stream(text):
-                _process_chunk(chunk)
-                display = _live_display()
+            async for chunk_text, is_reasoning in runner.run_stream(text):
+                if is_reasoning:
+                    accumulated_thinking += chunk_text
+                    was_reasoning = True
+                    # Show thinking indicator but don't send yet —
+                    # wait until response starts to avoid showing raw thinking
+                    continue
+
+                # ── response chunk ────────────────────────────────────────
+                accumulated_response += chunk_text
                 now = time.monotonic()
 
+                if was_reasoning:
+                    # Thinking just ended — force an immediate edit/send to
+                    # start the response from scratch (user's suggestion)
+                    was_reasoning = False
+                    last_edit_time = 0.0  # force update on next iteration
+
                 if stream_msg_id is None:
-                    if len(display) >= MIN_CHARS:
-                        try:
-                            msg = await self._telegram_bot.send_message(
-                                chat_id=chat_id, text=display
-                            )
-                            stream_msg_id = msg.message_id
-                            last_edit_time = now
-                        except Exception as _se:
-                            self._logger.warning(f"Stream: initial send failed: {_se}")
+                    # Send initial message as soon as we have response text
+                    try:
+                        msg = await self._telegram_bot.send_message(
+                            chat_id=chat_id, text=accumulated_response
+                        )
+                        stream_msg_id = msg.message_id
+                        last_edit_time = now
+                    except Exception as _se:
+                        self._logger.warning(f"Stream: initial send failed: {_se}")
                 elif now - last_edit_time >= THROTTLE_S:
                     try:
                         await self._telegram_bot.edit_message_text(
                             chat_id=chat_id,
                             message_id=stream_msg_id,
-                            text=display,
+                            text=accumulated_response,
                         )
                         last_edit_time = now
                     except Exception:

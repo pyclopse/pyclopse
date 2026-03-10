@@ -490,26 +490,22 @@ class ChatScreen(Screen):
                 accumulated_text = ""
                 prev_line_count = 0
 
-                async for chunk in agent.fast_agent_runner.run_stream(message):
+                async for chunk_text, is_reasoning in agent.fast_agent_runner.run_stream(message):
                     chunk_count += 1
-                    if chunk:
-                        # Process thinking tags across chunk boundaries
-                        display_chunk = self._process_thinking_chunk(chunk)
-                        if display_chunk:
-                            accumulated_text += display_chunk
-                            # Re-render the full accumulated text in place,
-                            # replacing the lines from the previous render
-                            full_display = f"{agent_header}{accumulated_text}"
-                            prev_line_count = self._stream_replace_lines(
-                                full_display, prev_line_count
-                            )
-
-                # Flush any remaining buffered content from thinking-tag parser
-                leftover = self._reset_thinking_state()
-                if leftover:
-                    accumulated_text += leftover
+                    if not chunk_text:
+                        continue
+                    if is_reasoning:
+                        if self._show_thinking:
+                            safe = chunk_text.replace("[", "\\[")
+                            accumulated_text += f"[dim]{safe}[/dim]"
+                        # else: strip thinking content
+                    else:
+                        accumulated_text += chunk_text
+                    # Re-render the full accumulated text in place
                     full_display = f"{agent_header}{accumulated_text}"
-                    prev_line_count = self._stream_replace_lines(full_display, prev_line_count)
+                    prev_line_count = self._stream_replace_lines(
+                        full_display, prev_line_count
+                    )
 
                 debug_write(f"_process_message: run_stream completed, chunks={chunk_count}")
 

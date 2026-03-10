@@ -197,63 +197,57 @@ class AgentRunner:
         
         return response
     
-    async def run_stream(self, prompt: str) -> AsyncIterator[str]:
+    async def run_stream(self, prompt: str) -> AsyncIterator[tuple[str, bool]]:
         """Run a prompt and stream the response.
-        
-        Args:
-            prompt: User prompt
-            
+
         Yields:
-            Response chunks in real-time
+            (text_chunk, is_reasoning) tuples.  is_reasoning=True for thinking/
+            reasoning content, False for normal response content.
         """
         if self._app is None:
             await self.initialize()
-        
+
         self._message_history.append({"role": "user", "content": prompt})
-        
+
         # Get the agent and set up streaming
         agent = self._app._agent(None)
-        
+
         # Check if agent supports streaming
         if hasattr(agent, 'add_stream_listener'):
             import asyncio
             from collections import deque
-            
-            # Use a queue to stream chunks as they arrive
-            chunk_queue = deque()
+
+            # Queue holds (text, is_reasoning) tuples
+            chunk_queue: deque[tuple[str, bool]] = deque()
             send_done = False
-            
+
             def on_chunk(chunk):
-                # Extract text from StreamChunk
-                if hasattr(chunk, 'text'):
-                    chunk_queue.append(chunk.text)
-                else:
-                    chunk_queue.append(str(chunk))
-            
+                text = chunk.text if hasattr(chunk, 'text') else str(chunk)
+                is_reasoning = bool(getattr(chunk, 'is_reasoning', False))
+                if text:
+                    chunk_queue.append((text, is_reasoning))
+
             remove_listener = agent.add_stream_listener(on_chunk)
-            
+
             try:
-                # Start send in background
                 send_task = asyncio.create_task(agent.send(prompt))
-                
-                # Yield chunks as they arrive
+
                 while not send_done or chunk_queue:
                     while chunk_queue:
                         yield chunk_queue.popleft()
                     if send_task.done():
                         send_done = True
                     else:
-                        await asyncio.sleep(0.01)  # Small delay to allow chunks to arrive
-                
-                # Wait for send to complete
+                        await asyncio.sleep(0.01)
+
                 await send_task
-                
+
             finally:
                 remove_listener()
         else:
-            # Fall back to non-streaming
+            # Fall back to non-streaming — yield full response as one response chunk
             result = await self._app.send(prompt)
-            yield str(result)
+            yield (str(result), False)
     
     def get_history(self) -> List[Dict[str, str]]:
         """Get message history."""
