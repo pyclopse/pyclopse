@@ -960,7 +960,7 @@ class Gateway:
         session_key = f"telegram:{user_id}"
 
         async def _run_stream() -> None:
-            nonlocal stream_msg_id, last_edit_time, was_reasoning
+            nonlocal stream_msg_id, last_edit_time, was_reasoning, accumulated_thinking, accumulated_response
 
             async for chunk_text, is_reasoning in runner.run_stream(text):
                 if is_reasoning:
