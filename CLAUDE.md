@@ -29,6 +29,10 @@ uv run python -m pyclaw validate
 
 Always use `uv run` — never `.venv/bin/pytest` or bare `python`.
 
+## Background
+
+pyclaw is loosely inspired by **OpenClaw**, a TypeScript-based gateway project. It is **not** a port or 1:1 clone — pyclaw uses its own architecture, naming conventions, and Python idioms. When working on a feature that isn't clear from the pyclaw codebase alone, the OpenClaw source at `~/github/openclaw` can be a useful reference for understanding the original intent or design, but do not mirror its implementation directly.
+
 ## Architecture
 
 ### Request Flow
