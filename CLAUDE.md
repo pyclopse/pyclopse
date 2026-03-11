@@ -119,32 +119,48 @@ Hooks fire on gateway events (`gateway:startup`, `message:received`, `command:re
 
 FastAgent reads this from CWD or `~/.pyclaw/`. It defines MCP server connections: `pyclaw` (HTTP, port 8081), `fetch`, `time`, `filesystem`. The gateway injects `X-Agent-Name` into the `pyclaw` server headers so tools can identify the calling agent.
 
+### Installation, Updates, and Removal
+
+pyclaw is distributed as a `uv tool` installed directly from the private GitHub repo over SSH. All install/update/remove operations require SSH access to GitHub (`git@github.com:jondecker76/pyclaw.git`). The SSH key is stored at `~/.ssh/pyclaw_github` with a Host entry in `~/.ssh/config`.
+
+**First-time install** — requires `uv` and SSH access to GitHub:
+```bash
+bash <(curl -fsSL https://raw.githubusercontent.com/jondecker76/pyclaw/main/install.sh)
+```
+`install.sh` checks for `uv` (installs it if missing), finds the latest stable tag via `git ls-remote`, then runs `uv tool install`. After install, run `pyclaw init` to create `~/.pyclaw/config.yaml`.
+
+Optional install flags:
+```bash
+bash install.sh --beta             # install latest from main instead
+bash install.sh --version 0.2.0   # install a specific version
+```
+
+**Updates** — run from the installed `pyclaw` binary:
+```bash
+pyclaw update                   # latest stable tagged release
+pyclaw update --beta            # latest commit from main (unstable)
+pyclaw update --version 0.2.0   # specific version
+```
+Updates never touch `~/.pyclaw/` — config, sessions, memory, and jobs are always preserved.
+
+**Removal:**
+```bash
+pyclaw uninstall          # removes the binary; prompts whether to delete ~/.pyclaw/
+pyclaw uninstall --purge  # removes binary + ~/.pyclaw/ without prompting
+```
+
 ### Release Workflow
 
-Versioning is managed by `hatch-vcs` — the version is derived automatically from the git tag at install time. **Never manually edit the version in `pyproject.toml` or `__init__.py`.**
+Versioning is managed by `hatch-vcs` — the version is derived automatically from the git tag at install/build time. **Never manually edit the version in `pyproject.toml` or `__init__.py`.** The generated `pyclaw/_version.py` is gitignored.
 
 To cut a release:
 ```bash
 git tag v0.2.0
 git push origin v0.2.0
-# Then create a GitHub Release from the tag for visibility/release notes
+gh release create v0.2.0 --title "v0.2.0" --notes "..." --latest
 ```
 
-The tag format must be `vMAJOR.MINOR.PATCH`. Pre-release tags (e.g. `v0.2.0-beta.1`) are supported but should be marked as pre-release on GitHub so `pyclaw update` (stable) skips them.
-
-User-facing update commands:
-```bash
-pyclaw update                  # latest stable tag
-pyclaw update --beta           # latest from main
-pyclaw update --version 0.2.0  # specific version
-pyclaw uninstall               # removes binary; prompts about ~/.pyclaw/
-pyclaw uninstall --purge       # removes binary + ~/.pyclaw/ without prompting
-```
-
-Fresh install (requires SSH access to GitHub):
-```bash
-bash <(curl -fsSL https://raw.githubusercontent.com/jondecker76/pyclaw/main/install.sh)
-```
+Tag format must be `vMAJOR.MINOR.PATCH`. The `pyclaw update` stable path uses `git ls-remote --tags --sort=-v:refname` to find the latest tag — it only matches tags of this exact format (no pre-release suffixes). Pre-release tags (e.g. `v0.2.0-beta.1`) are ignored by `pyclaw update` stable but reachable via `pyclaw update --version 0.2.0-beta.1`.
 
 ### Testing Patterns
 
