@@ -3,6 +3,7 @@ import asyncio
 import logging
 import os
 import re
+import tempfile
 from pathlib import Path
 from typing import Any, AsyncIterator, Dict, List, Optional
 
@@ -132,6 +133,7 @@ class AgentRunner:
         api_key: Optional[str] = None,
         owner_name: Optional[str] = None,
         request_params: Optional[Dict[str, Any]] = None,
+        history_path: Optional[Path] = None,
     ):
         self.agent_name = agent_name
         self.instruction = instruction
@@ -154,9 +156,68 @@ class AgentRunner:
         # The agent name sent as X-Agent-Name header to the pyclaw MCP server.
         # Defaults to agent_name but session runners override to the base agent name.
         self.owner_name: str = owner_name or agent_name
+        # Path to the history.json file for this session (None = no persistence)
+        self.history_path: Optional[Path] = history_path
+        self._history_loaded: bool = False
         self._app: Optional[Any] = None
         self._fa_context: Optional[Any] = None  # kept alive for the lifetime of the runner
         self._message_history: List[Dict[str, str]] = []
+
+    async def _load_history(self) -> None:
+        """Load history from disk into the FastAgent agent (once per lifetime)."""
+        if self._history_loaded:
+            return
+        self._history_loaded = True
+        if self.history_path is None or not self.history_path.exists():
+            return
+        try:
+            from fast_agent.mcp.prompt_serialization import load_messages
+            messages = load_messages(str(self.history_path))
+            if messages:
+                agent = self._app._agent(None)
+                agent.load_message_history(messages)
+                logger.debug(
+                    f"Loaded {len(messages)} history messages for {self.agent_name}"
+                )
+        except Exception as e:
+            logger.warning(
+                f"Failed to load history for {self.agent_name}: {e}"
+            )
+
+    async def _save_history(self) -> None:
+        """Save FastAgent's current message history to disk (atomic with rotation)."""
+        if self.history_path is None or self._app is None:
+            return
+        try:
+            from fast_agent.mcp.prompt_serialization import save_messages as _save
+            agent = self._app._agent(None)
+            messages = agent.message_history
+            if not messages:
+                return
+            self.history_path.parent.mkdir(parents=True, exist_ok=True)
+            prev_path = self.history_path.parent / "history_previous.json"
+            # Write to a temp file first (atomic)
+            with tempfile.NamedTemporaryFile(
+                mode="w",
+                encoding="utf-8",
+                delete=False,
+                dir=self.history_path.parent,
+                prefix=".history.tmp.",
+                suffix=".json",
+            ) as tmp_fh:
+                tmp_path = Path(tmp_fh.name)
+            _save(messages, str(tmp_path))
+            # Rotate current → previous, then promote temp → current
+            if self.history_path.exists():
+                os.replace(self.history_path, prev_path)
+            os.replace(tmp_path, self.history_path)
+            logger.debug(
+                f"Saved {len(messages)} history messages for {self.agent_name}"
+            )
+        except Exception as e:
+            logger.warning(
+                f"Failed to save history for {self.agent_name}: {e}"
+            )
 
     async def initialize(self):
         """Initialize the FastAgent app with configured MCP servers."""
@@ -259,33 +320,38 @@ class AgentRunner:
     
     async def run(self, prompt: str) -> str:
         """Run a single prompt through the agent.
-        
+
         Args:
             prompt: User prompt
-            
+
         Returns:
             Agent response content
         """
         if self._app is None:
             await self.initialize()
-        
-        # Add to history
+
+        await self._load_history()
+
         self._message_history.append({"role": "user", "content": prompt})
 
-        # Enforce per-model concurrency limit
-        from pyclaw.core.concurrency import get_manager
-        async with get_manager().acquire(self.model):
-            result = await self._app.send(prompt)
-        response = str(result)
+        _completed = False
+        try:
+            # Enforce per-model concurrency limit
+            from pyclaw.core.concurrency import get_manager
+            async with get_manager().acquire(self.model):
+                result = await self._app.send(prompt)
+            response = str(result)
 
-        # Strip <thinking> blocks unless explicitly shown
-        if not self.show_thinking:
-            response = strip_thinking_tags(response)
-        
-        # Add response to history
-        self._message_history.append({"role": "assistant", "content": response})
-        
-        return response
+            # Strip <thinking> blocks unless explicitly shown
+            if not self.show_thinking:
+                response = strip_thinking_tags(response)
+
+            self._message_history.append({"role": "assistant", "content": response})
+            _completed = True
+            return response
+        finally:
+            if _completed:
+                await self._save_history()
     
     async def run_stream(self, prompt: str) -> AsyncIterator[tuple[str, bool]]:
         """Run a prompt and stream the response.
@@ -297,8 +363,24 @@ class AgentRunner:
         if self._app is None:
             await self.initialize()
 
+        await self._load_history()
+
         self._message_history.append({"role": "user", "content": prompt})
 
+        _completed = False
+        try:
+            # Enforce per-model concurrency limit (same as run())
+            from pyclaw.core.concurrency import get_manager
+            async with get_manager().acquire(self.model):
+                async for item in self._run_stream_inner(prompt):
+                    yield item
+            _completed = True
+        finally:
+            if _completed:
+                await self._save_history()
+
+    async def _run_stream_inner(self, prompt: str) -> AsyncIterator[tuple[str, bool]]:
+        """Inner streaming implementation — called under the concurrency lock."""
         # Get the agent and set up streaming
         agent = self._app._agent(None)
 

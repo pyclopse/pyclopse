@@ -21,7 +21,7 @@ from pyclaw.jobs.models import (
 )
 from pyclaw.jobs.scheduler import JobScheduler
 from pyclaw.config.schema import JobsConfig
-from pyclaw.core.session import Session, SessionManager, Message
+from pyclaw.core.session import Session, SessionManager
 
 
 # ---------------------------------------------------------------------------
@@ -245,110 +245,129 @@ class TestSessionPersistence:
 
     @pytest.mark.asyncio
     async def test_session_written_on_create(self, tmp_path):
-        mgr = SessionManager(persist_dir=str(tmp_path))
+        """Session metadata (session.json) is written on create."""
+        mgr = SessionManager(agents_dir=str(tmp_path))
         await mgr.start()
         session = await mgr.create_session("agent1", "telegram", "user1")
-        path = tmp_path / f"{session.id}.json"
-        assert path.exists(), "Session file should be written on create"
-        data = json.loads(path.read_text())
+        meta_path = session.history_dir / "session.json"
+        assert meta_path.exists(), "session.json should be written on create"
+        data = json.loads(meta_path.read_text())
         assert data["id"] == session.id
         assert data["user_id"] == "user1"
 
     @pytest.mark.asyncio
-    async def test_messages_written_on_add(self, tmp_path):
-        mgr = SessionManager(persist_dir=str(tmp_path))
+    async def test_session_dir_uses_per_agent_layout(self, tmp_path):
+        """Session dir is agents_dir/{agent_id}/sessions/{session_id}/."""
+        mgr = SessionManager(agents_dir=str(tmp_path))
         await mgr.start()
-        session = await mgr.create_session("agent1", "telegram", "user1")
-        session.add_message("user", "hello")
-        session.add_message("assistant", "hi there")
+        session = await mgr.create_session("myagent", "telegram", "user1")
+        expected_parent = tmp_path / "myagent" / "sessions"
+        assert session.history_dir.parent == expected_parent
 
-        path = tmp_path / f"{session.id}.json"
-        data = json.loads(path.read_text())
-        assert len(data["messages"]) == 2
-        assert data["messages"][0]["content"] == "hello"
-        assert data["messages"][1]["content"] == "hi there"
+    @pytest.mark.asyncio
+    async def test_session_id_has_date_prefix(self, tmp_path):
+        """Session IDs are date-prefixed: YYYY-MM-DD-XXXXXX."""
+        mgr = SessionManager(agents_dir=str(tmp_path))
+        await mgr.start()
+        session = await mgr.create_session("a", "tg", "u1")
+        import re
+        assert re.match(r"^\d{4}-\d{2}-\d{2}-[A-Za-z0-9]{6}$", session.id), (
+            f"Session ID '{session.id}' should match YYYY-MM-DD-XXXXXX"
+        )
 
     @pytest.mark.asyncio
     async def test_sessions_loaded_on_start(self, tmp_path):
-        # Write a session, then create a fresh manager and verify it loads it
-        mgr1 = SessionManager(persist_dir=str(tmp_path))
+        """Sessions written by one manager are loaded by a fresh one."""
+        mgr1 = SessionManager(agents_dir=str(tmp_path))
         await mgr1.start()
         s = await mgr1.create_session("agent1", "telegram", "user42")
-        s.add_message("user", "persisted message")
+        s.touch(count_delta=3)  # simulate some activity
 
-        # New manager, same directory
-        mgr2 = SessionManager(persist_dir=str(tmp_path))
+        mgr2 = SessionManager(agents_dir=str(tmp_path))
         await mgr2.start()
         assert s.id in mgr2.sessions
         loaded = mgr2.sessions[s.id]
         assert loaded.user_id == "user42"
-        assert len(loaded.messages) == 1
-        assert loaded.messages[0].content == "persisted message"
+        assert loaded.message_count == 3
 
     @pytest.mark.asyncio
-    async def test_messages_added_to_loaded_session_persist(self, tmp_path):
-        """After loading from disk, new messages are still auto-saved."""
-        mgr1 = SessionManager(persist_dir=str(tmp_path))
-        await mgr1.start()
-        s = await mgr1.create_session("a", "tg", "u1")
-
-        mgr2 = SessionManager(persist_dir=str(tmp_path))
-        await mgr2.start()
-        loaded = mgr2.sessions[s.id]
-        loaded.add_message("user", "new message after reload")
-
-        path = tmp_path / f"{s.id}.json"
-        data = json.loads(path.read_text())
-        assert any(m["content"] == "new message after reload" for m in data["messages"])
-
-    @pytest.mark.asyncio
-    async def test_session_file_deleted_on_remove(self, tmp_path):
-        mgr = SessionManager(persist_dir=str(tmp_path))
+    async def test_reaper_removes_from_index_not_disk(self, tmp_path):
+        """Reaper evicts sessions from in-memory index but keeps files on disk."""
+        mgr = SessionManager(agents_dir=str(tmp_path), ttl_hours=0)
         await mgr.start()
         session = await mgr.create_session("a", "tg", "u1")
-        path = tmp_path / f"{session.id}.json"
-        assert path.exists()
+        meta_path = session.history_dir / "session.json"
+        assert meta_path.exists()
+
+        # Manually trigger reaper
+        await mgr._reap_stale_sessions()
+
+        # Session removed from index
+        assert session.id not in mgr.sessions
+        # But file still on disk
+        assert meta_path.exists()
+
+    @pytest.mark.asyncio
+    async def test_delete_session_removes_from_index_only(self, tmp_path):
+        """delete_session removes from index; session directory is kept."""
+        mgr = SessionManager(agents_dir=str(tmp_path))
+        await mgr.start()
+        session = await mgr.create_session("a", "tg", "u1")
+        hist_dir = session.history_dir
+        assert hist_dir.exists()
 
         await mgr.delete_session(session.id)
-        assert not path.exists()
-
-    @pytest.mark.asyncio
-    async def test_no_persist_dir_does_not_crash(self):
-        """SessionManager without persist_dir works normally (in-memory only)."""
-        mgr = SessionManager()  # no persist_dir
-        await mgr.start()
-        session = await mgr.create_session("a", "tg", "u1")
-        session.add_message("user", "hello")  # should not raise
-        assert len(session.messages) == 1
+        assert session.id not in mgr.sessions
+        # Files still on disk
+        assert hist_dir.exists()
 
     @pytest.mark.asyncio
     async def test_user_and_channel_indexes_rebuilt_on_load(self, tmp_path):
-        mgr1 = SessionManager(persist_dir=str(tmp_path))
+        mgr1 = SessionManager(agents_dir=str(tmp_path))
         await mgr1.start()
         await mgr1.create_session("a", "telegram", "alice")
         await mgr1.create_session("a", "telegram", "bob")
 
-        mgr2 = SessionManager(persist_dir=str(tmp_path))
+        mgr2 = SessionManager(agents_dir=str(tmp_path))
         await mgr2.start()
-        # Both users should be in the index
         assert "alice" in mgr2.user_sessions
         assert "bob" in mgr2.user_sessions
         assert "telegram" in mgr2.channel_sessions
 
-    def test_session_to_full_dict_includes_messages(self):
+    def test_session_to_dict_has_no_messages(self):
+        """to_dict() contains metadata only — no message content."""
         s = Session(id="s1", agent_id="a", channel="tg", user_id="u")
-        s.add_message("user", "hi")
-        d = s.to_full_dict()
-        assert "messages" in d
-        assert len(d["messages"]) == 1
-        assert d["messages"][0]["content"] == "hi"
+        d = s.to_dict()
+        assert "id" in d
+        assert "messages" not in d
 
-    def test_session_from_dict_round_trip(self):
-        s = Session(id="s1", agent_id="a", channel="tg", user_id="u")
-        s.add_message("user", "round trip test")
-        d = s.to_full_dict()
-        s2 = Session.from_dict(d)
+    def test_session_from_dict_round_trip(self, tmp_path):
+        hist_dir = tmp_path / "sessions" / "s1"
+        s = Session(id="s1", agent_id="a", channel="tg", user_id="u",
+                    message_count=5, history_dir=hist_dir)
+        d = s.to_dict()
+        s2 = Session.from_dict(d, history_dir=hist_dir)
         assert s2.id == s.id
         assert s2.user_id == s.user_id
-        assert len(s2.messages) == 1
-        assert s2.messages[0].content == "round trip test"
+        assert s2.message_count == 5
+        assert s2.history_dir == hist_dir
+
+    def test_session_history_path(self, tmp_path):
+        hist_dir = tmp_path / "sessions" / "abc"
+        s = Session(id="abc", agent_id="a", channel="tg", user_id="u",
+                    history_dir=hist_dir)
+        assert s.history_path == hist_dir / "history.json"
+
+    def test_session_history_path_none_when_no_dir(self):
+        s = Session(id="abc", agent_id="a", channel="tg", user_id="u")
+        assert s.history_path is None
+
+    def test_touch_updates_count_and_metadata(self, tmp_path):
+        hist_dir = tmp_path / "sessions" / "t1"
+        hist_dir.mkdir(parents=True)
+        s = Session(id="t1", agent_id="a", channel="tg", user_id="u",
+                    history_dir=hist_dir)
+        s.touch(count_delta=2)
+        assert s.message_count == 2
+        meta = json.loads((hist_dir / "session.json").read_text())
+        assert meta["message_count"] == 2

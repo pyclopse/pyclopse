@@ -130,21 +130,21 @@ def build_system_prompt(
     
     # Build system prompt matching OpenClaw structure
     lines = [
-        "You are a personal assistant running inside Claw.",
+        "You are a personal assistant running inside pyclaw.",
         "",
         "## Workspace Files (injected)",
         "These user-editable files are loaded and included below in Project Context.",
         "",
     ]
-    
-    # Check if SOUL.md exists for special handling
-    has_soul = any(f["name"] == "SOUL.md" for f in context_files)
-    
+
+    # Check if SOUL.md or PERSONALITY.md exists for special handling
+    has_soul = any(f["name"] in ("SOUL.md", "PERSONALITY.md") for f in context_files)
+
     if has_soul:
         lines.extend([
             "# Project Context",
             "",
-            "If SOUL.md is present, embody its persona and tone. Avoid stiff, generic replies; follow its guidance unless higher-priority instructions override it.",
+            "If PERSONALITY.md (or SOUL.md) is present, embody its persona and tone. Avoid stiff, generic replies; follow its guidance unless higher-priority instructions override it.",
             "",
         ])
     else:
@@ -154,15 +154,26 @@ def build_system_prompt(
             "The following context files have been loaded:",
             "",
         ])
-    
+
     # Add each file as a section (matching OpenClaw's format)
+    # RULES.md gets special framing to ensure the agent treats it as authoritative.
     for file_info in context_files:
-        lines.extend([
-            f"## {file_info['path']}",
-            "",
-            file_info["content"],
-            "",
-        ])
+        if file_info["name"] == "RULES.md":
+            lines.extend([
+                f"## {file_info['path']}",
+                "",
+                "**IMPORTANT: The following rules were set by the user. They are mandatory and must be followed at all times.**",
+                "",
+                file_info["content"],
+                "",
+            ])
+        else:
+            lines.extend([
+                f"## {file_info['path']}",
+                "",
+                file_info["content"],
+                "",
+            ])
     
     # Append lean <available_skills> block (skipped for subagents to keep prompts small)
     if not is_subagent:

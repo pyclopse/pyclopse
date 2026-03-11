@@ -154,38 +154,49 @@ class TestHelpCommand:
 class TestResetCommand:
 
     @pytest.mark.asyncio
-    async def test_reset_clears_session_messages(self):
+    async def test_reset_returns_success_message(self):
         from pyclaw.core.commands import CommandRegistry, register_builtin_commands
         reg = CommandRegistry()
         gw = _make_gateway_stub()
         register_builtin_commands(reg, gw)
 
         session = _make_session()
+        session.history_dir = None  # no history dir in unit test
         agent = MagicMock()
-        agent._session_runners = {session.id: MagicMock()}
+        agent.evict_session_runner = AsyncMock()
         gw._agent_manager.get_agent.return_value = agent
 
         ctx = _make_context(gateway=gw, session=session)
         result = await reg.dispatch("/reset", ctx)
-        session.clear_messages.assert_called_once()
         assert "✅" in result
+        agent.evict_session_runner.assert_awaited_once_with(session.id)
 
     @pytest.mark.asyncio
-    async def test_reset_clears_session_runner(self):
+    async def test_reset_archives_history_files(self, tmp_path):
+        """cmd_reset archives history.json into archived/ subdirectory."""
         from pyclaw.core.commands import CommandRegistry, register_builtin_commands
         reg = CommandRegistry()
         gw = _make_gateway_stub()
         register_builtin_commands(reg, gw)
 
         session = _make_session()
+        session.history_dir = tmp_path
+        session.message_count = 4
+        # Create dummy history files
+        (tmp_path / "history.json").write_text('{"messages":[]}')
+        (tmp_path / "history_previous.json").write_text('{"messages":[]}')
+
         agent = MagicMock()
-        runner_sentinel = MagicMock()
-        agent._session_runners = {session.id: runner_sentinel}
+        agent.evict_session_runner = AsyncMock()
         gw._agent_manager.get_agent.return_value = agent
 
         ctx = _make_context(gateway=gw, session=session)
         await reg.dispatch("/reset", ctx)
-        assert session.id not in agent._session_runners
+
+        # Originals moved to archived/
+        assert not (tmp_path / "history.json").exists()
+        archived = list((tmp_path / "archived").glob("history.json.*"))
+        assert len(archived) == 1
 
     @pytest.mark.asyncio
     async def test_reset_no_session(self):

@@ -17,7 +17,7 @@ from pyclaw.config.schema import JobsConfig
 
 async def _make_manager(tmp_path, ttl_hours=24, reaper_interval_minutes=60):
     mgr = SessionManager(
-        persist_dir=str(tmp_path / "sessions"),
+        agents_dir=str(tmp_path / "agents"),
         ttl_hours=ttl_hours,
         reaper_interval_minutes=reaper_interval_minutes,
     )
@@ -34,13 +34,13 @@ async def _make_manager(tmp_path, ttl_hours=24, reaper_interval_minutes=60):
 class TestSessionManagerConfig:
 
     def test_defaults(self, tmp_path):
-        mgr = SessionManager(persist_dir=str(tmp_path))
+        mgr = SessionManager(agents_dir=str(tmp_path))
         assert mgr.ttl_hours == 24
         assert mgr.reaper_interval_minutes == 60
 
     def test_custom_ttl(self, tmp_path):
         mgr = SessionManager(
-            persist_dir=str(tmp_path), ttl_hours=48, reaper_interval_minutes=30
+            agents_dir=str(tmp_path), ttl_hours=48, reaper_interval_minutes=30
         )
         assert mgr.ttl_hours == 48
         assert mgr.reaper_interval_minutes == 30
@@ -70,15 +70,19 @@ class TestReapStaleSessions:
         assert session.id not in mgr.sessions
 
     @pytest.mark.asyncio
-    async def test_reap_removes_persist_file(self, tmp_path):
+    async def test_reap_keeps_files_removes_from_index(self, tmp_path):
+        """Reaper removes session from in-memory index but keeps files on disk."""
         mgr = await _make_manager(tmp_path, ttl_hours=1)
         session = await mgr.create_session("agent1", "telegram", "user1")
-        persist_path = mgr._session_path(session.id)
-        assert persist_path and persist_path.exists()
+        hist_dir = session.history_dir
+        assert hist_dir and hist_dir.exists()
 
         session.updated_at = datetime.utcnow() - timedelta(hours=2)
         await mgr._reap_stale_sessions()
-        assert not persist_path.exists()
+        # Removed from index
+        assert session.id not in mgr.sessions
+        # Files still on disk
+        assert hist_dir.exists()
 
     @pytest.mark.asyncio
     async def test_multiple_stale_sessions_all_reaped(self, tmp_path):
@@ -120,7 +124,7 @@ class TestReaperTaskLifecycle:
     @pytest.mark.asyncio
     async def test_start_creates_reaper_task(self, tmp_path):
         mgr = SessionManager(
-            persist_dir=str(tmp_path / "sessions"),
+            agents_dir=str(tmp_path / "agents"),
             ttl_hours=1,
             reaper_interval_minutes=60,
         )
@@ -132,7 +136,7 @@ class TestReaperTaskLifecycle:
     @pytest.mark.asyncio
     async def test_stop_cancels_reaper_task(self, tmp_path):
         mgr = SessionManager(
-            persist_dir=str(tmp_path / "sessions"),
+            agents_dir=str(tmp_path / "agents"),
             ttl_hours=1,
             reaper_interval_minutes=60,
         )
@@ -144,7 +148,7 @@ class TestReaperTaskLifecycle:
     async def test_reaper_runs_on_interval(self, tmp_path):
         """Reaper task fires _reap_stale_sessions after the interval elapses."""
         mgr = SessionManager(
-            persist_dir=str(tmp_path / "sessions"),
+            agents_dir=str(tmp_path / "agents"),
             ttl_hours=0,   # 0 hours → every session is immediately stale
             reaper_interval_minutes=0,  # interval=0 → fires immediately
         )

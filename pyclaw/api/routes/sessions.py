@@ -90,6 +90,26 @@ async def get_session(session_id: str):
     session = await sm.get_session(session_id)
     if session is None:
         raise HTTPException(status_code=404, detail=f"Session '{session_id}' not found")
+
+    # Load conversation history from the FA native history file
+    messages_out: List[MessageOut] = []
+    if session.history_path and session.history_path.exists():
+        try:
+            from fast_agent.mcp.prompt_serialization import load_messages
+            fa_msgs = load_messages(str(session.history_path))
+            for i, msg in enumerate(fa_msgs):
+                text = (msg.all_text() if hasattr(msg, "all_text") else None) or ""
+                messages_out.append(
+                    MessageOut(
+                        id=f"{session.id}-{i}",
+                        role=msg.role,
+                        content=text,
+                        timestamp=session.created_at.isoformat(),
+                    )
+                )
+        except Exception as exc:
+            logger.warning(f"Could not load history for session {session_id}: {exc}")
+
     return SessionDetail(
         id=session.id,
         agent_id=session.agent_id,
@@ -99,15 +119,7 @@ async def get_session(session_id: str):
         updated_at=session.updated_at.isoformat(),
         message_count=session.message_count,
         is_active=session.is_active,
-        messages=[
-            MessageOut(
-                id=m.id,
-                role=m.role,
-                content=m.content,
-                timestamp=m.timestamp.isoformat(),
-            )
-            for m in session.messages
-        ],
+        messages=messages_out,
     )
 
 

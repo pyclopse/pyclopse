@@ -306,6 +306,35 @@ class TodosConfig(BaseModel):
     )
 
 
+def _resolve_token(v: Optional[str]) -> Optional[str]:
+    """Resolve a bot token that may be an ${env:VAR} reference."""
+    if v is None:
+        return None
+    if isinstance(v, str) and v.startswith("${") and v.endswith("}"):
+        var_name = v[2:-1]
+        return os.environ.get(var_name)
+    return v
+
+
+class TelegramBotConfig(BaseModel):
+    """Per-bot Telegram configuration within a multi-bot setup.
+
+    Fields left as ``None`` inherit the value from the parent ``TelegramConfig``.
+    """
+    bot_token: Optional[str] = Field(default=None, validation_alias="botToken")
+    # agent_id this bot routes messages to; None = use first configured agent
+    agent: Optional[str] = None
+    allowed_users: Optional[List[int]] = Field(default=None, validation_alias="allowedUsers")
+    denied_users: Optional[List[int]] = Field(default=None, validation_alias="deniedUsers")
+    typing_indicator: Optional[bool] = Field(default=None, validation_alias="typingIndicator")
+    streaming: Optional[bool] = None
+
+    @field_validator("bot_token", mode="before")
+    @classmethod
+    def resolve_env_var(cls, v: Optional[str]) -> Optional[str]:
+        return _resolve_token(v)
+
+
 class TelegramConfig(BaseModel):
     """Telegram channel configuration."""
     enabled: bool = True
@@ -318,16 +347,25 @@ class TelegramConfig(BaseModel):
     typing_indicator: bool = Field(default=True, validation_alias="typingIndicator")
     # Stream response by editing a single message in place
     streaming: bool = Field(default=False)
+    # Multi-bot: named bots, each routing to a specific agent
+    bots: Dict[str, TelegramBotConfig] = Field(default_factory=dict)
 
     @field_validator("bot_token", mode="before")
     @classmethod
     def resolve_env_var(cls, v: Optional[str]) -> Optional[str]:
-        if v is None:
-            return None
-        if isinstance(v, str) and v.startswith("${") and v.endswith("}"):
-            var_name = v[2:-1]
-            return os.environ.get(var_name)
-        return v
+        return _resolve_token(v)
+
+    def effective_config_for_bot(self, name: str) -> TelegramBotConfig:
+        """Return a fully-resolved config for the named bot, inheriting parent defaults."""
+        bot = self.bots[name]
+        return TelegramBotConfig.model_validate({
+            "botToken": bot.bot_token,
+            "agent": bot.agent,
+            "allowedUsers": bot.allowed_users if bot.allowed_users is not None else self.allowed_users,
+            "deniedUsers": bot.denied_users if bot.denied_users is not None else self.denied_users,
+            "typingIndicator": bot.typing_indicator if bot.typing_indicator is not None else self.typing_indicator,
+            "streaming": bot.streaming if bot.streaming is not None else self.streaming,
+        })
 
 
 class DiscordConfig(BaseModel):

@@ -8,7 +8,7 @@ from typing import Any, Awaitable, Callable, Dict, List, Optional
 
 from pyclaw.config.schema import AgentConfig as ConfigModel
 from pyclaw.config.schema import AgentConfig
-from pyclaw.core.session import Session, Message as SessionMessage
+from pyclaw.core.session import Session
 from pyclaw.core.router import IncomingMessage, OutgoingMessage
 from pyclaw.providers import create_provider
 
@@ -219,13 +219,17 @@ class Agent:
             self._logger.error(f"Failed to initialize FastAgent: {e}", exc_info=True)
 
     def _get_session_runner(
-        self, session_id: str, model_override: Optional[str] = None
+        self,
+        session_id: str,
+        model_override: Optional[str] = None,
+        history_path: Optional[Any] = None,
     ) -> Any:
         """Get or create a dedicated AgentRunner for a session.
 
-        Each session gets its own runner so conversation histories
-        are properly isolated across users.  Pass *model_override* to
-        use a different model than the agent default for this session.
+        Each session gets its own runner so conversation histories are properly
+        isolated across users.  Pass *model_override* to use a different model
+        than the agent default for this session.  Pass *history_path* (a Path)
+        to have the runner automatically load/save FA native history.
         """
         if not self.fast_agent_runner:
             raise RuntimeError(
@@ -251,6 +255,7 @@ class Agent:
                 api_key=getattr(base, "api_key", None),
                 owner_name=self.name,
                 request_params=getattr(base, "request_params", None),
+                history_path=history_path,
             )
             self._session_runners[session_id] = runner
             self._logger.debug(
@@ -313,17 +318,6 @@ class Agent:
         """Handle an incoming message."""
         self.current_session = session
 
-        # Add user message to session
-        session.add_message(
-            role="user",
-            content=message.content,
-            metadata={
-                "message_id": message.id,
-                "channel": message.channel,
-                "sender": message.sender,
-            },
-        )
-
         try:
             # Use FastAgent (only supported path)
             if not self.fast_agent_runner:
@@ -331,12 +325,7 @@ class Agent:
                     f"Agent {self.name} has no FastAgent runner configured. FastAgent is required."
                 )
             response_content = await self._handle_with_fastagent(message.content, session)
-
-            # Add assistant response to session
-            session.add_message(
-                role="assistant",
-                content=response_content,
-            )
+            session.touch(count_delta=2)
 
             return OutgoingMessage(
                 content=response_content,
@@ -347,10 +336,6 @@ class Agent:
 
         except Exception as e:
             self._logger.error(f"Error handling message: {e}")
-            session.add_message(
-                role="system",
-                content=f"Error: {str(e)}",
-            )
             return OutgoingMessage(
                 content=f"I encountered an error: {str(e)}",
                 target=message.sender_id,
@@ -364,7 +349,11 @@ class Agent:
     ) -> str:
         """Handle message using a per-session FastAgent runner."""
         model_override = session.context.get("model_override")
-        runner = self._get_session_runner(session.id, model_override=model_override)
+        runner = self._get_session_runner(
+            session.id,
+            model_override=model_override,
+            history_path=session.history_path,
+        )
         return await runner.run(prompt)
 
     async def execute_tool(
@@ -566,6 +555,3 @@ class AgentManager:
             ],
         }
 
-
-# Type alias for compatibility
-Message = SessionMessage

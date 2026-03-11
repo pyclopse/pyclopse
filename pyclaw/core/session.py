@@ -3,7 +3,8 @@
 import asyncio
 import json
 import logging
-import uuid
+import secrets
+import string
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 from pathlib import Path
@@ -11,77 +12,65 @@ from typing import Any, Dict, List, Optional
 
 from pyclaw.core.router import IncomingMessage, OutgoingMessage
 
+# Default agents directory
+_DEFAULT_AGENTS_DIR = "~/.pyclaw/agents"
 
-@dataclass
-class Message:
-    """A message in a session."""
-    id: str
-    role: str  # system, user, assistant
-    content: str
-    timestamp: datetime = field(default_factory=datetime.utcnow)
-    metadata: Dict[str, Any] = field(default_factory=dict)
-    tool_calls: Optional[List[Dict[str, Any]]] = None
-    tool_results: Optional[List[Dict[str, Any]]] = None
+_SESSION_ALPHABET = string.ascii_letters + string.digits
+
+
+def _generate_session_id() -> str:
+    """Generate a date-prefixed session ID: YYYY-MM-DD-XXXXXX."""
+    suffix = "".join(secrets.choice(_SESSION_ALPHABET) for _ in range(6))
+    return f"{datetime.utcnow().strftime('%Y-%m-%d')}-{suffix}"
 
 
 @dataclass
 class Session:
-    """A conversation session."""
+    """A conversation session (metadata only — history lives on disk)."""
+
     id: str
     agent_id: str
     channel: str
     user_id: str
     created_at: datetime = field(default_factory=datetime.utcnow)
     updated_at: datetime = field(default_factory=datetime.utcnow)
-    messages: List[Message] = field(default_factory=list)
     metadata: Dict[str, Any] = field(default_factory=dict)
     context: Dict[str, Any] = field(default_factory=dict)
     is_active: bool = True
     message_count: int = 0
-    # Injected by SessionManager so add_message auto-persists
-    _persist_fn: Any = field(default=None, repr=False, compare=False)
+    # Absolute path to the session directory (set by SessionManager)
+    history_dir: Optional[Path] = field(default=None, repr=False, compare=False)
 
-    def add_message(
-        self,
-        role: str,
-        content: str,
-        metadata: Optional[Dict[str, Any]] = None,
-    ) -> Message:
-        """Add a message to the session."""
-        message = Message(
-            id=str(uuid.uuid4()),
-            role=role,
-            content=content,
-            metadata=metadata or {},
-        )
-        self.messages.append(message)
+    @property
+    def history_path(self) -> Optional[Path]:
+        """Path to the primary history file."""
+        if self.history_dir is None:
+            return None
+        return self.history_dir / "history.json"
+
+    def touch(self, count_delta: int = 0) -> None:
+        """Update last-activity timestamp and optionally increment message_count."""
         self.updated_at = datetime.utcnow()
-        self.message_count += 1
-        if self._persist_fn is not None:
-            self._persist_fn(self)
-        return message
-    
-    def get_messages_for_provider(self) -> List[Dict[str, Any]]:
-        """Get messages in format for provider API."""
-        return [
-            {
-                "role": msg.role,
-                "content": msg.content,
-            }
-            for msg in self.messages
-        ]
-    
-    def get_context_window(self, max_messages: int = 20) -> List[Message]:
-        """Get recent messages within context window."""
-        return self.messages[-max_messages:]
-    
-    def clear_messages(self) -> None:
-        """Clear all messages but keep session."""
-        self.messages.clear()
-        self.updated_at = datetime.utcnow()
-    
+        self.message_count += count_delta
+        self.save_metadata()
+
+    def save_metadata(self) -> None:
+        """Persist session metadata to disk (atomic write)."""
+        if self.history_dir is None:
+            return
+        try:
+            self.history_dir.mkdir(parents=True, exist_ok=True)
+            path = self.history_dir / "session.json"
+            tmp = path.with_suffix(".tmp")
+            tmp.write_text(json.dumps(self.to_dict(), indent=2))
+            tmp.replace(path)
+        except Exception as e:
+            logging.getLogger("pyclaw.session").error(
+                f"Failed to save session metadata {self.id}: {e}"
+            )
+
     def to_dict(self) -> Dict[str, Any]:
-        """Convert to dictionary (summary, no messages)."""
+        """Serialize session metadata (no message content)."""
         return {
             "id": self.id,
             "agent_id": self.agent_id,
@@ -94,39 +83,13 @@ class Session:
             "metadata": self.metadata,
             "context": {
                 k: v for k, v in self.context.items()
-                if not k.startswith("_")  # skip non-serialisable runner refs
+                if not k.startswith("_")
             },
         }
 
-    def to_full_dict(self) -> Dict[str, Any]:
-        """Serialize full session including message history."""
-        d = self.to_dict()
-        d["messages"] = [
-            {
-                "id": m.id,
-                "role": m.role,
-                "content": m.content,
-                "timestamp": m.timestamp.isoformat(),
-                "metadata": m.metadata,
-            }
-            for m in self.messages
-        ]
-        return d
-
     @classmethod
-    def from_dict(cls, data: Dict[str, Any]) -> "Session":
-        """Restore a Session from a persisted dict."""
-        msgs = []
-        for md in data.get("messages", []):
-            msgs.append(
-                Message(
-                    id=md["id"],
-                    role=md["role"],
-                    content=md["content"],
-                    timestamp=datetime.fromisoformat(md["timestamp"]),
-                    metadata=md.get("metadata", {}),
-                )
-            )
+    def from_dict(cls, data: Dict[str, Any], history_dir: Optional[Path] = None) -> "Session":
+        """Restore a Session from a persisted metadata dict."""
         return cls(
             id=data["id"],
             agent_id=data["agent_id"],
@@ -134,44 +97,43 @@ class Session:
             user_id=data["user_id"],
             created_at=datetime.fromisoformat(data["created_at"]),
             updated_at=datetime.fromisoformat(data["updated_at"]),
-            messages=msgs,
-            message_count=data.get("message_count", len(msgs)),
+            message_count=data.get("message_count", 0),
             is_active=data.get("is_active", True),
             metadata=data.get("metadata", {}),
             context=data.get("context", {}),
+            history_dir=history_dir,
         )
 
 
 class SessionManager:
-    """Manages multiple sessions."""
+    """Manages multiple sessions with file-based persistence."""
 
     def __init__(
         self,
         max_sessions: int = 1000,
         session_timeout: int = 3600,
-        persist_dir: Optional[str] = None,
+        persist_dir: Optional[str] = None,  # kept for backwards-compat; ignored
+        agents_dir: Optional[str] = None,
         ttl_hours: int = 24,
         reaper_interval_minutes: int = 60,
         on_expire: Optional[Any] = None,
     ):
         self.sessions: Dict[str, Session] = {}
-        self.user_sessions: Dict[str, List[str]] = {}  # user_id -> session_ids
-        self.channel_sessions: Dict[str, List[str]] = {}  # channel -> session_ids
+        self.user_sessions: Dict[str, List[str]] = {}
+        self.channel_sessions: Dict[str, List[str]] = {}
         self.max_sessions = max_sessions
         self.session_timeout = session_timeout
         self.ttl_hours = ttl_hours
         self.reaper_interval_minutes = reaper_interval_minutes
-        # Optional async callable fired when the reaper evicts a session:
-        #   async def on_expire(session: Session) -> None
         self._on_expire = on_expire
-        self._persist_dir: Optional[Path] = (
-            Path(persist_dir).expanduser() if persist_dir else None
-        )
+        # Resolve agents_dir: explicit arg > default
+        _raw = agents_dir or _DEFAULT_AGENTS_DIR
+        self._agents_dir: Path = Path(_raw).expanduser()
         self._cleanup_task: Optional[asyncio.Task] = None
         self._reaper_task: Optional[asyncio.Task] = None
         self._stop_event = asyncio.Event()
         self._logger = logging.getLogger("pyclaw.session")
-    
+
     async def start(self) -> None:
         """Start the session manager."""
         self._stop_event.clear()
@@ -180,7 +142,8 @@ class SessionManager:
         self._reaper_task = asyncio.create_task(self._reaper_loop())
         self._logger.info(
             f"Session manager started (ttl={self.ttl_hours}h, "
-            f"reaper_interval={self.reaper_interval_minutes}m)"
+            f"reaper_interval={self.reaper_interval_minutes}m, "
+            f"agents_dir={self._agents_dir})"
         )
 
     async def stop(self) -> None:
@@ -194,18 +157,16 @@ class SessionManager:
                 except asyncio.CancelledError:
                     pass
         self._logger.info("Session manager stopped")
-    
+
     async def _cleanup_loop(self) -> None:
-        """Periodic cleanup of inactive sessions."""
         while not self._stop_event.is_set():
             try:
                 await self._cleanup_inactive()
             except Exception as e:
                 self._logger.error(f"Cleanup error: {e}")
-            await asyncio.sleep(60)  # Run every minute
+            await asyncio.sleep(60)
 
     async def _reaper_loop(self) -> None:
-        """Reap sessions that have been idle longer than ttl_hours."""
         interval = self.reaper_interval_minutes * 60
         while not self._stop_event.is_set():
             await asyncio.sleep(interval)
@@ -217,12 +178,11 @@ class SessionManager:
                 self._logger.error(f"Reaper error: {e}")
 
     async def _reap_stale_sessions(self) -> None:
-        """Remove sessions that have been idle longer than ttl_hours."""
+        """Remove sessions that have been idle longer than ttl_hours from the
+        in-memory index only — session files are kept on disk forever."""
         cutoff = datetime.utcnow() - timedelta(hours=self.ttl_hours)
         to_reap = [
-            s.id
-            for s in self.sessions.values()
-            if s.updated_at < cutoff
+            s.id for s in self.sessions.values() if s.updated_at < cutoff
         ]
         for session_id in to_reap:
             session = self.sessions.get(session_id)
@@ -230,29 +190,42 @@ class SessionManager:
                 try:
                     await self._on_expire(session)
                 except Exception as exc:
-                    self._logger.error(f"on_expire callback failed for {session_id}: {exc}")
-            await self._remove_session(session_id)
+                    self._logger.error(
+                        f"on_expire callback failed for {session_id}: {exc}"
+                    )
+            self._remove_from_index(session_id)
         if to_reap:
-            self._logger.info(f"Reaped {len(to_reap)} stale session(s)")
-    
+            self._logger.info(
+                f"Reaped {len(to_reap)} stale session(s) from index "
+                f"(files retained on disk)"
+            )
+
     async def _cleanup_inactive(self) -> None:
-        """Remove inactive sessions that have timed out."""
         now = datetime.utcnow()
-        to_remove = []
-        
-        for session in self.sessions.values():
-            if not session.is_active:
-                continue
-            
-            # Check if session has timed out
-            age = (now - session.updated_at).total_seconds()
-            if age > self.session_timeout:
-                session.is_active = False
-                to_remove.append(session.id)
-        
+        to_remove = [
+            s.id
+            for s in self.sessions.values()
+            if s.is_active
+            and (now - s.updated_at).total_seconds() > self.session_timeout
+        ]
         for session_id in to_remove:
-            await self._remove_session(session_id)
-    
+            s = self.sessions.get(session_id)
+            if s:
+                s.is_active = False
+            self._remove_from_index(session_id)
+
+    # ------------------------------------------------------------------
+    # Session directory helpers
+    # ------------------------------------------------------------------
+
+    def _session_dir(self, agent_id: str, session_id: str) -> Path:
+        """Return the directory for a session: agents_dir/{agent_id}/sessions/{session_id}/"""
+        return self._agents_dir / agent_id / "sessions" / session_id
+
+    # ------------------------------------------------------------------
+    # Public API
+    # ------------------------------------------------------------------
+
     async def create_session(
         self,
         agent_id: str,
@@ -261,38 +234,36 @@ class SessionManager:
         metadata: Optional[Dict[str, Any]] = None,
     ) -> Session:
         """Create a new session."""
-        # Check max sessions
         if len(self.sessions) >= self.max_sessions:
             await self._evict_oldest_session()
-        
+
+        session_id = _generate_session_id()
+        history_dir = self._session_dir(agent_id, session_id)
         session = Session(
-            id=str(uuid.uuid4()),
+            id=session_id,
             agent_id=agent_id,
             channel=channel,
             user_id=user_id,
             metadata=metadata or {},
-            _persist_fn=self._write_session if self._persist_dir else None,
+            history_dir=history_dir,
         )
 
         self.sessions[session.id] = session
-        
-        # Track by user
+
         if user_id not in self.user_sessions:
             self.user_sessions[user_id] = []
         self.user_sessions[user_id].append(session.id)
-        
-        # Track by channel
+
         if channel not in self.channel_sessions:
             self.channel_sessions[channel] = []
         self.channel_sessions[channel].append(session.id)
-        
-        self._write_session(session)
+
+        session.save_metadata()
         self._logger.debug(
             f"Created session {session.id} for user {user_id} on {channel}"
         )
-
         return session
-    
+
     async def get_session(self, session_id: str) -> Optional[Session]:
         """Get a session by ID."""
         session = self.sessions.get(session_id)
@@ -300,7 +271,7 @@ class SessionManager:
             session.updated_at = datetime.utcnow()
             session.is_active = True
         return session
-    
+
     async def get_or_create_session(
         self,
         agent_id: str,
@@ -308,132 +279,35 @@ class SessionManager:
         user_id: str,
         create_if_not_exists: bool = True,
     ) -> Optional[Session]:
-        """Get existing session or create new one."""
-        # Try to find existing active session for this user/channel
+        """Get existing active session or create a new one."""
         if channel in self.channel_sessions:
             for session_id in reversed(self.channel_sessions[channel]):
                 session = self.sessions.get(session_id)
-                if session and session.user_id == user_id and session.is_active:
+                if (session and session.user_id == user_id
+                        and session.agent_id == agent_id and session.is_active):
                     session.updated_at = datetime.utcnow()
                     return session
-        
-        # Create new session
+
         if create_if_not_exists:
             return await self.create_session(agent_id, channel, user_id)
-        
+
         return None
-    
-    async def update_session(
-        self,
-        session_id: str,
-        **updates,
-    ) -> Optional[Session]:
+
+    async def update_session(self, session_id: str, **updates) -> Optional[Session]:
         """Update session fields."""
         session = self.sessions.get(session_id)
         if not session:
             return None
-        
         for key, value in updates.items():
             if hasattr(session, key):
                 setattr(session, key, value)
-        
         session.updated_at = datetime.utcnow()
         return session
-    
+
     async def delete_session(self, session_id: str) -> bool:
-        """Delete a session."""
-        return await self._remove_session(session_id)
-    
-    async def _remove_session(self, session_id: str) -> bool:
-        """Internal method to remove a session."""
-        session = self.sessions.pop(session_id, None)
-        if not session:
-            return False
-        
-        # Remove from user_sessions
-        if session.user_id in self.user_sessions:
-            self.user_sessions[session.user_id].remove(session_id)
-            if not self.user_sessions[session.user_id]:
-                del self.user_sessions[session.user_id]
-        
-        # Remove from channel_sessions
-        if session.channel in self.channel_sessions:
-            self.channel_sessions[session.channel].remove(session_id)
-            if not self.channel_sessions[session.channel]:
-                del self.channel_sessions[session.channel]
-        
-        self._delete_session_file(session_id)
-        self._logger.debug(f"Removed session {session_id}")
-        return True
-    
-    async def _evict_oldest_session(self) -> None:
-        """Evict the oldest inactive session."""
-        oldest: Optional[Session] = None
+        """Remove a session from the in-memory index (files are not deleted)."""
+        return self._remove_from_index(session_id)
 
-        for session in self.sessions.values():
-            if not session.is_active:
-                if oldest is None or session.updated_at < oldest.updated_at:
-                    oldest = session
-
-        if oldest:
-            await self._remove_session(oldest.id)
-            self._logger.debug(f"Evicted oldest session {oldest.id}")
-
-    # ------------------------------------------------------------------
-    # Persistence helpers
-    # ------------------------------------------------------------------
-
-    def _session_path(self, session_id: str) -> Optional[Path]:
-        if self._persist_dir is None:
-            return None
-        return self._persist_dir / f"{session_id}.json"
-
-    def _write_session(self, session: Session) -> None:
-        """Synchronously write one session to disk (atomic)."""
-        path = self._session_path(session.id)
-        if path is None:
-            return
-        try:
-            self._persist_dir.mkdir(parents=True, exist_ok=True)  # type: ignore[union-attr]
-            tmp = path.with_suffix(".tmp")
-            tmp.write_text(json.dumps(session.to_full_dict(), indent=2))
-            tmp.replace(path)
-        except Exception as e:
-            self._logger.error(f"Failed to persist session {session.id}: {e}")
-
-    def _delete_session_file(self, session_id: str) -> None:
-        path = self._session_path(session_id)
-        if path and path.exists():
-            try:
-                path.unlink()
-            except Exception as e:
-                self._logger.error(f"Failed to delete session file {session_id}: {e}")
-
-    def _load_sessions_from_disk(self) -> None:
-        """Load all persisted sessions into memory on startup."""
-        if self._persist_dir is None or not self._persist_dir.exists():
-            return
-        loaded = 0
-        for p in self._persist_dir.glob("*.json"):
-            try:
-                data = json.loads(p.read_text())
-                session = Session.from_dict(data)
-                session._persist_fn = self._write_session if self._persist_dir else None
-                self.sessions[session.id] = session
-                if session.user_id not in self.user_sessions:
-                    self.user_sessions[session.user_id] = []
-                if session.id not in self.user_sessions[session.user_id]:
-                    self.user_sessions[session.user_id].append(session.id)
-                if session.channel not in self.channel_sessions:
-                    self.channel_sessions[session.channel] = []
-                if session.id not in self.channel_sessions[session.channel]:
-                    self.channel_sessions[session.channel].append(session.id)
-                loaded += 1
-            except Exception as e:
-                self._logger.warning(f"Could not load session from {p.name}: {e}")
-        if loaded:
-            self._logger.info(f"Loaded {loaded} sessions from {self._persist_dir}")
-    
     async def list_sessions(
         self,
         agent_id: Optional[str] = None,
@@ -443,7 +317,6 @@ class SessionManager:
     ) -> List[Session]:
         """List sessions with optional filters."""
         sessions = list(self.sessions.values())
-        
         if agent_id:
             sessions = [s for s in sessions if s.agent_id == agent_id]
         if channel:
@@ -452,12 +325,9 @@ class SessionManager:
             sessions = [s for s in sessions if s.user_id == user_id]
         if active_only:
             sessions = [s for s in sessions if s.is_active]
-        
-        # Sort by updated_at descending
         sessions.sort(key=lambda s: s.updated_at, reverse=True)
-        
         return sessions
-    
+
     def list_sessions_sync(
         self,
         agent_id: Optional[str] = None,
@@ -465,9 +335,8 @@ class SessionManager:
         user_id: Optional[str] = None,
         active_only: bool = True,
     ) -> List[Session]:
-        """Synchronous version of list_sessions for use from screens."""
+        """Synchronous version of list_sessions for TUI screens."""
         sessions = list(self.sessions.values())
-        
         if agent_id:
             sessions = [s for s in sessions if s.agent_id == agent_id]
         if channel:
@@ -476,10 +345,9 @@ class SessionManager:
             sessions = [s for s in sessions if s.user_id == user_id]
         if active_only:
             sessions = [s for s in sessions if s.is_active]
-        
         sessions.sort(key=lambda s: s.updated_at, reverse=True)
         return sessions
-    
+
     def get_status(self) -> Dict[str, Any]:
         """Get session manager status."""
         return {
@@ -489,3 +357,86 @@ class SessionManager:
             "unique_users": len(self.user_sessions),
             "channels": list(self.channel_sessions.keys()),
         }
+
+    # ------------------------------------------------------------------
+    # Internal helpers
+    # ------------------------------------------------------------------
+
+    def _remove_from_index(self, session_id: str) -> bool:
+        """Remove a session from the in-memory index only."""
+        session = self.sessions.pop(session_id, None)
+        if not session:
+            return False
+
+        if session.user_id in self.user_sessions:
+            try:
+                self.user_sessions[session.user_id].remove(session_id)
+            except ValueError:
+                pass
+            if not self.user_sessions[session.user_id]:
+                del self.user_sessions[session.user_id]
+
+        if session.channel in self.channel_sessions:
+            try:
+                self.channel_sessions[session.channel].remove(session_id)
+            except ValueError:
+                pass
+            if not self.channel_sessions[session.channel]:
+                del self.channel_sessions[session.channel]
+
+        self._logger.debug(f"Removed session {session_id} from index")
+        return True
+
+    # Kept for backward-compat (some callers use _remove_session directly)
+    async def _remove_session(self, session_id: str) -> bool:
+        return self._remove_from_index(session_id)
+
+    async def _evict_oldest_session(self) -> None:
+        """Evict the oldest inactive session from the index."""
+        oldest: Optional[Session] = None
+        for session in self.sessions.values():
+            if not session.is_active:
+                if oldest is None or session.updated_at < oldest.updated_at:
+                    oldest = session
+        if oldest:
+            self._remove_from_index(oldest.id)
+            self._logger.debug(f"Evicted oldest session {oldest.id}")
+
+    def _load_sessions_from_disk(self) -> None:
+        """Scan agents_dir for session.json files and load them into memory."""
+        if not self._agents_dir.exists():
+            return
+        loaded = 0
+        for agent_dir in self._agents_dir.iterdir():
+            if not agent_dir.is_dir():
+                continue
+            sessions_root = agent_dir / "sessions"
+            if not sessions_root.exists():
+                continue
+            for sess_dir in sessions_root.iterdir():
+                if not sess_dir.is_dir():
+                    continue
+                meta_file = sess_dir / "session.json"
+                if not meta_file.exists():
+                    continue
+                try:
+                    data = json.loads(meta_file.read_text())
+                    session = Session.from_dict(data, history_dir=sess_dir)
+                    self.sessions[session.id] = session
+                    if session.user_id not in self.user_sessions:
+                        self.user_sessions[session.user_id] = []
+                    if session.id not in self.user_sessions[session.user_id]:
+                        self.user_sessions[session.user_id].append(session.id)
+                    if session.channel not in self.channel_sessions:
+                        self.channel_sessions[session.channel] = []
+                    if session.id not in self.channel_sessions[session.channel]:
+                        self.channel_sessions[session.channel].append(session.id)
+                    loaded += 1
+                except Exception as e:
+                    self._logger.warning(
+                        f"Could not load session from {meta_file}: {e}"
+                    )
+        if loaded:
+            self._logger.info(
+                f"Loaded {loaded} session(s) from {self._agents_dir}"
+            )

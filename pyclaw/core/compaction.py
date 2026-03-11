@@ -93,17 +93,26 @@ class CompactionManager:
         logger.info("Compaction manager stopped")
     
     async def count_tokens(self, session: Session) -> int:
-        """Count tokens in a session's messages."""
+        """Estimate token count for a session.
+
+        History content lives in the FastAgent runner; we estimate from
+        message_count when a direct counter is not available.
+        """
         if self._token_counter:
-            messages = session.get_messages_for_provider()
-            return await self._token_counter(messages)
-        
-        # Fallback: estimate tokens (rough approximation: ~4 chars per token)
-        total_chars = sum(
-            len(msg.content) 
-            for msg in session.messages
-        )
-        return total_chars // 4
+            # Load history from disk to count tokens
+            if session.history_path and session.history_path.exists():
+                try:
+                    from fast_agent.mcp.prompt_serialization import load_messages
+                    messages = load_messages(str(session.history_path))
+                    msg_dicts = [
+                        {"role": m.role, "content": m.all_text() or ""}
+                        for m in messages
+                    ]
+                    return await self._token_counter(msg_dicts)
+                except Exception:
+                    pass
+        # Fallback: rough estimate (~500 tokens per user/assistant exchange)
+        return session.message_count * 500
     
     def get_token_count(self, session_id: str) -> int:
         """Get cached token count for a session."""
@@ -152,110 +161,21 @@ class CompactionManager:
                 original_tokens=original_count,
                 compacted_tokens=original_count,
                 messages_summarized=0,
-                messages_kept=len(session.messages),
+                messages_kept=session.message_count,
                 summary="No compaction needed - below threshold",
             )
-        
-        if not self._summarizer:
-            return CompactionResult(
-                success=False,
-                original_tokens=original_count,
-                compacted_tokens=original_count,
-                messages_summarized=0,
-                messages_kept=len(session.messages),
-                summary="",
-                error="No summarizer configured",
-            )
-        
-        try:
-            # Separate messages into to-summarize and to-keep
-            messages_to_summarize: List[Dict[str, str]] = []
-            messages_to_keep: List[Any] = []
-            
-            # Keep recent messages up to max_messages_to_keep
-            keep_count = min(
-                self.config.max_messages_to_keep,
-                len(session.messages)
-            )
-            
-            # System messages should always be kept at the start
-            system_messages = [m for m in session.messages if m.role == "system"]
-            non_system = [m for m in session.messages if m.role != "system"]
-            
-            # Keep system messages + recent non-system messages
-            keep_messages = system_messages + non_system[-keep_count:]
-            
-            # Messages to summarize are everything else
-            summarize_messages = non_system[:-keep_count] if len(non_system) > keep_count else []
-            
-            if not summarize_messages:
-                return CompactionResult(
-                    success=True,
-                    original_tokens=original_count,
-                    compacted_tokens=original_count,
-                    messages_summarized=0,
-                    messages_kept=len(session.messages),
-                    summary="No messages to summarize",
-                )
-            
-            # Convert to provider format for summarizer
-            summarize_data = [
-                {"role": msg.role, "content": msg.content}
-                for msg in summarize_messages
-            ]
-            
-            # Generate summary
-            logger.info(
-                f"Compacting session {session.id}: "
-                f"summarizing {len(summarize_messages)} messages"
-            )
-            
-            summary = await self._summarizer(
-                "Summarize this conversation concisely, preserving key facts, "
-                "decisions, and important context:",
-                summarize_data
-            )
-            
-            # Create summary message
-            from pyclaw.core.session import Message
-            summary_message = Message(
-                id=f"summary_{session.id}_{datetime.utcnow().timestamp()}",
-                role="system",
-                content=f"[Previous conversation summarized]\n\n{summary}",
-                metadata={"is_summary": True, "original_count": len(summarize_messages)},
-            )
-            
-            # Replace messages with summary + recent messages
-            session.messages = [summary_message] + keep_messages
-            
-            # Update token count
-            new_count = await self.update_token_count(session)
-            
-            logger.info(
-                f"Compaction complete for session {session.id}: "
-                f"{original_count} -> {new_count} tokens"
-            )
-            
-            return CompactionResult(
-                success=True,
-                original_tokens=original_count,
-                compacted_tokens=new_count,
-                messages_summarized=len(summarize_messages),
-                messages_kept=len(session.messages),
-                summary=summary[:500] + "..." if len(summary) > 500 else summary,
-            )
-            
-        except Exception as e:
-            logger.error(f"Compaction failed for session {session.id}: {e}")
-            return CompactionResult(
-                success=False,
-                original_tokens=original_count,
-                compacted_tokens=original_count,
-                messages_summarized=0,
-                messages_kept=len(session.messages),
-                summary="",
-                error=str(e),
-            )
+
+        # Compaction requires loading history from disk, summarizing, and rewriting.
+        # This is a placeholder — full compaction support requires runner access.
+        return CompactionResult(
+            success=False,
+            original_tokens=original_count,
+            compacted_tokens=original_count,
+            messages_summarized=0,
+            messages_kept=session.message_count,
+            summary="",
+            error="Compaction not yet supported with file-based history; use /reset to clear history.",
+        )
     
     async def check_and_compact(self, session: Session) -> Optional[CompactionResult]:
         """
@@ -278,7 +198,7 @@ class CompactionManager:
             "soft_threshold": self.config.soft_threshold,
             "should_compact": self.should_compact(session),
             "needs_warning": self.needs_warning(session),
-            "message_count": len(session.messages),
+            "message_count": session.message_count,
         }
     
     @classmethod

@@ -107,6 +107,38 @@ def create_parser() -> argparse.ArgumentParser:
         help="Also remove ~/.pyclaw/ config and data without prompting",
     )
 
+    # import-openclaw command
+    import_parser = subparsers.add_parser(
+        "import-openclaw",
+        help="Import OpenClaw session history into pyclaw",
+    )
+    import_parser.add_argument(
+        "--agent",
+        type=str,
+        default=None,
+        metavar="NAME",
+        help="Import sessions for a specific agent name",
+    )
+    import_parser.add_argument(
+        "--all",
+        action="store_true",
+        help="Import sessions for all discovered agents",
+    )
+    import_parser.add_argument(
+        "--openclaw-dir",
+        type=str,
+        default=None,
+        metavar="DIR",
+        help="Path to OpenClaw data directory (default: ~/.openclaw)",
+    )
+    import_parser.add_argument(
+        "--pyclaw-dir",
+        type=str,
+        default=None,
+        metavar="DIR",
+        help="Path to pyclaw data directory (default: ~/.pyclaw)",
+    )
+
     # run command
     run_parser = subparsers.add_parser(
         "run",
@@ -196,9 +228,14 @@ async def run_gateway(
         await gateway.pulse_runner.start()
     gateway._is_running = True
 
-    # Start Telegram polling
-    if gateway._telegram_bot:
-        gateway._telegram_polling_task = asyncio.create_task(gateway._telegram_poll())
+    # Start Telegram polling — one task per configured bot
+    for _bot_name, _bot in gateway._tg_bots.items():
+        gateway._tg_polling_tasks[_bot_name] = asyncio.create_task(
+            gateway._telegram_poll_bot(_bot_name, _bot),
+            name=f"telegram-poll-{_bot_name}",
+        )
+    if gateway._tg_bots:
+        print(f"Telegram polling: {list(gateway._tg_bots)}")
 
     print(f"HTTP API docs: http://{gw_host}:{gw_port}/docs")
     print(f"MCP endpoint:  http://{gw_host}:{mcp_port}/mcp")
@@ -248,9 +285,14 @@ async def run_gateway_with_tui(
         await gateway.pulse_runner.start()
     gateway._is_running = True
 
-    # Start Telegram polling (same as non-TUI mode)
-    if gateway._telegram_bot:
-        gateway._telegram_polling_task = asyncio.create_task(gateway._telegram_poll())
+    # Start Telegram polling — one task per configured bot
+    for _bot_name, _bot in gateway._tg_bots.items():
+        gateway._tg_polling_tasks[_bot_name] = asyncio.create_task(
+            gateway._telegram_poll_bot(_bot_name, _bot),
+            name=f"telegram-poll-{_bot_name}",
+        )
+    if gateway._tg_bots:
+        print(f"Telegram polling: {list(gateway._tg_bots)}")
 
     # Run TUI with graceful shutdown handling
     try:
@@ -397,6 +439,11 @@ def main():
 
     if args.command == "uninstall":
         cmd_uninstall(args)
+        return
+
+    if args.command == "import-openclaw":
+        from .tools.openclaw_import import cmd_import_openclaw
+        cmd_import_openclaw(args)
         return
 
     if args.command == "run":

@@ -243,6 +243,62 @@ class TestHandleWithFastagent:
         assert "error" in response.content.lower() or "no FastAgent" in response.content
 
 
+class TestHistoryInjection:
+    """Tests for session history wiring: history_path passed to AgentRunner."""
+
+    @pytest.mark.asyncio
+    async def test_history_path_passed_to_new_runner(self, tmp_path):
+        """_get_session_runner receives history_path from session.history_path."""
+        from pathlib import Path
+
+        base_runner = _make_mock_runner(response="ok")
+        agent = _make_agent(fast_agent_runner=base_runner)
+        session = _make_session("sess-history-test")
+        session.history_dir = tmp_path  # sets history_path = tmp_path / "history.json"
+
+        mock_runner_instance = _make_mock_runner(response="ok")
+
+        with patch("pyclaw.agents.runner.AgentRunner", return_value=mock_runner_instance) as MockRunner:
+            await agent._handle_with_fastagent("hello", session)
+
+        # Verify AgentRunner was constructed with the history_path
+        _, kwargs = MockRunner.call_args
+        assert kwargs.get("history_path") == tmp_path / "history.json"
+
+    @pytest.mark.asyncio
+    async def test_existing_runner_reused_not_recreated(self):
+        """Once a runner is cached, _handle_with_fastagent reuses it."""
+        base_runner = _make_mock_runner(response="ok")
+        agent = _make_agent(fast_agent_runner=base_runner)
+        session = _make_session("sess-cached")
+        # history_dir=None → history_path=None
+
+        mock_runner_instance = _make_mock_runner(response="ok")
+
+        with patch("pyclaw.agents.runner.AgentRunner", return_value=mock_runner_instance) as MockRunner:
+            await agent._handle_with_fastagent("first", session)
+            await agent._handle_with_fastagent("second", session)
+
+        # AgentRunner constructor called only once — same instance reused
+        assert MockRunner.call_count == 1
+
+    @pytest.mark.asyncio
+    async def test_no_history_path_when_session_has_no_dir(self):
+        """When session has no history_dir, runner gets history_path=None."""
+        base_runner = _make_mock_runner(response="ok")
+        agent = _make_agent(fast_agent_runner=base_runner)
+        session = _make_session("sess-no-hist")
+        # history_dir defaults to None
+
+        mock_runner_instance = _make_mock_runner(response="ok")
+
+        with patch("pyclaw.agents.runner.AgentRunner", return_value=mock_runner_instance) as MockRunner:
+            await agent._handle_with_fastagent("hello", session)
+
+        _, kwargs = MockRunner.call_args
+        assert kwargs.get("history_path") is None
+
+
 # ===========================================================================
 # Section 2: Telegram incoming routing
 # ===========================================================================
@@ -329,6 +385,7 @@ class TestTelegramIncoming:
             sender_id="42",
             content="Hi!",
             message_id="101",
+            agent_id="default",
         )
 
     @pytest.mark.asyncio

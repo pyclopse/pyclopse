@@ -109,11 +109,24 @@ def register_builtin_commands(registry: CommandRegistry, gateway: Any) -> None:
     async def cmd_reset(args: str, ctx: CommandContext) -> str:
         if ctx.session is None:
             return "No active session to reset."
-        ctx.session.clear_messages()
-        # Clear the FastAgent per-session runner so its internal history is also reset.
         agent = ctx.gateway._agent_manager.get_agent(ctx.session.agent_id) if ctx.gateway._agent_manager else None
+        # Archive history files so they're kept on disk but won't be reloaded
+        if ctx.session.history_dir and ctx.session.history_dir.exists():
+            from datetime import datetime as _dt
+            import shutil as _shutil
+            archive_dir = ctx.session.history_dir / "archived"
+            archive_dir.mkdir(parents=True, exist_ok=True)
+            stamp = _dt.utcnow().strftime("%Y%m%d_%H%M%S")
+            for hist_file in ["history.json", "history_previous.json"]:
+                p = ctx.session.history_dir / hist_file
+                if p.exists():
+                    p.rename(archive_dir / f"{hist_file}.{stamp}")
+        # Reset message count and persist
+        ctx.session.message_count = 0
+        ctx.session.save_metadata()
+        # Evict the per-session runner so the next message gets a fresh FastAgent context
         if agent:
-            agent._session_runners.pop(ctx.session.id, None)
+            await agent.evict_session_runner(ctx.session.id)
         return "✅ Session history cleared."
 
     async def cmd_status(args: str, ctx: CommandContext) -> str:
@@ -191,10 +204,9 @@ def register_builtin_commands(registry: CommandRegistry, gateway: Any) -> None:
             if ctx.gateway._agent_manager else None
         )
         old_id = ctx.session.id[:8]
-        # Drop per-session runner so a fresh FastAgent context is created next turn
+        # Evict per-session runner so a fresh FastAgent context is created next turn
         if agent:
-            agent._session_runners.pop(ctx.session.id, None)
-        ctx.session.clear_messages()
+            await agent.evict_session_runner(ctx.session.id)
         ctx.session.context.clear()
         return f"✅ New session started (was {old_id}…). History cleared."
 

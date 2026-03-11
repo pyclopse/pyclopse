@@ -20,7 +20,6 @@ def _make_session(
     user_id="user1",
     message_count=3,
     is_active=True,
-    messages=None,
 ):
     s = MagicMock()
     s.id = session_id
@@ -31,7 +30,7 @@ def _make_session(
     s.updated_at = datetime(2025, 1, 2, 8, 0, 0)
     s.message_count = message_count
     s.is_active = is_active
-    s.messages = messages or []
+    s.history_path = None  # no history file in mock
     return s
 
 
@@ -68,7 +67,7 @@ class TestListSessions:
     @pytest.mark.asyncio
     async def test_list_returns_empty(self, tmp_path):
         from pyclaw.core.session import SessionManager
-        sm = SessionManager(persist_dir=str(tmp_path / "s"))
+        sm = SessionManager(agents_dir=str(tmp_path / "s"))
         app = _make_app(sm)
         async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as c:
             r = await c.get("/api/v1/sessions/")
@@ -80,7 +79,7 @@ class TestListSessions:
     @pytest.mark.asyncio
     async def test_list_returns_sessions(self, tmp_path):
         from pyclaw.core.session import SessionManager
-        sm = SessionManager(persist_dir=str(tmp_path / "s"))
+        sm = SessionManager(agents_dir=str(tmp_path / "s"))
         await sm.start()
         await sm.create_session("agent1", "telegram", "user1")
         await sm.create_session("agent1", "telegram", "user2")
@@ -96,7 +95,7 @@ class TestListSessions:
     @pytest.mark.asyncio
     async def test_list_filters_by_channel(self, tmp_path):
         from pyclaw.core.session import SessionManager
-        sm = SessionManager(persist_dir=str(tmp_path / "s"))
+        sm = SessionManager(agents_dir=str(tmp_path / "s"))
         await sm.start()
         await sm.create_session("a1", "telegram", "u1")
         await sm.create_session("a1", "slack", "u2")
@@ -111,7 +110,7 @@ class TestListSessions:
     @pytest.mark.asyncio
     async def test_list_session_fields(self, tmp_path):
         from pyclaw.core.session import SessionManager
-        sm = SessionManager(persist_dir=str(tmp_path / "s"))
+        sm = SessionManager(agents_dir=str(tmp_path / "s"))
         await sm.start()
         await sm.create_session("agent1", "telegram", "user99")
         app = _make_app(sm)
@@ -130,13 +129,37 @@ class TestListSessions:
 class TestGetSession:
 
     @pytest.mark.asyncio
-    async def test_get_existing_session(self, tmp_path):
+    async def test_get_existing_session_no_history(self, tmp_path):
+        """GET /sessions/{id} returns session metadata; messages are empty when no history file."""
         from pyclaw.core.session import SessionManager
-        sm = SessionManager(persist_dir=str(tmp_path / "s"))
+        sm = SessionManager(agents_dir=str(tmp_path / "s"))
         await sm.start()
         session = await sm.create_session("agent1", "telegram", "user1")
-        session.add_message("user", "hello")
-        session.add_message("assistant", "hi there")
+        app = _make_app(sm)
+        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as c:
+            r = await c.get(f"/api/v1/sessions/{session.id}")
+        assert r.status_code == 200
+        data = r.json()
+        assert data["id"] == session.id
+        assert data["messages"] == []
+        await sm.stop()
+
+    @pytest.mark.asyncio
+    async def test_get_existing_session_with_history(self, tmp_path):
+        """GET /sessions/{id} returns messages loaded from history.json."""
+        import json as _json
+        from pyclaw.core.session import SessionManager
+        sm = SessionManager(agents_dir=str(tmp_path / "s"))
+        await sm.start()
+        session = await sm.create_session("agent1", "telegram", "user1")
+        # Write a minimal FA-format history file
+        hist_content = _json.dumps({
+            "messages": [
+                {"role": "user", "content": [{"type": "text", "text": "hello"}]},
+                {"role": "assistant", "content": [{"type": "text", "text": "hi there"}]},
+            ]
+        })
+        session.history_path.write_text(hist_content)
         app = _make_app(sm)
         async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as c:
             r = await c.get(f"/api/v1/sessions/{session.id}")
@@ -151,7 +174,7 @@ class TestGetSession:
     @pytest.mark.asyncio
     async def test_get_missing_session_returns_404(self, tmp_path):
         from pyclaw.core.session import SessionManager
-        sm = SessionManager(persist_dir=str(tmp_path / "s"))
+        sm = SessionManager(agents_dir=str(tmp_path / "s"))
         app = _make_app(sm)
         async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as c:
             r = await c.get("/api/v1/sessions/nonexistent-id")
@@ -159,11 +182,18 @@ class TestGetSession:
 
     @pytest.mark.asyncio
     async def test_get_session_message_fields(self, tmp_path):
+        """Message objects have the expected fields."""
+        import json as _json
         from pyclaw.core.session import SessionManager
-        sm = SessionManager(persist_dir=str(tmp_path / "s"))
+        sm = SessionManager(agents_dir=str(tmp_path / "s"))
         await sm.start()
         session = await sm.create_session("agent1", "telegram", "user1")
-        session.add_message("user", "test message")
+        hist_content = _json.dumps({
+            "messages": [
+                {"role": "user", "content": [{"type": "text", "text": "test message"}]},
+            ]
+        })
+        session.history_path.write_text(hist_content)
         app = _make_app(sm)
         async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as c:
             r = await c.get(f"/api/v1/sessions/{session.id}")
@@ -182,7 +212,7 @@ class TestDeleteSession:
     @pytest.mark.asyncio
     async def test_delete_existing_session(self, tmp_path):
         from pyclaw.core.session import SessionManager
-        sm = SessionManager(persist_dir=str(tmp_path / "s"))
+        sm = SessionManager(agents_dir=str(tmp_path / "s"))
         await sm.start()
         session = await sm.create_session("agent1", "telegram", "user1")
         app = _make_app(sm)
@@ -199,24 +229,28 @@ class TestDeleteSession:
     @pytest.mark.asyncio
     async def test_delete_missing_session_returns_404(self, tmp_path):
         from pyclaw.core.session import SessionManager
-        sm = SessionManager(persist_dir=str(tmp_path / "s"))
+        sm = SessionManager(agents_dir=str(tmp_path / "s"))
         app = _make_app(sm)
         async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as c:
             r = await c.delete("/api/v1/sessions/does-not-exist")
         assert r.status_code == 404
 
     @pytest.mark.asyncio
-    async def test_delete_removes_persist_file(self, tmp_path):
+    async def test_delete_keeps_session_files_on_disk(self, tmp_path):
+        """Deleting a session removes it from the index but keeps files on disk."""
         from pyclaw.core.session import SessionManager
-        sm = SessionManager(persist_dir=str(tmp_path / "s"))
+        sm = SessionManager(agents_dir=str(tmp_path / "s"))
         await sm.start()
         session = await sm.create_session("agent1", "telegram", "user1")
-        persist_path = sm._session_path(session.id)
-        assert persist_path and persist_path.exists()
+        hist_dir = session.history_dir
+        assert hist_dir and hist_dir.exists()
         app = _make_app(sm)
         async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as c:
             await c.delete(f"/api/v1/sessions/{session.id}")
-        assert not persist_path.exists()
+        # Removed from index
+        assert session.id not in sm.sessions
+        # Files still on disk
+        assert hist_dir.exists()
         await sm.stop()
 
 
