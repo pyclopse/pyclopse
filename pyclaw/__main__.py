@@ -78,6 +78,35 @@ def create_parser() -> argparse.ArgumentParser:
         help="Path to config file",
     )
 
+    # update command
+    update_parser = subparsers.add_parser(
+        "update",
+        help="Update pyclaw to the latest release",
+    )
+    update_parser.add_argument(
+        "--beta",
+        action="store_true",
+        help="Install the latest commit from main (unstable)",
+    )
+    update_parser.add_argument(
+        "--version",
+        type=str,
+        default=None,
+        metavar="VERSION",
+        help="Install a specific version, e.g. 0.2.1",
+    )
+
+    # uninstall command
+    uninstall_parser = subparsers.add_parser(
+        "uninstall",
+        help="Uninstall pyclaw",
+    )
+    uninstall_parser.add_argument(
+        "--purge",
+        action="store_true",
+        help="Also remove ~/.pyclaw/ config and data without prompting",
+    )
+
     # run command
     run_parser = subparsers.add_parser(
         "run",
@@ -267,6 +296,88 @@ def cmd_validate(args):
         sys.exit(1)
 
 
+_REPO_SSH = "git+ssh://git@github.com/jondecker76/pyclaw.git"
+
+
+def _latest_release_tag() -> str:
+    """Return the latest semver tag from the remote repo via git ls-remote."""
+    import re
+    import subprocess
+    result = subprocess.run(
+        ["git", "ls-remote", "--tags", "--sort=-v:refname", _REPO_SSH.replace("git+", ""), "v*"],
+        capture_output=True,
+        text=True,
+        timeout=15,
+    )
+    tags = re.findall(r"refs/tags/(v[\d]+\.[\d]+\.[\d]+)$", result.stdout, re.MULTILINE)
+    if not tags:
+        raise RuntimeError("No release tags found. Check your SSH access to GitHub.")
+    return tags[0]
+
+
+def cmd_update(args):
+    """Handle update command."""
+    import subprocess
+
+    if args.beta:
+        ref = "main"
+        label = "latest from main (beta)"
+    elif args.version:
+        ref = args.version if args.version.startswith("v") else f"v{args.version}"
+        label = f"version {ref}"
+    else:
+        print("Checking for latest release...")
+        try:
+            ref = _latest_release_tag()
+        except Exception as e:
+            print(f"✗ Could not determine latest release: {e}")
+            sys.exit(1)
+        label = f"latest stable release ({ref})"
+
+    print(f"Installing pyclaw {label}...")
+    url = f"{_REPO_SSH}@{ref}"
+    try:
+        subprocess.run(["uv", "tool", "install", "--reinstall", url], check=True)
+        print(f"✓ pyclaw updated to {label}")
+        print("  Your config and data in ~/.pyclaw/ are untouched.")
+    except subprocess.CalledProcessError:
+        print("✗ Update failed. Check the version/tag exists and your SSH access to GitHub.")
+        sys.exit(1)
+
+
+def cmd_uninstall(args):
+    """Handle uninstall command."""
+    import shutil
+    import subprocess
+
+    pyclaw_dir = Path("~/.pyclaw").expanduser()
+    remove_data = False
+
+    if args.purge:
+        remove_data = True
+    elif pyclaw_dir.exists():
+        try:
+            answer = input(f"Remove {pyclaw_dir} (config, sessions, memory)? [y/N] ").strip().lower()
+            remove_data = answer == "y"
+        except (EOFError, KeyboardInterrupt):
+            print()
+            remove_data = False
+
+    try:
+        subprocess.run(["uv", "tool", "uninstall", "pyclaw"], check=True)
+    except subprocess.CalledProcessError:
+        print("✗ Uninstall failed — is pyclaw installed via 'uv tool'?")
+        sys.exit(1)
+
+    if remove_data and pyclaw_dir.exists():
+        shutil.rmtree(pyclaw_dir)
+        print(f"✓ Removed {pyclaw_dir}")
+    elif pyclaw_dir.exists():
+        print(f"  Config and data kept at {pyclaw_dir}")
+
+    print("✓ pyclaw uninstalled.")
+
+
 def main():
     """Main entry point."""
     parser = create_parser()
@@ -278,6 +389,14 @@ def main():
 
     if args.command == "validate":
         cmd_validate(args)
+        return
+
+    if args.command == "update":
+        cmd_update(args)
+        return
+
+    if args.command == "uninstall":
+        cmd_uninstall(args)
         return
 
     if args.command == "run":
