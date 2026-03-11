@@ -17,7 +17,9 @@ try:
     from fast_agent import FastAgent
 
     FASTAGENT_AVAILABLE = True
-except ImportError:
+except Exception as _fa_import_err:
+    import logging as _logging
+    _logging.getLogger(__name__).warning(f"FastAgent not available: {type(_fa_import_err).__name__}: {_fa_import_err}")
     FastAgent = None
     FASTAGENT_AVAILABLE = False
 
@@ -214,7 +216,7 @@ class Agent:
             )
 
         except Exception as e:
-            self._logger.error(f"Failed to initialize FastAgent: {e}")
+            self._logger.error(f"Failed to initialize FastAgent: {e}", exc_info=True)
 
     def _get_session_runner(
         self, session_id: str, model_override: Optional[str] = None
@@ -257,6 +259,16 @@ class Agent:
             )
         return self._session_runners[session_id]
 
+    async def evict_session_runner(self, session_id: str) -> None:
+        """Tear down and remove the runner for a session so the next call gets a fresh one."""
+        runner = self._session_runners.pop(session_id, None)
+        if runner is not None:
+            try:
+                await runner.cleanup()
+            except Exception:
+                pass
+            self._logger.debug(f"Evicted session runner for {session_id[:8]}")
+
     async def start(self) -> None:
         """Start the agent."""
         self.is_running = True
@@ -274,8 +286,23 @@ class Agent:
         for task in self._tasks:
             if not task.done():
                 task.cancel()
-
         self._tasks.clear()
+
+        # Close all session runners (releases FastAgent MCP connections)
+        for runner in list(self._session_runners.values()):
+            try:
+                await runner.cleanup()
+            except Exception:
+                pass
+        self._session_runners.clear()
+
+        # Close the base runner
+        if self.fast_agent_runner:
+            try:
+                await self.fast_agent_runner.cleanup()
+            except Exception:
+                pass
+
         self._logger.info(f"Agent {self.name} stopped")
 
     async def handle_message(

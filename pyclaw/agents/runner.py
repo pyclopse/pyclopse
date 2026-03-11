@@ -100,8 +100,9 @@ def format_thinking_for_telegram(text: str) -> Optional[str]:
 
 logger = logging.getLogger(__name__)
 
-# Default MCP servers every agent gets (can be extended per-agent)
-_DEFAULT_SERVERS: List[str] = []
+# Default MCP servers every agent gets (can be extended per-agent).
+# "pyclaw" provides all built-in tools: bash, memory, todos, sessions, etc.
+_DEFAULT_SERVERS: List[str] = ["pyclaw"]
 
 # All available server names (defined in fastagent.config.yaml)
 ALL_SERVERS = ["pyclaw", "fetch", "time", "filesystem"]
@@ -154,6 +155,7 @@ class AgentRunner:
         # Defaults to agent_name but session runners override to the base agent name.
         self.owner_name: str = owner_name or agent_name
         self._app: Optional[Any] = None
+        self._fa_context: Optional[Any] = None  # kept alive for the lifetime of the runner
         self._message_history: List[Dict[str, str]] = []
 
     async def initialize(self):
@@ -244,12 +246,16 @@ class AgentRunner:
         async def main():
             pass
 
-        async with fast.run() as app:
-            self._app = app
-            logger.info(
-                f"Initialized agent runner: {self.agent_name} "
-                f"(model={self.model}, servers={self.servers})"
-            )
+        # Keep the FastAgent context alive for the lifetime of this runner.
+        # Using explicit __aenter__ / __aexit__ instead of `async with` so the
+        # context is NOT closed at the end of initialize() — it stays open until
+        # cleanup() is called.
+        self._fa_context = fast.run()
+        self._app = await self._fa_context.__aenter__()
+        logger.info(
+            f"Initialized agent runner: {self.agent_name} "
+            f"(model={self.model}, servers={self.servers})"
+        )
     
     async def run(self, prompt: str) -> str:
         """Run a single prompt through the agent.
@@ -333,6 +339,16 @@ class AgentRunner:
             result = await self._app.send(prompt)
             yield (str(result), False)
     
+    async def cleanup(self) -> None:
+        """Close the FastAgent context and release MCP connections."""
+        if self._fa_context is not None:
+            try:
+                await self._fa_context.__aexit__(None, None, None)
+            except Exception as e:
+                logger.debug(f"Error closing FastAgent context: {e}")
+            self._fa_context = None
+            self._app = None
+
     def get_history(self) -> List[Dict[str, str]]:
         """Get message history."""
         return self._message_history.copy()

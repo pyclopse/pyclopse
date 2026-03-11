@@ -73,6 +73,12 @@ class Gateway:
         self._seen_message_ids: Dict[str, float] = {}
         self._dedup_ttl_seconds: int = 60
 
+        # MCP server task (managed by start_mcp_server / stop_mcp_server)
+        self._mcp_server_task: Optional[asyncio.Task] = None
+        # REST API server task (managed by start_api_server / stop_api_server)
+        self._api_server_task: Optional[asyncio.Task] = None
+        self._api_uvicorn_server: Optional[Any] = None
+
         # Usage counters
         import time as _time
         self._usage: Dict[str, Any] = {
@@ -921,7 +927,7 @@ class Gateway:
         import time
         import html as _html
 
-        THROTTLE_S = 1.0   # minimum seconds between edits
+        THROTTLE_S = 0.5   # minimum seconds between edits
 
         # ── session / agent setup ─────────────────────────────────────────
         agent_id = (
@@ -955,6 +961,25 @@ class Gateway:
         except Exception:
             pass
 
+        # Keep the typing indicator alive during long thinking phases.
+        # Telegram's "typing" action expires after ~5 s; refresh it every 4 s
+        # until we have sent the first real message chunk.
+        typing_active = True
+
+        async def _keep_typing_stream():
+            while typing_active:
+                await asyncio.sleep(4)
+                if not typing_active:
+                    break
+                try:
+                    await self._telegram_bot.send_chat_action(
+                        chat_id=chat_id, action="typing"
+                    )
+                except Exception:
+                    pass
+
+        typing_task = asyncio.create_task(_keep_typing_stream())
+
         # ── mutable stream state ──────────────────────────────────────────
         stream_msg_id: Optional[int] = None
         last_edit_time: float = 0.0
@@ -986,7 +1011,7 @@ class Gateway:
         session_key = f"telegram:{user_id}"
 
         async def _run_stream() -> None:
-            nonlocal stream_msg_id, last_edit_time, thinking_buffer, response_buffer
+            nonlocal stream_msg_id, last_edit_time, thinking_buffer, response_buffer, typing_active
 
             async for chunk_text, is_reasoning in runner.run_stream(text):
                 if is_reasoning:
@@ -1013,6 +1038,7 @@ class Gateway:
 
                 now = time.monotonic()
                 if stream_msg_id is None:
+                    typing_active = False  # stop refreshing typing indicator
                     try:
                         msg = await self._telegram_bot.send_message(
                             chat_id=chat_id, text=display,
@@ -1110,7 +1136,20 @@ class Gateway:
         except asyncio.CancelledError:
             self._logger.info(f"Telegram stream cancelled for {user_id}")
         except Exception as e:
-            self._logger.error(f"Telegram stream error for {user_id}: {e}")
+            import traceback
+            self._logger.error(f"Telegram stream error for {user_id}: {e}\n{traceback.format_exc()}")
+            # Evict the broken session runner so the next message gets a fresh one
+            try:
+                _agent_id = (
+                    next(iter(self._agent_manager.agents))
+                    if self._agent_manager and self._agent_manager.agents
+                    else None
+                )
+                _agent = self._agent_manager.get_agent(_agent_id) if _agent_id and self._agent_manager else None
+                if _agent and session:
+                    await _agent.evict_session_runner(session.id)
+            except Exception:
+                pass
             try:
                 await self._telegram_bot.send_message(
                     chat_id=chat_id, text=f"Sorry, I hit an error: {e}"
@@ -1118,6 +1157,13 @@ class Gateway:
             except Exception:
                 pass
         finally:
+            typing_active = False
+            if not typing_task.done():
+                typing_task.cancel()
+                try:
+                    await typing_task
+                except asyncio.CancelledError:
+                    pass
             self._active_tasks.pop(session_key, None)
 
     async def _handle_slack_message(
@@ -1526,6 +1572,103 @@ class Gateway:
         except asyncio.CancelledError:
             self._logger.info("Gateway cancelled")
 
+    async def start_mcp_server(self, host: str = "0.0.0.0", port: int = 8081) -> None:
+        """Start the pyclaw MCP HTTP server as a managed background task.
+
+        Kills any process already holding the port so restarts are clean.
+        Uses FastMCP's run_http_async which manages its own uvicorn lifecycle.
+        """
+        # Kill any stale process on the port before binding
+        try:
+            import subprocess as _sp
+            result = _sp.run(
+                ["lsof", "-ti", f":{port}"],
+                capture_output=True, text=True,
+            )
+            for pid_str in result.stdout.strip().splitlines():
+                try:
+                    import os as _os
+                    import signal as _signal
+                    _os.kill(int(pid_str), _signal.SIGTERM)
+                    self._logger.info(f"Killed stale MCP server process {pid_str} on port {port}")
+                except Exception:
+                    pass
+            if result.stdout.strip():
+                await asyncio.sleep(0.5)
+        except Exception as e:
+            self._logger.debug(f"Port cleanup check failed: {e}")
+
+        from pyclaw.tools.server import mcp as pyclaw_mcp
+
+        async def _run():
+            try:
+                await pyclaw_mcp.run_http_async(host=host, port=port, show_banner=False)
+            except asyncio.CancelledError:
+                pass
+            except Exception as e:
+                self._logger.error(f"MCP server error: {e}")
+
+        self._mcp_server_task = asyncio.create_task(_run(), name="pyclaw-mcp-server")
+        self._logger.info(f"MCP server started on {host}:{port}")
+
+    async def stop_mcp_server(self) -> None:
+        """Stop the managed MCP server task."""
+        if self._mcp_server_task and not self._mcp_server_task.done():
+            # Silence expected CancelledError / incomplete-response noise from
+            # uvicorn and starlette during task cancellation.
+            import logging
+            _noisy = ["uvicorn", "uvicorn.error", "starlette.routing"]
+            _saved = {n: logging.getLogger(n).level for n in _noisy}
+            for n in _noisy:
+                logging.getLogger(n).setLevel(logging.CRITICAL)
+            self._mcp_server_task.cancel()
+            try:
+                await self._mcp_server_task
+            except asyncio.CancelledError:
+                pass
+            finally:
+                for n, lvl in _saved.items():
+                    logging.getLogger(n).setLevel(lvl)
+            self._logger.info("MCP server stopped")
+        self._mcp_server_task = None
+
+    async def start_api_server(self, host: str = "0.0.0.0", port: int = 8080) -> None:
+        """Start the REST API server as a managed background task."""
+        import uvicorn
+        from pyclaw.api.app import create_app
+
+        api_app = create_app(self)
+        uv_config = uvicorn.Config(api_app, host=host, port=port, log_level="warning")
+        self._api_uvicorn_server = uvicorn.Server(uv_config)
+
+        async def _run():
+            try:
+                await self._api_uvicorn_server.serve()
+            except asyncio.CancelledError:
+                pass
+            except Exception as e:
+                self._logger.error(f"API server error: {e}")
+
+        self._api_server_task = asyncio.create_task(_run(), name="pyclaw-api-server")
+        self._logger.info(f"REST API server started on {host}:{port}")
+
+    async def stop_api_server(self) -> None:
+        """Stop the managed REST API server task."""
+        if hasattr(self, "_api_uvicorn_server") and self._api_uvicorn_server:
+            self._api_uvicorn_server.should_exit = True
+        if self._api_server_task and not self._api_server_task.done():
+            try:
+                await asyncio.wait_for(self._api_server_task, timeout=5.0)
+            except (asyncio.TimeoutError, asyncio.CancelledError):
+                self._api_server_task.cancel()
+                try:
+                    await self._api_server_task
+                except asyncio.CancelledError:
+                    pass
+            self._logger.info("API server stopped")
+        self._api_server_task = None
+        self._api_uvicorn_server = None
+
     async def stop(self) -> None:
         """Stop the gateway."""
         self._logger.info("Stopping pyclaw Gateway...")
@@ -1564,6 +1707,10 @@ class Gateway:
                 self._logger.debug(f"Channel plugin '{name}' stopped")
             except Exception as exc:
                 self._logger.warning(f"Channel plugin '{name}' stop error: {exc}")
+
+        # Stop MCP and API servers
+        await self.stop_mcp_server()
+        await self.stop_api_server()
 
         self._logger.info("pyclaw Gateway stopped")
 

@@ -23,6 +23,10 @@ Tools provided:
   image            - image understanding via vision model
   tts              - text-to-speech via MiniMax TTS
   session_status   - current session info
+  audit_log_tail   - tail the most recent audit log entries
+  audit_log_search - search audit log entries by field/keyword
+  workflow_chain   - run a sequential chain of agent steps
+  workflow_parallel - run agents in parallel (fan-out/fan-in)
 """
 import asyncio
 import json
@@ -891,6 +895,17 @@ def _jobs_api(path: str, method: str = "GET", **kwargs) -> dict:
         return resp.json()
 
 
+def _fmt_http_err(e: Exception, resource_id: str = "") -> str:
+    """Convert an httpx HTTP error to a friendly tool result string."""
+    status = getattr(getattr(e, "response", None), "status_code", None)
+    if status == 404:
+        suffix = f" '{resource_id}'" if resource_id else ""
+        return f"[NOT FOUND]{suffix} — does not exist (may have been deleted)."
+    if status == 409:
+        return f"[CONFLICT] {e}"
+    return f"[ERROR] {e}"
+
+
 def _get_caller_agent() -> Optional[str]:
     """Read X-Agent-Name from the MCP HTTP request headers."""
     return get_http_headers().get("x-agent-name") or None
@@ -939,7 +954,7 @@ def jobs_get(job: str) -> str:
     try:
         return json.dumps(_jobs_api(f"/{job}"), indent=2, default=str)
     except Exception as e:
-        return f"[ERROR] {e}"
+        return _fmt_http_err(e, job)
 
 
 @mcp.tool()
@@ -1065,7 +1080,7 @@ def jobs_update(
         j = data.get("job", {})
         return f"[OK] Updated '{j.get('name')}' next_run={j.get('next_run')}"
     except Exception as e:
-        return f"[ERROR] {e}"
+        return _fmt_http_err(e, job)
 
 
 @mcp.tool()
@@ -1080,7 +1095,7 @@ def jobs_delete(job: str) -> str:
         data = _jobs_api(f"/{job}", method="DELETE")
         return f"[OK] Deleted job '{data.get('deleted')}'"
     except Exception as e:
-        return f"[ERROR] {e}"
+        return _fmt_http_err(e, job)
 
 
 @mcp.tool()
@@ -1095,7 +1110,7 @@ def jobs_enable(job: str) -> str:
         data = _jobs_api(f"/{job}/enable", method="POST")
         return f"[OK] Enabled '{data.get('job')}' next_run={data.get('next_run')}"
     except Exception as e:
-        return f"[ERROR] {e}"
+        return _fmt_http_err(e, job)
 
 
 @mcp.tool()
@@ -1110,7 +1125,7 @@ def jobs_disable(job: str) -> str:
         data = _jobs_api(f"/{job}/disable", method="POST")
         return f"[OK] Disabled '{data.get('job')}'"
     except Exception as e:
-        return f"[ERROR] {e}"
+        return _fmt_http_err(e, job)
 
 
 @mcp.tool()
@@ -1125,7 +1140,7 @@ def jobs_run_now(job: str) -> str:
         data = _jobs_api(f"/{job}/run", method="POST")
         return f"[OK] Triggered '{data.get('job')}'"
     except Exception as e:
-        return f"[ERROR] {e}"
+        return _fmt_http_err(e, job)
 
 
 @mcp.tool()
@@ -1154,7 +1169,7 @@ def jobs_history(job: str, limit: int = 10) -> str:
                 lines.append(f"      output: {r['stdout'].strip()[:120]}")
         return "\n".join(lines)
     except Exception as e:
-        return f"[ERROR] {e}"
+        return _fmt_http_err(e, job)
 
 
 @mcp.tool()
@@ -1249,7 +1264,7 @@ def todo_get(todo_id: str) -> str:
         data = _todos_api(f"/{todo_id}")
         return json.dumps(data.get("todo", data), indent=2, default=str)
     except Exception as e:
-        return f"[ERROR] {e}"
+        return _fmt_http_err(e, todo_id)
 
 
 @mcp.tool()
@@ -1337,7 +1352,7 @@ def todo_update(
         t = data.get("todo", {})
         return f"[OK] Updated [{t.get('id')}] {t.get('title')}"
     except Exception as e:
-        return f"[ERROR] {e}"
+        return _fmt_http_err(e, todo_id)
 
 
 @mcp.tool()
@@ -1359,7 +1374,7 @@ def todo_mark(todo_id: str, status: str, notes: str = "") -> str:
         t = data.get("todo", {})
         return f"[OK] Marked [{t.get('id')}] {t.get('title')} → {t.get('status')}"
     except Exception as e:
-        return f"[ERROR] {e}"
+        return _fmt_http_err(e, todo_id)
 
 
 @mcp.tool()
@@ -1374,7 +1389,7 @@ def todo_delete(todo_id: str) -> str:
         data = _todos_api(f"/{todo_id}", method="DELETE")
         return f"[OK] Deleted todo '{data.get('deleted')}'"
     except Exception as e:
-        return f"[ERROR] {e}"
+        return _fmt_http_err(e, todo_id)
 
 
 @mcp.tool()
@@ -1704,6 +1719,205 @@ def config_schema(section: str = "") -> str:
         return f"[ERROR] Section {section!r} not found. Available: {available}"
     except Exception as e:
         return f"[ERROR] config_schema failed: {e}"
+
+
+# ---------------------------------------------------------------------------
+# Audit log
+# ---------------------------------------------------------------------------
+
+def _audit_log_path() -> Optional[Path]:
+    """Return the audit log path from config or default."""
+    cfg_path = _find_config_path()
+    if cfg_path is not None:
+        try:
+            import yaml as _yaml
+            raw = _yaml.safe_load(cfg_path.read_text()) or {}
+            log_file = (
+                raw.get("security", {})
+                   .get("audit", {})
+                   .get("log_file", "~/.pyclaw/logs/audit.log")
+            )
+            return Path(os.path.expanduser(log_file))
+        except Exception:
+            pass
+    return Path(os.path.expanduser("~/.pyclaw/logs/audit.log"))
+
+
+@mcp.tool()
+def audit_log_tail(n: int = 50) -> str:
+    """
+    Return the last N entries from the audit log (newest last).
+
+    Args:
+        n: Number of entries to return (default 50, max 500).
+    """
+    n = min(max(1, n), 500)
+    log_path = _audit_log_path()
+    if log_path is None or not log_path.exists():
+        return "[INFO] Audit log not found or not yet created."
+    try:
+        lines = log_path.read_text(encoding="utf-8").splitlines()
+        tail = [l for l in lines if l.strip()][-n:]
+        entries = []
+        for line in tail:
+            try:
+                e = json.loads(line)
+                entries.append(e)
+            except json.JSONDecodeError:
+                entries.append({"raw": line})
+        return json.dumps(entries, indent=2)
+    except Exception as exc:
+        return f"[ERROR] audit_log_tail failed: {exc}"
+
+
+@mcp.tool()
+def audit_log_search(
+    keyword: str = "",
+    event_type: str = "",
+    agent_id: str = "",
+    session_id: str = "",
+    status: str = "",
+    limit: int = 100,
+) -> str:
+    """
+    Search audit log entries. All filters are ANDed together; omit any to skip that filter.
+
+    Args:
+        keyword:    Case-insensitive substring match against the raw JSON line.
+        event_type: Filter by event_type field (e.g. "message_received", "tool_execution").
+        agent_id:   Filter by agent_id field.
+        session_id: Filter by session_id field.
+        status:     Filter by status field (e.g. "success", "denied", "error").
+        limit:      Maximum number of matching entries to return (default 100, max 500).
+    """
+    limit = min(max(1, limit), 500)
+    log_path = _audit_log_path()
+    if log_path is None or not log_path.exists():
+        return "[INFO] Audit log not found or not yet created."
+    try:
+        results = []
+        kw_lower = keyword.lower() if keyword else None
+        with open(log_path, encoding="utf-8") as fh:
+            for line in fh:
+                line = line.strip()
+                if not line:
+                    continue
+                if kw_lower and kw_lower not in line.lower():
+                    continue
+                try:
+                    e = json.loads(line)
+                except json.JSONDecodeError:
+                    continue
+                if event_type and e.get("event_type") != event_type:
+                    continue
+                if agent_id and e.get("agent_id") != agent_id:
+                    continue
+                if session_id and e.get("session_id") != session_id:
+                    continue
+                if status and e.get("status") != status:
+                    continue
+                results.append(e)
+                if len(results) >= limit:
+                    break
+        return json.dumps({"total": len(results), "entries": results}, indent=2)
+    except Exception as exc:
+        return f"[ERROR] audit_log_search failed: {exc}"
+
+
+# ---------------------------------------------------------------------------
+# Workflows
+# ---------------------------------------------------------------------------
+
+@mcp.tool()
+async def workflow_chain(
+    steps: str,
+    input: str,
+    model: str = "sonnet",
+) -> str:
+    """
+    Run a sequential chain workflow where each step's output feeds the next.
+
+    Args:
+        steps:  JSON array of step objects. Each step must have:
+                  "name"        - step identifier
+                  "instruction" - system prompt for the agent at this step
+                Optional per step:
+                  "agent_name"  - reuse an existing named agent (default: step name)
+                  "output_key"  - context key to store result under (default: "output")
+                Example:
+                  [{"name":"draft","instruction":"Write a blog post draft about: "},
+                   {"name":"edit","instruction":"Improve clarity and fix grammar in: "}]
+        input:  Initial input passed to the first step.
+        model:  Model string for all steps (default "sonnet").
+    """
+    try:
+        steps_list = json.loads(steps)
+        if not isinstance(steps_list, list) or not steps_list:
+            return "[ERROR] steps must be a non-empty JSON array."
+    except json.JSONDecodeError as exc:
+        return f"[ERROR] Could not parse steps JSON: {exc}"
+
+    try:
+        from pyclaw.workflows.chain import run_chain
+        result = await run_chain(
+            steps=steps_list,
+            initial_input=input,
+            model=model,
+        )
+        return str(result)
+    except Exception as exc:
+        return f"[ERROR] workflow_chain failed: {exc}"
+
+
+@mcp.tool()
+async def workflow_parallel(
+    agents: str,
+    input: str,
+    model: str = "sonnet",
+    fan_in_instruction: str = "",
+    max_concurrent: int = 5,
+) -> str:
+    """
+    Run agents in parallel over the same input, then optionally aggregate results.
+
+    Args:
+        agents:             JSON array of agent objects. Each must have:
+                              "name"        - agent identifier
+                              "instruction" - system prompt for this agent
+                            Optional per agent:
+                              "agent_name"  - reuse an existing named agent
+                            Example:
+                              [{"name":"pros","instruction":"List the pros of: "},
+                               {"name":"cons","instruction":"List the cons of: "}]
+        input:              Input passed to every parallel agent.
+        model:              Model string for all agents (default "sonnet").
+        fan_in_instruction: If non-empty, a final aggregation agent runs with this
+                            instruction over all parallel results.  Leave empty to
+                            return raw results as a JSON object.
+        max_concurrent:     Maximum number of agents to run simultaneously (default 5).
+    """
+    try:
+        agents_list = json.loads(agents)
+        if not isinstance(agents_list, list) or not agents_list:
+            return "[ERROR] agents must be a non-empty JSON array."
+    except json.JSONDecodeError as exc:
+        return f"[ERROR] Could not parse agents JSON: {exc}"
+
+    try:
+        from pyclaw.workflows.parallel import run_parallel
+        fan_in = {"instruction": fan_in_instruction} if fan_in_instruction else None
+        result = await run_parallel(
+            agents=agents_list,
+            input_data=input,
+            fan_in=fan_in,
+            model=model,
+            max_concurrent=max_concurrent,
+        )
+        if isinstance(result, (list, dict)):
+            return json.dumps(result, indent=2, default=str)
+        return str(result)
+    except Exception as exc:
+        return f"[ERROR] workflow_parallel failed: {exc}"
 
 
 # ---------------------------------------------------------------------------

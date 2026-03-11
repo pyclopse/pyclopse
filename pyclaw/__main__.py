@@ -140,8 +140,6 @@ async def run_gateway(
     """Run the gateway + HTTP API server + pyclaw MCP server."""
     from .config import ConfigLoader
     from .core.gateway import Gateway
-    from .api.app import create_app
-    import uvicorn
 
     loader = ConfigLoader(config_path)
     config = loader.load()
@@ -151,10 +149,17 @@ async def run_gateway(
     mcp_port = config.gateway.mcp_port
 
     print(f"pyclaw v{__version__}")
-    print(f"Starting gateway + HTTP API on {gw_host}:{gw_port}")
     print(f"Starting pyclaw MCP server on {gw_host}:{mcp_port}")
+    print(f"Starting gateway + HTTP API on {gw_host}:{gw_port}")
 
+    # MCP and API servers must be up BEFORE gateway.initialize() so that
+    # FastAgent can connect to the MCP server during agent startup.
     gateway = Gateway(config_path)
+    from .tools.server import mcp as pyclaw_mcp
+    _register_skill_providers(pyclaw_mcp, config)
+    await gateway.start_mcp_server(host=gw_host, port=mcp_port)
+    await gateway.start_api_server(host=gw_host, port=gw_port)
+
     await gateway.initialize()
 
     # Start pulse runner
@@ -166,36 +171,14 @@ async def run_gateway(
     if gateway._telegram_bot:
         gateway._telegram_polling_task = asyncio.create_task(gateway._telegram_poll())
 
-    # Build FastAPI app wired to this gateway instance
-    api_app = create_app(gateway)
-
     print(f"HTTP API docs: http://{gw_host}:{gw_port}/docs")
     print(f"MCP endpoint:  http://{gw_host}:{mcp_port}/mcp")
     print("Press Ctrl+C to stop...")
 
-    # Gateway API server
-    uv_config = uvicorn.Config(
-        api_app,
-        host=gw_host,
-        port=gw_port,
-        log_level="warning",
-    )
-    api_server = uvicorn.Server(uv_config)
-
-    # pyclaw MCP HTTP server (standalone fastmcp, streamable-http transport)
-    from .tools.server import mcp as pyclaw_mcp
-    _register_skill_providers(pyclaw_mcp, config)
-    mcp_app = pyclaw_mcp.http_app(path="/mcp", stateless_http=True)
-    mcp_uv_config = uvicorn.Config(
-        mcp_app,
-        host=gw_host,
-        port=mcp_port,
-        log_level="warning",
-    )
-    mcp_server = uvicorn.Server(mcp_uv_config)
-
     try:
-        await asyncio.gather(api_server.serve(), mcp_server.serve())
+        # Keep running until interrupted; both servers run as background tasks
+        while True:
+            await asyncio.sleep(3600)
     except (KeyboardInterrupt, asyncio.CancelledError):
         pass
     finally:
@@ -212,11 +195,22 @@ async def run_gateway_with_tui(
     loader = ConfigLoader(config_path)
     config = loader.load()
 
+    gw_host = config.gateway.host
+    gw_port = port or config.gateway.port
+    mcp_port = config.gateway.mcp_port
+
     print(f"pyclaw v{__version__}")
     print("Starting gateway + TUI...")
 
-    # Create gateway (don't start API server, just initialize core)
+    # MCP and API servers must be up BEFORE gateway.initialize() so that
+    # FastAgent can connect to the MCP server during agent startup.
     gateway = Gateway(config_path)
+    from .tools.server import mcp as pyclaw_mcp
+    _register_skill_providers(pyclaw_mcp, config)
+    await gateway.start_mcp_server(host=gw_host, port=mcp_port)
+    await gateway.start_api_server(host=gw_host, port=gw_port)
+    print(f"HTTP API: http://{gw_host}:{gw_port}/docs  |  MCP: http://{gw_host}:{mcp_port}/mcp")
+
     await gateway.initialize()
 
     # Start pulse runner without entering the blocking run-loop;
