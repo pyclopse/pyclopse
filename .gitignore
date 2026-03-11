@@ -49,3 +49,4 @@ uv.lock
 # OS
 .DS_Store
 Thumbs.db
+pyclaw/_version.py
