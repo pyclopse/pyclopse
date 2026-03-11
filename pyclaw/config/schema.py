@@ -173,9 +173,20 @@ class FastAgentProviderConfig(ProviderConfig):
     url: str = "http://localhost:8000"
 
 
+class ModelConfig(BaseModel):
+    """Per-model configuration within a provider."""
+    priority: int = 1
+    enabled: bool = True
+    concurrency: int = 3
+
+
 class MiniMaxProviderConfig(ProviderConfig):
     """MiniMax provider configuration."""
-    base_url: str = "https://api.minimax.chat/v1"
+    api_url: Optional[str] = Field(
+        default=None,
+        validation_alias=AliasChoices("api_url", "apiUrl", "base_url", "baseUrl"),
+    )
+    models: Dict[str, ModelConfig] = Field(default_factory=dict)
 
 
 class ProvidersConfig(BaseModel):
@@ -530,21 +541,25 @@ class SessionsConfig(BaseModel):
         default=60,
         validation_alias=AliasChoices("reaper_interval_minutes", "reaperIntervalMinutes"),
     )
+    # When True, a session whose last activity was before today's midnight
+    # (local time) is automatically archived and a fresh session is started.
+    daily_rollover: bool = Field(
+        default=True,
+        validation_alias=AliasChoices("daily_rollover", "dailyRollover"),
+    )
 
 
 class ConcurrencyConfig(BaseModel):
-    """Per-model concurrency limits.
+    """Global concurrency fallback.
+
+    Per-model limits are defined under each provider's ``models:`` block.
+    This ``default`` applies to any model not explicitly listed there.
 
     Example:
         concurrency:
-          default: 3
-          models:
-            MiniMax-M2.5: 3
-            gpt-4: 5
-            passthrough: 100
+          default: 5   # optional — omit to use the built-in default of 3
     """
     default: int = 3
-    models: Dict[str, int] = Field(default_factory=dict)
 
 
 class GatewayConfig(BaseModel):

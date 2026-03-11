@@ -111,25 +111,27 @@ class SessionManager:
     def __init__(
         self,
         max_sessions: int = 1000,
-        session_timeout: int = 3600,
+        session_timeout: int = 3600,  # kept for backwards-compat; unused
         persist_dir: Optional[str] = None,  # kept for backwards-compat; ignored
         agents_dir: Optional[str] = None,
         ttl_hours: int = 24,
         reaper_interval_minutes: int = 60,
         on_expire: Optional[Any] = None,
+        daily_rollover: bool = True,
+        on_rollover: Optional[Any] = None,  # async callable(session_id) — evict runner
     ):
         self.sessions: Dict[str, Session] = {}
         self.user_sessions: Dict[str, List[str]] = {}
         self.channel_sessions: Dict[str, List[str]] = {}
         self.max_sessions = max_sessions
-        self.session_timeout = session_timeout
         self.ttl_hours = ttl_hours
         self.reaper_interval_minutes = reaper_interval_minutes
         self._on_expire = on_expire
+        self.daily_rollover = daily_rollover
+        self._on_rollover = on_rollover  # called with session_id after archiving
         # Resolve agents_dir: explicit arg > default
         _raw = agents_dir or _DEFAULT_AGENTS_DIR
         self._agents_dir: Path = Path(_raw).expanduser()
-        self._cleanup_task: Optional[asyncio.Task] = None
         self._reaper_task: Optional[asyncio.Task] = None
         self._stop_event = asyncio.Event()
         self._logger = logging.getLogger("pyclaw.session")
@@ -138,7 +140,6 @@ class SessionManager:
         """Start the session manager."""
         self._stop_event.clear()
         self._load_sessions_from_disk()
-        self._cleanup_task = asyncio.create_task(self._cleanup_loop())
         self._reaper_task = asyncio.create_task(self._reaper_loop())
         self._logger.info(
             f"Session manager started (ttl={self.ttl_hours}h, "
@@ -149,22 +150,13 @@ class SessionManager:
     async def stop(self) -> None:
         """Stop the session manager."""
         self._stop_event.set()
-        for task in (self._cleanup_task, self._reaper_task):
-            if task and not task.done():
-                task.cancel()
-                try:
-                    await task
-                except asyncio.CancelledError:
-                    pass
-        self._logger.info("Session manager stopped")
-
-    async def _cleanup_loop(self) -> None:
-        while not self._stop_event.is_set():
+        if self._reaper_task and not self._reaper_task.done():
+            self._reaper_task.cancel()
             try:
-                await self._cleanup_inactive()
-            except Exception as e:
-                self._logger.error(f"Cleanup error: {e}")
-            await asyncio.sleep(60)
+                await self._reaper_task
+            except asyncio.CancelledError:
+                pass
+        self._logger.info("Session manager stopped")
 
     async def _reaper_loop(self) -> None:
         interval = self.reaper_interval_minutes * 60
@@ -200,20 +192,6 @@ class SessionManager:
                 f"(files retained on disk)"
             )
 
-    async def _cleanup_inactive(self) -> None:
-        now = datetime.utcnow()
-        to_remove = [
-            s.id
-            for s in self.sessions.values()
-            if s.is_active
-            and (now - s.updated_at).total_seconds() > self.session_timeout
-        ]
-        for session_id in to_remove:
-            s = self.sessions.get(session_id)
-            if s:
-                s.is_active = False
-            self._remove_from_index(session_id)
-
     # ------------------------------------------------------------------
     # Session directory helpers
     # ------------------------------------------------------------------
@@ -221,6 +199,42 @@ class SessionManager:
     def _session_dir(self, agent_id: str, session_id: str) -> Path:
         """Return the directory for a session: agents_dir/{agent_id}/sessions/{session_id}/"""
         return self._agents_dir / agent_id / "sessions" / session_id
+
+    def _is_before_today(self, session: "Session") -> bool:
+        """Return True if the session's last activity was before today's local midnight."""
+        today_midnight = datetime.combine(datetime.now().date(), datetime.min.time())
+        return session.updated_at < today_midnight
+
+    async def _archive_and_rollover(self, session: "Session") -> "Session":
+        """Archive a stale session's history files and return a fresh replacement."""
+        import shutil as _shutil
+
+        if session.history_dir and session.history_dir.exists():
+            archive_dir = session.history_dir / "archived"
+            archive_dir.mkdir(parents=True, exist_ok=True)
+            stamp = datetime.utcnow().strftime("%Y%m%d_%H%M%S")
+            for hist_file in ["history.json", "history_previous.json"]:
+                p = session.history_dir / hist_file
+                if p.exists():
+                    p.rename(archive_dir / f"{hist_file}.{stamp}")
+
+        # Evict the old runner so the next turn starts clean
+        if self._on_rollover:
+            try:
+                await self._on_rollover(session.id)
+            except Exception as exc:
+                self._logger.debug(f"Rollover evict callback failed for {session.id}: {exc}")
+
+        # Remove old session from index (keeps disk files)
+        self._remove_from_index(session.id)
+
+        # Create and return a fresh session
+        new_session = await self.create_session(session.agent_id, session.channel, session.user_id)
+        self._logger.info(
+            f"Daily rollover: archived {session.id} → new session {new_session.id} "
+            f"for {session.user_id} on {session.channel}"
+        )
+        return new_session
 
     # ------------------------------------------------------------------
     # Public API
@@ -279,19 +293,82 @@ class SessionManager:
         user_id: str,
         create_if_not_exists: bool = True,
     ) -> Optional[Session]:
-        """Get existing active session or create a new one."""
+        """Get existing session or create a new one.
+
+        Search order:
+        1. In-memory index (fast path).
+        2. Disk scan — finds sessions evicted from memory by the reaper so
+           that history is always resumed regardless of how long the gap was.
+        3. Create a brand-new session (only when nothing exists on disk).
+        """
+        # 1. In-memory index
         if channel in self.channel_sessions:
             for session_id in reversed(self.channel_sessions[channel]):
                 session = self.sessions.get(session_id)
                 if (session and session.user_id == user_id
                         and session.agent_id == agent_id and session.is_active):
+                    if self.daily_rollover and self._is_before_today(session):
+                        return await self._archive_and_rollover(session)
                     session.updated_at = datetime.utcnow()
                     return session
+
+        # 2. Disk fallback — resume the most recent session even after reaper eviction
+        session = self._find_most_recent_session_on_disk(agent_id, channel, user_id)
+        if session is not None:
+            if self.daily_rollover and self._is_before_today(session):
+                # Stale session from a previous day — archive and start fresh
+                return await self._archive_and_rollover(session)
+            # Re-register in the index so future lookups hit the fast path
+            session.is_active = True
+            session.updated_at = datetime.utcnow()
+            self.sessions[session.id] = session
+            if session.user_id not in self.user_sessions:
+                self.user_sessions[session.user_id] = []
+            if session.id not in self.user_sessions[session.user_id]:
+                self.user_sessions[session.user_id].append(session.id)
+            if channel not in self.channel_sessions:
+                self.channel_sessions[channel] = []
+            if session.id not in self.channel_sessions[channel]:
+                self.channel_sessions[channel].append(session.id)
+            self._logger.info(
+                f"Resumed session {session.id} from disk for {user_id} on {channel}"
+            )
+            return session
 
         if create_if_not_exists:
             return await self.create_session(agent_id, channel, user_id)
 
         return None
+
+    def _find_most_recent_session_on_disk(
+        self, agent_id: str, channel: str, user_id: str
+    ) -> Optional[Session]:
+        """Scan disk for the most recent session matching agent/channel/user."""
+        sessions_root = self._agents_dir / agent_id / "sessions"
+        if not sessions_root.exists():
+            return None
+        best: Optional[Session] = None
+        for sess_dir in sessions_root.iterdir():
+            if not sess_dir.is_dir():
+                continue
+            # Skip sessions already in the index
+            if sess_dir.name in self.sessions:
+                continue
+            meta_file = sess_dir / "session.json"
+            if not meta_file.exists():
+                continue
+            try:
+                data = json.loads(meta_file.read_text())
+                if (data.get("channel") != channel
+                        or str(data.get("user_id")) != str(user_id)
+                        or data.get("agent_id") != agent_id):
+                    continue
+                session = Session.from_dict(data, history_dir=sess_dir)
+                if best is None or session.updated_at > best.updated_at:
+                    best = session
+            except Exception as e:
+                self._logger.debug(f"Could not read session {meta_file}: {e}")
+        return best
 
     async def update_session(self, session_id: str, **updates) -> Optional[Session]:
         """Update session fields."""

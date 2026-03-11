@@ -117,11 +117,18 @@ class Gateway:
                     "user_id": session.user_id,
                 })
 
+            async def _on_session_rollover(session_id: str) -> None:
+                if self._agent_manager:
+                    for agent in self._agent_manager.agents.values():
+                        await agent.evict_session_runner(session_id)
+
             self._session_manager = SessionManager(
                 persist_dir=sc.persist_dir if sc else "~/.pyclaw/sessions",
                 ttl_hours=sc.ttl_hours if sc else 24,
                 reaper_interval_minutes=sc.reaper_interval_minutes if sc else 60,
                 on_expire=_on_session_expire,
+                daily_rollover=sc.daily_rollover if sc else True,
+                on_rollover=_on_session_rollover,
             )
         return self._session_manager
 
@@ -387,9 +394,16 @@ class Gateway:
         """Initialize per-model concurrency manager from config."""
         from pyclaw.core.concurrency import init_manager
         cc = self.config.concurrency
-        init_manager(model_limits=cc.models, default=cc.default)
+        # Build model limits from provider model configs.
+        model_limits: Dict[str, int] = {}
+        mm_cfg = self.config.providers.minimax
+        if mm_cfg:
+            for model_name, model_cfg in mm_cfg.models.items():
+                if model_cfg.enabled:
+                    model_limits[model_name] = model_cfg.concurrency
+        init_manager(model_limits=model_limits, default=cc.default)
         self._logger.info(
-            f"Concurrency manager: default={cc.default}, models={cc.models or '{}'}"
+            f"Concurrency manager: default={cc.default}, models={model_limits or '{}'}"
         )
 
     async def _init_security(self) -> None:
@@ -2067,15 +2081,19 @@ class Gateway:
             _logging.getLogger("pyclaw").setLevel(level)
             changed["gateway.log_level"] = {"old": old_log, "new": new_log}
 
-        # Concurrency limits
+        # Concurrency limits — rebuild from provider model configs
         old_cc = old_config.concurrency
         new_cc = new_cfg.concurrency
-        if old_cc.default != new_cc.default or old_cc.models != new_cc.models:
+        old_mm = old_config.providers.minimax
+        new_mm = new_cfg.providers.minimax
+        old_limits = {n: m.concurrency for n, m in old_mm.models.items() if m.enabled} if old_mm else {}
+        new_limits = {n: m.concurrency for n, m in new_mm.models.items() if m.enabled} if new_mm else {}
+        if old_cc.default != new_cc.default or old_limits != new_limits:
             from pyclaw.core.concurrency import init_manager
-            init_manager(model_limits=new_cc.models, default=new_cc.default)
+            init_manager(model_limits=new_limits, default=new_cc.default)
             changed["concurrency"] = {
-                "old": {"default": old_cc.default, "models": old_cc.models},
-                "new": {"default": new_cc.default, "models": new_cc.models},
+                "old": {"default": old_cc.default, "models": old_limits},
+                "new": {"default": new_cc.default, "models": new_limits},
             }
 
         # Agent config changes — update runners in-place

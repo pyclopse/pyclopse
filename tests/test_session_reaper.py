@@ -167,3 +167,63 @@ class TestReaperTaskLifecycle:
 
         await _run_once()
         assert session.id not in mgr.sessions
+
+
+# ---------------------------------------------------------------------------
+# Daily rollover
+# ---------------------------------------------------------------------------
+
+class TestDailyRollover:
+
+    async def test_stale_session_triggers_rollover(self, tmp_path):
+        """A session last updated before today's midnight gets archived and replaced."""
+        evicted = []
+
+        async def _on_rollover(session_id):
+            evicted.append(session_id)
+
+        mgr = SessionManager(
+            agents_dir=str(tmp_path / "agents"),
+            daily_rollover=True,
+            on_rollover=_on_rollover,
+        )
+        mgr._stop_event.clear()
+
+        old = await mgr.create_session("agent1", "telegram", "user1")
+        # Back-date to yesterday so it looks stale
+        old.updated_at = datetime.now().replace(hour=0, minute=0, second=0, microsecond=0) - timedelta(seconds=1)
+
+        new = await mgr.get_or_create_session("agent1", "telegram", "user1")
+
+        assert new.id != old.id, "should have created a new session"
+        assert evicted == [old.id], "should have called the rollover callback with the old session id"
+        assert old.id not in mgr.sessions, "old session should be evicted from index"
+        # History archive directory should exist (session dir was created by create_session)
+        assert (old.history_dir / "archived").exists()
+
+    async def test_same_day_session_not_rolled_over(self, tmp_path):
+        """A session updated today is reused as-is."""
+        mgr = SessionManager(
+            agents_dir=str(tmp_path / "agents"),
+            daily_rollover=True,
+        )
+        mgr._stop_event.clear()
+
+        original = await mgr.create_session("agent1", "telegram", "user1")
+        # updated_at is now (today) — should not trigger rollover
+        resumed = await mgr.get_or_create_session("agent1", "telegram", "user1")
+        assert resumed.id == original.id
+
+    async def test_rollover_disabled(self, tmp_path):
+        """When daily_rollover=False, stale sessions are resumed normally."""
+        mgr = SessionManager(
+            agents_dir=str(tmp_path / "agents"),
+            daily_rollover=False,
+        )
+        mgr._stop_event.clear()
+
+        old = await mgr.create_session("agent1", "telegram", "user1")
+        old.updated_at = datetime.now().replace(hour=0, minute=0, second=0, microsecond=0) - timedelta(seconds=1)
+
+        resumed = await mgr.get_or_create_session("agent1", "telegram", "user1")
+        assert resumed.id == old.id
