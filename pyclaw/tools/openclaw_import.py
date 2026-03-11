@@ -76,8 +76,11 @@ def _openclaw_session_date(records: List[Dict[str, Any]]) -> Optional[datetime]:
     """Infer the session date from JSONL records."""
     for rec in records:
         if rec.get("type") == "session":
-            dt = _parse_openclaw_dt(rec.get("updatedAt")) or _parse_openclaw_dt(
-                rec.get("createdAt")
+            # OpenClaw v3 uses "timestamp"; older versions used "updatedAt"/"createdAt"
+            dt = (
+                _parse_openclaw_dt(rec.get("timestamp"))
+                or _parse_openclaw_dt(rec.get("updatedAt"))
+                or _parse_openclaw_dt(rec.get("createdAt"))
             )
             if dt:
                 return dt
@@ -90,6 +93,24 @@ def _openclaw_session_date(records: List[Dict[str, Any]]) -> Optional[datetime]:
     return None
 
 
+def _extract_text_from_content(content: Any) -> str:
+    """Extract plain text from an OpenClaw content value (string or list of blocks)."""
+    if isinstance(content, str):
+        return content
+    if isinstance(content, list):
+        parts = []
+        for block in content:
+            if isinstance(block, dict):
+                if block.get("type") == "text":
+                    parts.append(block.get("text", ""))
+                elif block.get("type") == "tool_result":
+                    # Flatten tool results to text
+                    inner = block.get("content", "")
+                    parts.append(_extract_text_from_content(inner))
+        return "\n".join(p for p in parts if p)
+    return str(content) if content else ""
+
+
 def _convert_records_to_fa_json(records: List[Dict[str, Any]]) -> str:
     """Convert OpenClaw JSONL message records to FA-native JSON string."""
     from mcp.types import TextContent
@@ -100,16 +121,19 @@ def _convert_records_to_fa_json(records: List[Dict[str, Any]]) -> str:
     for rec in records:
         if rec.get("type") != "message":
             continue
-        role = rec.get("role", "").lower()
+        # OpenClaw v3: content is nested under rec["message"]
+        msg = rec.get("message") or rec
+        role = str(msg.get("role", "")).lower()
         if role not in ("user", "assistant"):
             continue
-        content = rec.get("content") or ""
-        if not content:
+        raw_content = msg.get("content") or ""
+        text = _extract_text_from_content(raw_content)
+        if not text.strip():
             continue
         fa_messages.append(
             PromptMessageExtended(
                 role=role,
-                content=[TextContent(type="text", text=str(content))],
+                content=[TextContent(type="text", text=text)],
             )
         )
     if not fa_messages:
@@ -128,9 +152,11 @@ def _write_session_metadata(
     now_iso = datetime.utcnow().isoformat()
     created_iso = created_at.isoformat() if created_at else now_iso
 
-    # Count messages
+    # Count messages (OpenClaw v3 nests role under rec["message"]["role"])
     msg_count = sum(
-        1 for r in records if r.get("type") == "message" and r.get("role") in ("user", "assistant")
+        1 for r in records
+        if r.get("type") == "message"
+        and (r.get("message") or r).get("role") in ("user", "assistant")
     )
 
     meta = {
@@ -168,7 +194,7 @@ def import_agent_sessions(
     sessions_dst_root = pyclaw_dir / "agents" / agent_name / "sessions"
     imported = 0
 
-    for jsonl_file in sorted(sessions_src.glob("*.jsonl")):
+    for jsonl_file in sorted(f for f in sessions_src.glob("*.jsonl") if ".deleted" not in f.name):
         try:
             records = _load_jsonl(jsonl_file)
             if not records:
