@@ -5,6 +5,7 @@ import logging
 import os
 import uuid
 from datetime import datetime, timedelta
+from pyclaw.utils.time import now
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional, Set
 
@@ -81,11 +82,11 @@ class JobScheduler:
                 pass
 
     async def _tick(self) -> None:
-        now = datetime.utcnow()
+        _now = now()
         for job in list(self.jobs.values()):
             if not job.enabled or job.id in self._running_jobs:
                 continue
-            if job.next_run and job.next_run <= now:
+            if job.next_run and job.next_run <= _now:
                 asyncio.create_task(self._run_job(job))
 
     # ------------------------------------------------------------------
@@ -100,20 +101,20 @@ class JobScheduler:
             id=str(uuid.uuid4()),
             job_id=job.id,
             job_name=job.name,
-            started_at=datetime.utcnow(),
+            started_at=now(),
             status=JobStatus.RUNNING,
         )
         job.status = JobStatus.RUNNING
         job.last_run = run.started_at
         job.run_count += 1
-        job.updated_at = datetime.utcnow()
+        job.updated_at = now()
         save_jobs(self.jobs, self._persist_path)
 
         try:
             self._logger.info(f"Running job: {job.name} [{job.run.kind}]")
             result = await self._execute(job)
 
-            run.ended_at = datetime.utcnow()
+            run.ended_at = now()
             run.stdout = result.get("stdout", "")
             run.stderr = result.get("stderr", "")
             run.exit_code = result.get("exit_code")
@@ -143,7 +144,7 @@ class JobScheduler:
                 job.consecutive_errors += 1
 
             self._recalc_next_run(job)
-            job.updated_at = datetime.utcnow()
+            job.updated_at = now()
             save_jobs(self.jobs, self._persist_path)
             append_run_log(run, self._runs_dir)
 
@@ -154,14 +155,14 @@ class JobScheduler:
 
         except Exception as e:
             self._logger.error(f"Job {job.name} exception: {e}")
-            run.ended_at = datetime.utcnow()
+            run.ended_at = now()
             run.error = str(e)
             run.status = JobStatus.FAILED
             job.status = JobStatus.FAILED
             job.failure_count += 1
             job.consecutive_errors += 1
             self._recalc_next_run(job)
-            job.updated_at = datetime.utcnow()
+            job.updated_at = now()
             save_jobs(self.jobs, self._persist_path)
             append_run_log(run, self._runs_dir)
 
@@ -227,14 +228,14 @@ class JobScheduler:
         if not job.enabled:
             job.next_run = None
             return
-        now = datetime.utcnow()
+        _now = now()
         s = job.schedule
         if isinstance(s, CronSchedule):
-            job.next_run = self._cron_next(s.expr, now, s.timezone, s.stagger_seconds)
+            job.next_run = self._cron_next(s.expr, _now, s.timezone, s.stagger_seconds)
         elif isinstance(s, IntervalSchedule):
-            job.next_run = now + timedelta(seconds=s.seconds)
+            job.next_run = _now + timedelta(seconds=s.seconds)
         elif isinstance(s, AtSchedule):
-            job.next_run = s.at if s.at > now else None
+            job.next_run = s.at if s.at > _now else None
         else:
             job.next_run = None
 
@@ -297,7 +298,7 @@ class JobScheduler:
     async def update_job(self, job: Job) -> None:
         self.jobs[job.id] = job
         self._recalc_next_run(job)
-        job.updated_at = datetime.utcnow()
+        job.updated_at = now()
         save_jobs(self.jobs, self._persist_path)
 
     async def remove_job(self, job_id: str) -> Optional[Job]:
@@ -314,7 +315,7 @@ class JobScheduler:
         job.enabled = True
         job.status = JobStatus.PENDING
         self._recalc_next_run(job)
-        job.updated_at = datetime.utcnow()
+        job.updated_at = now()
         save_jobs(self.jobs, self._persist_path)
         return True
 
@@ -325,7 +326,7 @@ class JobScheduler:
         job.enabled = False
         job.next_run = None
         job.status = JobStatus.DISABLED
-        job.updated_at = datetime.utcnow()
+        job.updated_at = now()
         save_jobs(self.jobs, self._persist_path)
         return True
 

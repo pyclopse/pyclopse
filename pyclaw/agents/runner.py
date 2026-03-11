@@ -131,6 +131,7 @@ class AgentRunner:
         tools_config: Optional[Dict[str, Any]] = None,
         show_thinking: bool = False,
         api_key: Optional[str] = None,
+        base_url: Optional[str] = None,
         owner_name: Optional[str] = None,
         request_params: Optional[Dict[str, Any]] = None,
         history_path: Optional[Path] = None,
@@ -151,8 +152,9 @@ class AgentRunner:
         self.tools_config = tools_config or {}
         # When False, <thinking>…</thinking> blocks are stripped before returning
         self.show_thinking = show_thinking
-        # Optional API key (e.g. from pyclaw.yaml providers.minimax.api_key)
+        # Optional API key / base URL (from pyclaw.yaml providers.minimax)
         self.api_key = api_key
+        self.base_url = base_url
         # The agent name sent as X-Agent-Name header to the pyclaw MCP server.
         # Defaults to agent_name but session runners override to the base agent name.
         self.owner_name: str = owner_name or agent_name
@@ -240,7 +242,8 @@ class AgentRunner:
                     pass
             if api_key:
                 os.environ["GENERIC_API_KEY"] = api_key
-            os.environ["GENERIC_BASE_URL"] = "https://api.minimax.io/v1"
+            if self.base_url:
+                os.environ["GENERIC_BASE_URL"] = self.base_url
 
             # Ensure OpenAILLM handles delta.reasoning_details (MiniMax extension)
             _patch_openai_llm_for_reasoning_details()

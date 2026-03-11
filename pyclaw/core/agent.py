@@ -4,6 +4,7 @@ import asyncio
 import logging
 from dataclasses import dataclass, field
 from datetime import datetime
+from pyclaw.utils.time import now
 from typing import Any, Awaitable, Callable, Dict, List, Optional
 
 from pyclaw.config.schema import AgentConfig as ConfigModel
@@ -100,66 +101,55 @@ class Agent:
             return
 
         try:
+            import os
             factory = get_factory()
 
-            # Check if we need to use generic provider for minimax
-            # Check both the provider object and the config
-            provider_type = None
-            provider_model = None
+            # Translate "provider/model" → "<fastagent_provider>.<model>" using the
+            # fastagent_provider field on the wired provider.  No provider names are
+            # hardcoded here — the mapping lives entirely in the config file.
+            raw_model = self.config.model
+            for prefix in ["fastagent:", "fa:", "fastagent/"]:
+                raw_model = raw_model.replace(prefix, "")
+
+            fa_model = raw_model
+            provider_api_key = None
+            provider_base_url = None
 
             if hasattr(self, "provider") and self.provider:
-                provider_type = type(self.provider).__name__
-                provider_model = getattr(self.provider, "model", None)
+                provider_api_key = getattr(self.provider, "api_key", None)
+                # api_url is the OpenAI-compat base for FastAgent; base_url is the native endpoint
+                provider_base_url = getattr(self.provider, "api_url", None)
 
-            # Also check agent config for provider info
-            agent_provider = getattr(self.config, "provider", None)
-            if agent_provider and isinstance(agent_provider, dict):
-                provider_type = f"{agent_provider.get('type', '')}Provider".title().replace(
-                    "Provider", "Provider"
-                )
-                if not provider_model:
-                    provider_model = agent_provider.get("model")
-
-            # Configure for minimax if needed
-            if "minimax" in str(provider_type).lower():
-                # Set up generic provider for MiniMax
-                import os
-
-                os.environ["GENERIC_BASE_URL"] = "https://api.minimax.io/v1"
-                # API key will be picked up from environment or keychain
+            if "/" in raw_model:
+                _, model_name = raw_model.split("/", 1)
+                fa_prov = getattr(self.provider, "fastagent_provider", None) if self.provider else None
+                if fa_prov:
+                    prefix_upper = fa_prov.upper()
+                    if provider_api_key:
+                        os.environ[f"{prefix_upper}_API_KEY"] = provider_api_key
+                    if provider_base_url:
+                        os.environ[f"{prefix_upper}_BASE_URL"] = provider_base_url
+                    fa_model = f"{fa_prov}.{model_name}"
 
             # Get workflow type from config
             workflow_type = getattr(self.config, "workflow", None)
 
             if workflow_type:
-                # Create workflow agent
                 workflow_config = {
                     "name": self.name,
                     "instruction": self.system_prompt,
                     "workflow": workflow_type,
                     "agents": getattr(self.config, "agents", []),
-                    "model": self.config.model,
+                    "model": fa_model,
                     "temperature": self.config.temperature,
                     "servers": getattr(self.config, "mcp_servers", []),
                 }
                 self.fast_agent = create_agent_from_config(workflow_config)
             else:
-                # Create regular FastAgent
-                model = self.config.model
-                for prefix in ["fastagent:", "fa:", "fastagent/"]:
-                    model = model.replace(prefix, "")
-
-                # Use generic provider for minimax
-                if "minimax" in str(provider_type).lower():
-                    # Get the actual model from provider
-                    model = provider_model or "MiniMax-M2.5"
-                    if not str(model).startswith("generic."):
-                        model = f"generic.{model}"
-
                 self.fast_agent = factory.create_agent(
                     name=self.name,
                     instruction=self.system_prompt,
-                    model=model or "sonnet",
+                    model=fa_model or "sonnet",
                     temperature=self.config.temperature,
                     max_tokens=self.config.max_tokens,
                     servers=getattr(self.config, "mcp_servers", []),
@@ -168,16 +158,6 @@ class Agent:
             # Create runner for turn-based execution
             from pyclaw.agents.runner import AgentRunner
 
-            # Use provider model for minimax, otherwise use agent model
-            if "minimax" in str(provider_type).lower():
-                runner_model = provider_model or "MiniMax-M2.5"
-                if not str(runner_model).startswith("generic."):
-                    runner_model = f"generic.{runner_model}"
-            else:
-                runner_model = self.config.model
-                for prefix in ["fastagent:", "fa:", "fastagent/"]:
-                    runner_model = runner_model.replace(prefix, "")
-            # Resolve MCP servers: from agent config, falling back to none
             mcp_servers = getattr(self.config, "mcp_servers", None) or []
             tools_cfg = {}
             if hasattr(self.config, "tools") and self.config.tools:
@@ -188,15 +168,10 @@ class Agent:
                     "deny": getattr(t, "deny", []),
                 }
 
-            # Extract API key from provider if available (e.g. pyclaw.yaml providers.minimax.api_key)
-            provider_api_key = None
-            if hasattr(self, "provider") and self.provider:
-                provider_api_key = getattr(self.provider, "api_key", None)
-
             self.fast_agent_runner = AgentRunner(
                 agent_name=self.name,
                 instruction=self.system_prompt,
-                model=runner_model or "sonnet",
+                model=fa_model or "sonnet",
                 temperature=self.config.temperature,
                 max_tokens=self.config.max_tokens,
                 top_p=getattr(self.config, "top_p", None),
@@ -207,12 +182,13 @@ class Agent:
                 tools_config=tools_cfg,
                 show_thinking=getattr(self.config, "show_thinking", False),
                 api_key=provider_api_key,
+                base_url=provider_base_url,
                 request_params=getattr(self.config, "request_params", None),
             )
 
             self._logger.info(
                 f"Initialized FastAgent for {self.name} "
-                f"(servers={mcp_servers})"
+                f"(model={fa_model}, servers={mcp_servers})"
             )
 
         except Exception as e:
@@ -253,6 +229,7 @@ class Agent:
                 tools_config=base.tools_config,
                 show_thinking=getattr(base, "show_thinking", False),
                 api_key=getattr(base, "api_key", None),
+                base_url=getattr(base, "base_url", None),
                 owner_name=self.name,
                 request_params=getattr(base, "request_params", None),
                 history_path=history_path,
@@ -394,7 +371,7 @@ class Agent:
         # Check active hours
         active_hours = self.config.heartbeat.active_hours
         if active_hours:
-            now = datetime.now()
+            now = now()
             start = datetime.strptime(active_hours.get("start", "00:00"), "%H:%M")
             end = datetime.strptime(active_hours.get("end", "23:59"), "%H:%M")
 

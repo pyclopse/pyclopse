@@ -1,0 +1,74 @@
+{
+  "messages": [
+    {
+      "role": "user",
+      "content": [
+        {
+          "type": "text",
+          "text": "hello"
+        }
+      ],
+      "is_template": false
+    },
+    {
+      "role": "assistant",
+      "content": [
+        {
+          "type": "text",
+          "text": "<think>\nThe user is just saying hello. I should respond in a friendly, casual way matching my 90s personality as defined in my rules.\n</think>\n\nYo! \ud83e\udd16 What's up? How can I help you today?"
+        }
+      ],
+      "channels": {
+        "fast-agent-timing": [
+          {
+            "type": "text",
+            "text": "{\"start_time\": 103854.573291083, \"end_time\": 103856.381032, \"duration_ms\": 1807.74}"
+          }
+        ],
+        "fast-agent-usage": [
+          {
+            "type": "text",
+            "text": "{\"turn\": {\"provider\": \"openai\", \"model\": \"MiniMax-M2.5\", \"input_tokens\": 6968, \"output_tokens\": 46, \"total_tokens\": 7014, \"timestamp\": 1773163171.6117709, \"cache_usage\": {\"cache_read_tokens\": 0, \"cache_write_tokens\": 0, \"cache_hit_tokens\": 6959, \"total_cache_tokens\": 6959, \"has_cache_activity\": true}, \"tool_use_tokens\": 0, \"reasoning_tokens\": 0, \"tool_calls\": 0, \"current_context_tokens\": 7014, \"effective_input_tokens\": 9, \"display_input_tokens\": 6968}, \"raw_usage\": {\"completion_tokens\": 46, \"prompt_tokens\": 6968, \"total_tokens\": 7014, \"completion_tokens_details\": {\"accepted_prediction_tokens\": null, \"audio_tokens\": null, \"reasoning_tokens\": 31, \"rejected_prediction_tokens\": null}, \"prompt_tokens_details\": {\"audio_tokens\": null, \"cached_tokens\": 6959}, \"total_characters\": 0}, \"summary\": {\"model\": \"MiniMax-M2.5\", \"turn_count\": 1, \"cumulative_input_tokens\": 6968, \"cumulative_output_tokens\": 46, \"cumulative_billing_tokens\": 7014, \"cumulative_tool_use_tokens\": 0, \"cumulative_reasoning_tokens\": 0, \"cumulative_tool_calls\": 0, \"current_context_tokens\": 7014, \"context_window_size\": null, \"context_usage_percentage\": null, \"cumulative_cache_read_tokens\": 0, \"cumulative_cache_write_tokens\": 0, \"cumulative_cache_hit_tokens\": 6959, \"cache_hit_rate_percent\": 49.96768866231062, \"cumulative_effective_input_tokens\": 9}}"
+          }
+        ]
+      },
+      "stop_reason": "endTurn",
+      "is_template": false
+    },
+    {
+      "role": "user",
+      "content": [
+        {
+          "type": "text",
+          "text": "tell me a joke"
+        }
+      ],
+      "is_template": false
+    },
+    {
+      "role": "assistant",
+      "content": [
+        {
+          "type": "text",
+          "text": "<think>\nThe\n</think>\n\nWhy do programmers always mix user wants me to tell them a joke. Let me think of a good one. up Halloween and Christmas?\n\nBecause Oct 31 = Dec 25! \ud83c\udf83\ud83c\udf84\n\nHa! Get it? Octal 31 equals Decimal 25. BOOM, programming nerd joke. \ud83e\udd13"
+        }
+      ],
+      "channels": {
+        "fast-agent-timing": [
+          {
+            "type": "text",
+            "text": "{\"start_time\": 103865.801228041, \"end_time\": 103867.993424541, \"duration_ms\": 2192.2}"
+          }
+        ],
+        "fast-agent-usage": [
+          {
+            "type": "text",
+            "text": "{\"turn\": {\"provider\": \"openai\", \"model\": \"MiniMax-M2.5\", \"input_tokens\": 6996, \"output_tokens\": 69, \"total_tokens\": 7065, \"timestamp\": 1773163183.2243211, \"cache_usage\": {\"cache_read_tokens\": 0, \"cache_write_tokens\": 0, \"cache_hit_tokens\": 6959, \"total_cache_tokens\": 6959, \"has_cache_activity\": true}, \"tool_use_tokens\": 0, \"reasoning_tokens\": 0, \"tool_calls\": 0, \"current_context_tokens\": 7065, \"effective_input_tokens\": 37, \"display_input_tokens\": 6996}, \"raw_usage\": {\"completion_tokens\": 69, \"prompt_tokens\": 6996, \"total_tokens\": 7065, \"completion_tokens_details\": {\"accepted_prediction_tokens\": null, \"audio_tokens\": null, \"reasoning_tokens\": 21, \"rejected_prediction_tokens\": null}, \"prompt_tokens_details\": {\"audio_tokens\": null, \"cached_tokens\": 6959}, \"total_characters\": 0}, \"summary\": {\"model\": \"MiniMax-M2.5\", \"turn_count\": 2, \"cumulative_input_tokens\": 13964, \"cumulative_output_tokens\": 115, \"cumulative_billing_tokens\": 14079, \"cumulative_tool_use_tokens\": 0, \"cumulative_reasoning_tokens\": 0, \"cumulative_tool_calls\": 0, \"current_context_tokens\": 7065, \"context_window_size\": null, \"context_usage_percentage\": null, \"cumulative_cache_read_tokens\": 0, \"cumulative_cache_write_tokens\": 0, \"cumulative_cache_hit_tokens\": 13918, \"cache_hit_rate_percent\": 49.91750950433972, \"cumulative_effective_input_tokens\": 46}}"
+          }
+        ]
+      },
+      "stop_reason": "endTurn",
+      "is_template": false
+    }
+  ]
+}

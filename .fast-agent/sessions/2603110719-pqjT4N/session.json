@@ -1,0 +1,16 @@
+{
+  "name": "2603110719-pqjT4N",
+  "created_at": "2026-03-11T07:19:19.557561",
+  "last_activity": "2026-03-11T07:19:20.004095",
+  "history_files": [
+    "history_default.json"
+  ],
+  "metadata": {
+    "agent_name": "default",
+    "model": "generic.MiniMax-M2.5",
+    "last_history_by_agent": {
+      "default": "history_default.json"
+    },
+    "first_user_preview": "Say exactly: hello world"
+  }
+}

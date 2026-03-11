@@ -757,9 +757,11 @@ async def image(
         import httpx
 
         api_key = os.environ.get("GENERIC_API_KEY") or os.environ.get("MINIMAX_API_KEY", "")
-        base_url = os.environ.get("GENERIC_BASE_URL", "https://api.minimax.io/v1")
+        base_url = os.environ.get("GENERIC_BASE_URL")
         if not api_key:
             return "[ERROR] No API key configured (GENERIC_API_KEY / MINIMAX_API_KEY)"
+        if not base_url:
+            return "[ERROR] No base URL configured (providers.minimax.api_url)"
 
         # Load image
         if path.startswith("http://") or path.startswith("https://"):
@@ -859,9 +861,12 @@ async def tts(
             },
         }
 
+        tts_base = os.environ.get("GENERIC_BASE_URL")
+        if not tts_base:
+            return "[ERROR] No base URL configured (providers.minimax.api_url)"
         async with httpx.AsyncClient(timeout=60) as client:
             resp = await client.post(
-                "https://api.minimax.io/v1/t2a_v2",
+                f"{tts_base.rstrip('/')}/t2a_v2",
                 headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"},
                 json=payload,
             )
@@ -1512,6 +1517,25 @@ def _ruamel_save(ry, data, path: Path) -> None:
     path.write_text(buf.getvalue())
 
 
+def _split_path(path: str) -> list[str]:
+    """Split a dot-notation config path into key segments.
+
+    Bracket notation ``[key]`` is supported for keys that contain dots
+    (e.g. model names like ``MiniMax-M2.5``)::
+
+        providers.minimax.models.[MiniMax-M2.5].concurrency
+        → ['providers', 'minimax', 'models', 'MiniMax-M2.5', 'concurrency']
+
+    Plain segments must not contain dots; bracket segments may contain anything
+    except ``]``.
+    """
+    import re
+    parts = []
+    for m in re.finditer(r'\[([^\]]+)\]|([^.\[\]]+)', path):
+        parts.append(m.group(1) if m.group(1) is not None else m.group(2))
+    return [p for p in parts if p]
+
+
 def _nav_path(data: dict, parts: list[str], *, create: bool = False):
     """Walk dot-notation path into nested dict. Returns (parent, last_key)."""
     node = data
@@ -1568,7 +1592,9 @@ def config_set(path: str, value: str) -> str:
 
     Args:
         path:  Dot-notation key path, e.g. "agents.assistant.model"
-               or "gateway.port" or "agents.assistant.heartbeat.enabled"
+               or "gateway.port" or "agents.assistant.heartbeat.enabled".
+               Use bracket notation for keys that contain dots (e.g. model names):
+                 "providers.minimax.models.[MiniMax-M2.5].concurrency"
         value: New value as JSON or a plain string.
                Use JSON for booleans (true/false), numbers, lists, dicts.
                Examples:
@@ -1583,7 +1609,7 @@ def config_set(path: str, value: str) -> str:
             return "[ERROR] No pyclaw config file found."
 
         ry, data = _ruamel_load(cfg_path)
-        parts = [p for p in path.split(".") if p]
+        parts = _split_path(path)
         if not parts:
             return "[ERROR] Empty path."
 
@@ -1612,7 +1638,9 @@ def config_delete(path: str) -> str:
     Delete a config key using dot-notation path.
 
     Args:
-        path: Dot-notation key path, e.g. "agents.old_agent"
+        path: Dot-notation key path, e.g. "agents.old_agent".
+              Use bracket notation for keys containing dots:
+                "providers.minimax.models.[MiniMax-M2.5]"
     """
     try:
         cfg_path = _find_config_path()
@@ -1620,7 +1648,7 @@ def config_delete(path: str) -> str:
             return "[ERROR] No pyclaw config file found."
 
         ry, data = _ruamel_load(cfg_path)
-        parts = [p for p in path.split(".") if p]
+        parts = _split_path(path)
         if not parts:
             return "[ERROR] Empty path."
 

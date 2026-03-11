@@ -1,0 +1,33 @@
+{
+  "messages": [
+    {
+      "role": "user",
+      "content": [
+        {
+          "type": "text",
+          "text": "Say hello in 3 words"
+        }
+      ],
+      "is_template": false
+    },
+    {
+      "role": "assistant",
+      "content": [
+        {
+          "type": "text",
+          "text": ""
+        }
+      ],
+      "channels": {
+        "fast-agent-timing": [
+          {
+            "type": "text",
+            "text": "{\"start_time\": 163619.256893166, \"end_time\": 163621.307913916, \"duration_ms\": 2051.02}"
+          }
+        ]
+      },
+      "stop_reason": "cancelled",
+      "is_template": false
+    }
+  ]
+}

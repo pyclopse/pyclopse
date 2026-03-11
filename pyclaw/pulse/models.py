@@ -1,6 +1,7 @@
 """Pulse system models."""
 from dataclasses import dataclass, field
 from datetime import datetime
+from pyclaw.utils.time import now
 from typing import Optional, Dict, Any, List
 from enum import Enum
 
@@ -28,7 +29,7 @@ class PulseActiveHours:
     def is_active(self, dt: Optional[datetime] = None) -> bool:
         """Check if current time is within active hours."""
         if dt is None:
-            dt = datetime.now()
+            dt = now()
         
         current_time = dt.strftime("%H:%M")
         

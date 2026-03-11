@@ -1,0 +1,109 @@
+{
+  "messages": [
+    {
+      "role": "user",
+      "content": [
+        {
+          "type": "text",
+          "text": "hello"
+        }
+      ],
+      "is_template": false
+    },
+    {
+      "role": "assistant",
+      "content": [
+        {
+          "type": "text",
+          "text": "Hey there! \ud83e\udd16 What's up? How can I help you out today?"
+        }
+      ],
+      "channels": {
+        "fast-agent-timing": [
+          {
+            "type": "text",
+            "text": "{\"start_time\": 111038.426083875, \"end_time\": 111040.283987083, \"duration_ms\": 1857.9}"
+          }
+        ],
+        "fast-agent-usage": [
+          {
+            "type": "text",
+            "text": "{\"turn\": {\"provider\": \"openai\", \"model\": \"MiniMax-M2.5\", \"input_tokens\": 6968, \"output_tokens\": 47, \"total_tokens\": 7015, \"timestamp\": 1773170355.537643, \"cache_usage\": {\"cache_read_tokens\": 0, \"cache_write_tokens\": 0, \"cache_hit_tokens\": 6959, \"total_cache_tokens\": 6959, \"has_cache_activity\": true}, \"tool_use_tokens\": 0, \"reasoning_tokens\": 0, \"tool_calls\": 0, \"current_context_tokens\": 7015, \"effective_input_tokens\": 9, \"display_input_tokens\": 6968}, \"raw_usage\": {\"completion_tokens\": 47, \"prompt_tokens\": 6968, \"total_tokens\": 7015, \"completion_tokens_details\": {\"accepted_prediction_tokens\": null, \"audio_tokens\": null, \"reasoning_tokens\": 30, \"rejected_prediction_tokens\": null}, \"prompt_tokens_details\": {\"audio_tokens\": null, \"cached_tokens\": 6959}, \"total_characters\": 0}, \"summary\": {\"model\": \"MiniMax-M2.5\", \"turn_count\": 1, \"cumulative_input_tokens\": 6968, \"cumulative_output_tokens\": 47, \"cumulative_billing_tokens\": 7015, \"cumulative_tool_use_tokens\": 0, \"cumulative_reasoning_tokens\": 0, \"cumulative_tool_calls\": 0, \"current_context_tokens\": 7015, \"context_window_size\": null, \"context_usage_percentage\": null, \"cumulative_cache_read_tokens\": 0, \"cumulative_cache_write_tokens\": 0, \"cumulative_cache_hit_tokens\": 6959, \"cache_hit_rate_percent\": 49.96768866231062, \"cumulative_effective_input_tokens\": 9}}"
+          }
+        ]
+      },
+      "stop_reason": "endTurn",
+      "is_template": false
+    },
+    {
+      "role": "user",
+      "content": [
+        {
+          "type": "text",
+          "text": "tell me a complicated joke"
+        }
+      ],
+      "is_template": false
+    },
+    {
+      "role": "assistant",
+      "content": [
+        {
+          "type": "text",
+          "text": "Alright, buckle up for this one, dude:\n\n---\n\n**The programmer's paradox:**\n\nA QA engineer walks into a bar. Orders a beer. Orders 0 beers. Orders 999999999 beers. Orders a lizard. Orders -1 beers. Orders a sfdeljkgn;.\n\nThe first customer asks, \"Why did you order so many?\" The QA engineer says, \"I'm just testing the system.\"\n\nThe bar collapses.\n\n---\n\n**Or if you want something with more layers:**\n\nWhy did the developer go broke?\n\nBecause they used up all their cache.\n\nSo they decided to learn from their mistakes and finally *allocate* some savings. But every time they tried to *malloc()* more money, their wife would *free()* it.\n\nThen one day they thought: \"I've got to stop living on the heap and start living on the stack for once.\"\n\nNow they're sleeping on the street and calling it \"stack overflow.\"\n\n---\n\nYo, need me to explain either of these if they're too dense? \ud83d\ude04"
+        }
+      ],
+      "channels": {
+        "fast-agent-timing": [
+          {
+            "type": "text",
+            "text": "{\"start_time\": 111049.407138458, \"end_time\": 111059.8421735, \"duration_ms\": 10435.04}"
+          }
+        ],
+        "fast-agent-usage": [
+          {
+            "type": "text",
+            "text": "{\"turn\": {\"provider\": \"openai\", \"model\": \"MiniMax-M2.5\", \"input_tokens\": 6999, \"output_tokens\": 252, \"total_tokens\": 7251, \"timestamp\": 1773170375.095986, \"cache_usage\": {\"cache_read_tokens\": 0, \"cache_write_tokens\": 0, \"cache_hit_tokens\": 6959, \"total_cache_tokens\": 6959, \"has_cache_activity\": true}, \"tool_use_tokens\": 0, \"reasoning_tokens\": 0, \"tool_calls\": 0, \"current_context_tokens\": 7251, \"effective_input_tokens\": 40, \"display_input_tokens\": 6999}, \"raw_usage\": {\"completion_tokens\": 252, \"prompt_tokens\": 6999, \"total_tokens\": 7251, \"completion_tokens_details\": {\"accepted_prediction_tokens\": null, \"audio_tokens\": null, \"reasoning_tokens\": 48, \"rejected_prediction_tokens\": null}, \"prompt_tokens_details\": {\"audio_tokens\": null, \"cached_tokens\": 6959}, \"total_characters\": 0}, \"summary\": {\"model\": \"MiniMax-M2.5\", \"turn_count\": 2, \"cumulative_input_tokens\": 13967, \"cumulative_output_tokens\": 299, \"cumulative_billing_tokens\": 14266, \"cumulative_tool_use_tokens\": 0, \"cumulative_reasoning_tokens\": 0, \"cumulative_tool_calls\": 0, \"current_context_tokens\": 7251, \"context_window_size\": null, \"context_usage_percentage\": null, \"cumulative_cache_read_tokens\": 0, \"cumulative_cache_write_tokens\": 0, \"cumulative_cache_hit_tokens\": 13918, \"cache_hit_rate_percent\": 49.91213914290837, \"cumulative_effective_input_tokens\": 49}}"
+          }
+        ]
+      },
+      "stop_reason": "endTurn",
+      "is_template": false
+    },
+    {
+      "role": "user",
+      "content": [
+        {
+          "type": "text",
+          "text": "ok, now tell me a short story"
+        }
+      ],
+      "is_template": false
+    },
+    {
+      "role": "assistant",
+      "content": [
+        {
+          "type": "text",
+          "text": "Alright, check this out:\n\n---\n\n**The Last Payphone**\n\nIt was 1997. The mall was dying.\n\nMarcus stood in front of the payphone one last time. Tomorrow, they'd rip it out to make room for a smoothie stand. He'd been coming here since he was twelve\u2014forty years old now, and that battered plastic receiver had heard every secret he'd ever had.\n\nHis daughter didn't understand. \"Dad, you have a cell phone. Why do you keep coming here?\"\n\nHe couldn't explain it right. How sometimes you need a specific place to feel something. How the coin slot still felt cold the same way. How his father's voice had crackled through this exact receiver back in '84, calling from a gas station in Nevada, saying he'd be home soon.\n\nHe never came home.\n\nMarcus picked up the receiver. Dead air. Of course\u2014lines had been disconnected for months.\n\nBut he held it to his ear anyway, the way you hold a photograph of someone who's gone.\n\n\"Miss you, Dad,\" he whispered.\n\nAnd for just a second, he could almost hear static\u2014like the universe was trying to say something back.\n\n---\n\nThe next morning, the construction crew found an old man standing by the empty wall, smiling at nothing.\n\nSmoothie stand went in by noon.\n\n---\n\nHope that hit you right in the feels, dude. \ud83e\udd16"
+        }
+      ],
+      "channels": {
+        "fast-agent-timing": [
+          {
+            "type": "text",
+            "text": "{\"start_time\": 111072.791741916, \"end_time\": 111083.550240458, \"duration_ms\": 10758.5}"
+          }
+        ],
+        "fast-agent-usage": [
+          {
+            "type": "text",
+            "text": "{\"turn\": {\"provider\": \"openai\", \"model\": \"MiniMax-M2.5\", \"input_tokens\": 7220, \"output_tokens\": 336, \"total_tokens\": 7556, \"timestamp\": 1773170398.8040938, \"cache_usage\": {\"cache_read_tokens\": 0, \"cache_write_tokens\": 0, \"cache_hit_tokens\": 6996, \"total_cache_tokens\": 6996, \"has_cache_activity\": true}, \"tool_use_tokens\": 0, \"reasoning_tokens\": 0, \"tool_calls\": 0, \"current_context_tokens\": 7556, \"effective_input_tokens\": 224, \"display_input_tokens\": 7220}, \"raw_usage\": {\"completion_tokens\": 336, \"prompt_tokens\": 7220, \"total_tokens\": 7556, \"completion_tokens_details\": {\"accepted_prediction_tokens\": null, \"audio_tokens\": null, \"reasoning_tokens\": 60, \"rejected_prediction_tokens\": null}, \"prompt_tokens_details\": {\"audio_tokens\": null, \"cached_tokens\": 6996}, \"total_characters\": 0}, \"summary\": {\"model\": \"MiniMax-M2.5\", \"turn_count\": 3, \"cumulative_input_tokens\": 21187, \"cumulative_output_tokens\": 635, \"cumulative_billing_tokens\": 21822, \"cumulative_tool_use_tokens\": 0, \"cumulative_reasoning_tokens\": 0, \"cumulative_tool_calls\": 0, \"current_context_tokens\": 7556, \"context_window_size\": null, \"context_usage_percentage\": null, \"cumulative_cache_read_tokens\": 0, \"cumulative_cache_write_tokens\": 0, \"cumulative_cache_hit_tokens\": 20914, \"cache_hit_rate_percent\": 49.67577967269186, \"cumulative_effective_input_tokens\": 273}}"
+          }
+        ]
+      },
+      "stop_reason": "endTurn",
+      "is_template": false
+    }
+  ]
+}

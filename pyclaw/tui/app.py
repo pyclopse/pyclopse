@@ -16,10 +16,12 @@ from pyclaw.tui.widgets import AgentList, SessionList, StatusPanel
 DEBUG_LOG = Path("/tmp/pyclaw_tui_debug.log")
 
 
+from pyclaw.utils.time import now
+
+
 def debug_write(msg: str) -> None:
     """Write debug message to file."""
-    from datetime import datetime
-    timestamp = datetime.now().strftime("%H:%M:%S.%f")[:-3]
+    timestamp = now().strftime("%H:%M:%S.%f")[:-3]
     with open(DEBUG_LOG, "a") as f:
         f.write(f"[APP][{timestamp}] {msg}\n")
 

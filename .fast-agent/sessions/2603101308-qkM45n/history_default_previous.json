@@ -1,0 +1,39 @@
+{
+  "messages": [
+    {
+      "role": "user",
+      "content": [
+        {
+          "type": "text",
+          "text": "Say exactly: \"Pulse fired!\" - no other text."
+        }
+      ],
+      "is_template": false
+    },
+    {
+      "role": "assistant",
+      "content": [
+        {
+          "type": "text",
+          "text": "<think>\nThe user\n</think>\n\nPulse fired! wants me to say exactly \"Pulse fired!\" with no other text. This is a simple request."
+        }
+      ],
+      "channels": {
+        "fast-agent-timing": [
+          {
+            "type": "text",
+            "text": "{\"start_time\": 103160.419553416, \"end_time\": 103168.22968075, \"duration_ms\": 7810.13}"
+          }
+        ],
+        "fast-agent-usage": [
+          {
+            "type": "text",
+            "text": "{\"turn\": {\"provider\": \"openai\", \"model\": \"MiniMax-M2.5\", \"input_tokens\": 6979, \"output_tokens\": 29, \"total_tokens\": 7008, \"timestamp\": 1773162483.456352, \"cache_usage\": {\"cache_read_tokens\": 0, \"cache_write_tokens\": 0, \"cache_hit_tokens\": 0, \"total_cache_tokens\": 0, \"has_cache_activity\": false}, \"tool_use_tokens\": 0, \"reasoning_tokens\": 0, \"tool_calls\": 0, \"current_context_tokens\": 7008, \"effective_input_tokens\": 6979, \"display_input_tokens\": 6979}, \"raw_usage\": {\"completion_tokens\": 29, \"prompt_tokens\": 6979, \"total_tokens\": 7008, \"completion_tokens_details\": {\"accepted_prediction_tokens\": null, \"audio_tokens\": null, \"reasoning_tokens\": 25, \"rejected_prediction_tokens\": null}, \"prompt_tokens_details\": {\"audio_tokens\": null, \"cached_tokens\": 0}, \"total_characters\": 0}, \"summary\": {\"model\": \"MiniMax-M2.5\", \"turn_count\": 1, \"cumulative_input_tokens\": 6979, \"cumulative_output_tokens\": 29, \"cumulative_billing_tokens\": 7008, \"cumulative_tool_use_tokens\": 0, \"cumulative_reasoning_tokens\": 0, \"cumulative_tool_calls\": 0, \"current_context_tokens\": 7008, \"context_window_size\": null, \"context_usage_percentage\": null, \"cumulative_cache_read_tokens\": 0, \"cumulative_cache_write_tokens\": 0, \"cumulative_cache_hit_tokens\": 0, \"cache_hit_rate_percent\": 0.0, \"cumulative_effective_input_tokens\": 6979}}"
+          }
+        ]
+      },
+      "stop_reason": "endTurn",
+      "is_template": false
+    }
+  ]
+}

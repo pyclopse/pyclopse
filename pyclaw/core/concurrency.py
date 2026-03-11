@@ -10,14 +10,10 @@ Example: 5 agents all using MiniMax-M2.5 with limit=3 means at most
 3 of those 5 can be in the middle of an LLM call simultaneously.
 The other 2 wait their turn.
 
-Config (pyclaw.yaml):
-    concurrency:
-      default: 3          # fallback for any model not listed
-      models:
-        MiniMax-M2.5: 3
-        passthrough: 100  # effectively unlimited for local testing
-        gpt-4: 5
-        claude-sonnet-4-5: 5
+Per-model limits are configured under each provider's ``models:`` block
+in pyclaw.yaml (e.g. providers.minimax.models.MiniMax-M2.5.concurrency).
+The ``concurrency.default`` setting is a global fallback for any model
+not explicitly listed.
 """
 import asyncio
 import logging

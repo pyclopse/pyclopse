@@ -3,6 +3,7 @@ import asyncio
 import logging
 from typing import Any, Dict, Optional
 from datetime import datetime
+from pyclaw.utils.time import now
 from urllib.parse import urljoin
 
 from .base import ChannelAdapter, Message, MessageTarget, MediaAttachment
@@ -101,7 +102,7 @@ class GoogleChatAdapter(ChannelAdapter):
         else:
             raise ValueError("No service account credentials provided")
         
-        now = int(datetime.now().timestamp())
+        now = int(now().timestamp())
         
         # Create JWT
         claim = {
@@ -294,7 +295,7 @@ class GoogleChatAdapter(ChannelAdapter):
                     sender=sender.get("name", ""),
                     sender_name=sender.get("displayName", "Google Chat User"),
                     content=message.get("argumentText", message.get("text", "")),
-                    timestamp=datetime.now(),
+                    timestamp=now(),
                     metadata={
                         "space": payload.get("space", {}).get("name"),
                         "thread_key": thread.get("threadKey"),
@@ -309,7 +310,7 @@ class GoogleChatAdapter(ChannelAdapter):
                     sender=payload.get("user", {}).get("name", ""),
                     sender_name=payload.get("user", {}).get("displayName", "Google Chat User"),
                     content="[added_to_space]",
-                    timestamp=datetime.now(),
+                    timestamp=now(),
                     metadata={"space": payload.get("space", {}).get("name")},
                 )
             
@@ -320,7 +321,7 @@ class GoogleChatAdapter(ChannelAdapter):
                     sender=payload.get("user", {}).get("name", ""),
                     sender_name=payload.get("user", {}).get("displayName", "Google Chat User"),
                     content="[removed_from_space]",
-                    timestamp=datetime.now(),
+                    timestamp=now(),
                 )
             
             return None

@@ -2,6 +2,7 @@
 import logging
 from typing import Dict, Any, Optional, List
 from datetime import datetime
+from pyclaw.utils.time import now
 
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
@@ -172,13 +173,13 @@ async def create_session(agent_id: str, channel: Optional[str] = None):
             session = await agent.create_session(channel=channel)
         else:
             # Simple session creation
-            session_id = f"session-{datetime.now().timestamp()}"
-            session = {"id": session_id, "agent_id": agent_id, "created_at": datetime.now()}
+            session_id = f"session-{now().timestamp()}"
+            session = {"id": session_id, "agent_id": agent_id, "created_at": now()}
         
         return SessionResponse(
             id=session.get("id", "unknown"),
             agent_id=agent_id,
-            created_at=session.get("created_at", datetime.now().isoformat()),
+            created_at=session.get("created_at", now().isoformat()),
             message_count=0,
             channel=channel,
         )
@@ -239,14 +240,14 @@ async def send_message(agent_id: str, request: SendMessageRequest):
                 session = await agent.create_session()
                 session_id = session.get("id")
             else:
-                session_id = f"session-{datetime.now().timestamp()}"
+                session_id = f"session-{now().timestamp()}"
         
         # Send message
         if hasattr(agent, 'process_message'):
             result = await agent.process_message(session_id, request.content)
         else:
             result = {
-                "message_id": f"msg-{datetime.now().timestamp()}",
+                "message_id": f"msg-{now().timestamp()}",
                 "content": "Message processed (stub)",
             }
         
@@ -254,7 +255,7 @@ async def send_message(agent_id: str, request: SendMessageRequest):
             session_id=session_id,
             message_id=result.get("message_id", "unknown"),
             content=result.get("content", ""),
-            timestamp=datetime.now().isoformat(),
+            timestamp=now().isoformat(),
         )
     
     except HTTPException:

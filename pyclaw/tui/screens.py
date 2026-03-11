@@ -4,6 +4,7 @@ import asyncio
 import re
 import sys
 from datetime import datetime
+from pyclaw.utils.time import now
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
@@ -31,7 +32,7 @@ DEBUG_LOG = Path("/tmp/pyclaw_tui_debug.log")
 
 def debug_write(msg: str) -> None:
     """Write debug message to file."""
-    timestamp = datetime.now().strftime("%H:%M:%S.%f")[:-3]
+    timestamp = now().strftime("%H:%M:%S.%f")[:-3]
     with open(DEBUG_LOG, "a") as f:
         f.write(f"[{timestamp}] {msg}\n")
 
@@ -923,7 +924,7 @@ class LogsScreen(Screen):
 
     def write_log(self, message: str) -> None:
         """Write a message to the log."""
-        timestamp = datetime.now().strftime("%H:%M:%S")
+        timestamp = now().strftime("%H:%M:%S")
         self._log_viewer.write(f"[{timestamp}] {message}")
 
     def write_error(self, message: str) -> None:

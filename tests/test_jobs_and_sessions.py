@@ -10,6 +10,7 @@ import json
 import tempfile
 import uuid
 from datetime import datetime, timedelta
+from pyclaw.utils.time import now
 from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -94,8 +95,8 @@ class TestJobNotifyCallback:
             id=str(uuid.uuid4()),
             job_id="j1",
             job_name="test-job",
-            started_at=datetime.utcnow(),
-            ended_at=datetime.utcnow(),
+            started_at=now(),
+            ended_at=now(),
             status=status,
             stdout=stdout,
             stderr=stderr,
@@ -224,7 +225,7 @@ class TestJobNotifyCallback:
         )
         run = JobRun(
             id="r1", job_id="j1", job_name="my-job",
-            started_at=datetime.utcnow(), ended_at=datetime.utcnow(),
+            started_at=now(), ended_at=now(),
             status=JobStatus.COMPLETED, stdout="all good\n",
         )
 

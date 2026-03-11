@@ -432,6 +432,10 @@ class Gateway:
 
     async def _init_core(self) -> None:
         """Initialize core subsystems."""
+        # Configure timezone first — all subsequent timestamps use this zone
+        from pyclaw.utils.time import configure_timezone
+        configure_timezone(getattr(self._config, "timezone", None) if self._config else None)
+
         # Session manager
         await self.session_manager.start()
         self._logger.info("Session manager started")
@@ -441,18 +445,18 @@ class Gateway:
             name = agent_config_dict.get("name", agent_id)
             # Extract provider config if present (per-agent provider: block)
             provider_config = agent_config_dict.get("provider")
-            # Merge top-level providers config for known model prefixes so that
-            # api_key stored under providers.minimax flows to the agent runner.
-            model_str = agent_config_dict.get("model", "")
-            if "generic." in str(model_str) or "minimax" in str(model_str).lower():
-                mm_cfg = self.config.providers.minimax
-                if mm_cfg:
-                    mm_dict = mm_cfg.model_dump()
+            # If the agent model uses "provider/model" syntax, look up the named provider
+            # and merge its config so credentials flow through to the agent runner.
+            model_str = str(agent_config_dict.get("model", ""))
+            if "/" in model_str:
+                prov_name = model_str.split("/", 1)[0]
+                prov_cfg = getattr(self.config.providers, prov_name, None)
+                if prov_cfg and getattr(prov_cfg, "fastagent_provider", None):
+                    prov_dict = prov_cfg.model_dump()
                     if provider_config:
-                        # Per-agent provider config takes precedence
-                        merged = {**mm_dict, **provider_config}
+                        merged = {**prov_dict, **provider_config}
                     else:
-                        merged = {**mm_dict, "type": "minimax"}
+                        merged = {**prov_dict, "type": prov_name}
                     provider_config = merged
             # Convert dict to AgentConfig object
             agent_config = AgentConfig(**agent_config_dict)

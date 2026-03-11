@@ -24,6 +24,7 @@ import os
 import secrets
 import string
 from datetime import datetime, timezone
+from pyclaw.utils.time import now
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
@@ -36,7 +37,7 @@ _DEFAULT_PYCLAW_DIR = "~/.pyclaw"
 
 def _gen_session_id(dt: Optional[datetime] = None) -> str:
     """Generate a date-prefixed session ID from the given datetime."""
-    d = dt or datetime.utcnow()
+    d = dt or now()
     suffix = "".join(secrets.choice(_SESSION_ALPHABET) for _ in range(6))
     return f"{d.strftime('%Y-%m-%d')}-{suffix}"
 
@@ -149,7 +150,7 @@ def _write_session_metadata(
     created_at: Optional[datetime],
 ) -> None:
     """Write session.json metadata for an imported session."""
-    now_iso = datetime.utcnow().isoformat()
+    now_iso = now().isoformat()
     created_iso = created_at.isoformat() if created_at else now_iso
 
     # Count messages (OpenClaw v3 nests role under rec["message"]["role"])
@@ -269,3 +270,10 @@ def cmd_import_openclaw(args: Any) -> None:
     print(f"\n✓ Done. {total} session(s) imported to {pyclaw_dir}/agents/")
     if total > 0:
         print("  Run 'pyclaw run' and the sessions will be available in the TUI session list.")
+    print()
+    print("⚠  Post-migration checklist:")
+    print("   Review your agent markdown files for leftover OpenClaw paths:")
+    print("   - PULSE.md  — update any script paths from ~/.openclaw/ to ~/.pyclaw/agents/{name}/")
+    print("   - TOOLS.md  — update any tool/skill paths")
+    print("   - scripts/  — update any hardcoded paths inside shell scripts or Python files")
+    print("   Replace AGENTS.md with the pyclaw template (it still says 'OpenClaw' otherwise).")

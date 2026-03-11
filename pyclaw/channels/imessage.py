@@ -4,6 +4,7 @@ import logging
 import subprocess
 from typing import Any, Dict, Optional, List
 from datetime import datetime
+from pyclaw.utils.time import now
 
 from .base import ChannelAdapter, Message, MessageTarget, MediaAttachment
 
@@ -252,7 +253,7 @@ class IMessageAdapter(ChannelAdapter):
                 sender=msg.get("sender", ""),
                 sender_name=msg.get("senderName", "iMessage User"),
                 content=msg.get("text", ""),
-                timestamp=datetime.fromisoformat(msg.get("date", datetime.now().isoformat())),
+                timestamp=datetime.fromisoformat(msg.get("date", now().isoformat())),
                 metadata={
                     "service": msg.get("service"),
                     "chat_guid": msg.get("chatGuid"),

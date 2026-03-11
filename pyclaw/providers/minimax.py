@@ -28,7 +28,10 @@ class MiniMaxProvider(Provider):
                 pass
         
         # Store key (may be None - raises lazily when chat() is called)
-        self.base_url = config.get("base_url", "https://api.minimax.io/v1/text/chatcompletion_v2")
+        # api_url: OpenAI-compat base used by FastAgent (generic provider)
+        self.api_url = config.get("api_url") or config.get("apiUrl") or None
+        # base_url: MiniMax native endpoint used by direct HTTP calls in this provider
+        self.base_url = config.get("base_url") or (f"{self.api_url}/text/chatcompletion_v2" if self.api_url else None)
         self.api_key = api_key
         self.model = config.get("model", "MiniMax-M2.5")
         self.default_model = self.model

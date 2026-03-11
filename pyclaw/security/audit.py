@@ -4,6 +4,7 @@ import json
 import logging
 import os
 from datetime import datetime, timedelta
+from pyclaw.utils.time import now
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 from dataclasses import dataclass, field, asdict
@@ -72,7 +73,7 @@ class AuditLogger:
     ) -> None:
         """Log a security event."""
         event = AuditEvent(
-            timestamp=datetime.utcnow().isoformat() + "Z",
+            timestamp=now().isoformat(),
             event_type=event_type,
             agent_id=agent_id,
             session_id=session_id,
@@ -214,7 +215,7 @@ class AuditLogger:
         if not self.log_file.exists():
             return
         
-        cutoff_date = datetime.utcnow() - timedelta(days=self.retention_days)
+        cutoff_date = now() - timedelta(days=self.retention_days)
         
         # Read existing logs
         rotated_entries = []
@@ -245,7 +246,7 @@ class AuditLogger:
             # Optionally archive rotated entries
             if rotated_entries:
                 archive_file = self.log_file.with_suffix(
-                    f".{datetime.utcnow().strftime('%Y%m%d')}.log"
+                    f".{now().strftime('%Y%m%d')}.log"
                 )
                 with open(archive_file, "a") as f:
                     f.writelines(rotated_entries)
@@ -284,7 +285,7 @@ class AuditLogger:
                         first_date = datetime.fromisoformat(
                             entry["timestamp"].replace("Z", "+00:00")
                         )
-                        age_days = (datetime.utcnow() - first_date.replace(tzinfo=None)).days
+                        age_days = (now() - first_date.replace(tzinfo=None)).days
                         if age_days > self.retention_days:
                             findings.append({
                                 "severity": "info",

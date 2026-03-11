@@ -3,6 +3,7 @@ import asyncio
 import logging
 from typing import Any, Dict, Optional
 from datetime import datetime
+from pyclaw.utils.time import now
 
 from .base import ChannelAdapter, Message, MessageTarget, MediaAttachment
 
@@ -171,7 +172,7 @@ class TelegramAdapter(ChannelAdapter):
                 sender=str(msg.from_user.id),
                 sender_name=msg.from_user.name or msg.from_user.username or "Unknown",
                 content=msg.text or "",
-                timestamp=msg.date or datetime.now(),
+                timestamp=msg.date or now(),
                 metadata={
                     "chat_id": str(msg.chat.id),
                     "chat_type": msg.chat.type,
@@ -227,7 +228,7 @@ class TelegramAdapter(ChannelAdapter):
             sender=str(msg.from_user.id),
             sender_name=msg.from_user.name or msg.from_user.username or "Unknown",
             content=msg.text or "",
-            timestamp=msg.date or datetime.now(),
+            timestamp=msg.date or now(),
             metadata={
                 "chat_id": str(msg.chat.id),
                 "chat_type": msg.chat.type,

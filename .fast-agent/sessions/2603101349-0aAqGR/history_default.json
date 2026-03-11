@@ -1,0 +1,74 @@
+{
+  "messages": [
+    {
+      "role": "user",
+      "content": [
+        {
+          "type": "text",
+          "text": "Say exactly: \"Pulse fired!\" - no other text."
+        }
+      ],
+      "is_template": false
+    },
+    {
+      "role": "assistant",
+      "content": [
+        {
+          "type": "text",
+          "text": "<think>\nThe user\n</think>\n\nPulse fired! wants me to say exactly \"Pulse fired!\" - no other text. This is a simple request that doesn't require any tools."
+        }
+      ],
+      "channels": {
+        "fast-agent-timing": [
+          {
+            "type": "text",
+            "text": "{\"start_time\": 105679.594618708, \"end_time\": 105683.31248875, \"duration_ms\": 3717.87}"
+          }
+        ],
+        "fast-agent-usage": [
+          {
+            "type": "text",
+            "text": "{\"turn\": {\"provider\": \"openai\", \"model\": \"MiniMax-M2.5\", \"input_tokens\": 6979, \"output_tokens\": 34, \"total_tokens\": 7013, \"timestamp\": 1773164998.5527701, \"cache_usage\": {\"cache_read_tokens\": 0, \"cache_write_tokens\": 0, \"cache_hit_tokens\": 6978, \"total_cache_tokens\": 6978, \"has_cache_activity\": true}, \"tool_use_tokens\": 0, \"reasoning_tokens\": 0, \"tool_calls\": 0, \"current_context_tokens\": 7013, \"effective_input_tokens\": 1, \"display_input_tokens\": 6979}, \"raw_usage\": {\"completion_tokens\": 34, \"prompt_tokens\": 6979, \"total_tokens\": 7013, \"completion_tokens_details\": {\"accepted_prediction_tokens\": null, \"audio_tokens\": null, \"reasoning_tokens\": 30, \"rejected_prediction_tokens\": null}, \"prompt_tokens_details\": {\"audio_tokens\": null, \"cached_tokens\": 6978}, \"total_characters\": 0}, \"summary\": {\"model\": \"MiniMax-M2.5\", \"turn_count\": 1, \"cumulative_input_tokens\": 6979, \"cumulative_output_tokens\": 34, \"cumulative_billing_tokens\": 7013, \"cumulative_tool_use_tokens\": 0, \"cumulative_reasoning_tokens\": 0, \"cumulative_tool_calls\": 0, \"current_context_tokens\": 7013, \"context_window_size\": null, \"context_usage_percentage\": null, \"cumulative_cache_read_tokens\": 0, \"cumulative_cache_write_tokens\": 0, \"cumulative_cache_hit_tokens\": 6978, \"cache_hit_rate_percent\": 49.99641756824533, \"cumulative_effective_input_tokens\": 1}}"
+          }
+        ]
+      },
+      "stop_reason": "endTurn",
+      "is_template": false
+    },
+    {
+      "role": "user",
+      "content": [
+        {
+          "type": "text",
+          "text": "Say exactly: \"Pulse fired!\" - no other text."
+        }
+      ],
+      "is_template": false
+    },
+    {
+      "role": "assistant",
+      "content": [
+        {
+          "type": "text",
+          "text": "<think>\nThe user\n</think>\n\nPulse fired! is asking me to say exactly \"Pulse fired!\" with no other text. I'll respond with just that phrase."
+        }
+      ],
+      "channels": {
+        "fast-agent-timing": [
+          {
+            "type": "text",
+            "text": "{\"start_time\": 107483.932921291, \"end_time\": 107486.014990791, \"duration_ms\": 2082.07}"
+          }
+        ],
+        "fast-agent-usage": [
+          {
+            "type": "text",
+            "text": "{\"turn\": {\"provider\": \"openai\", \"model\": \"MiniMax-M2.5\", \"input_tokens\": 7029, \"output_tokens\": 31, \"total_tokens\": 7060, \"timestamp\": 1773166801.26176, \"cache_usage\": {\"cache_read_tokens\": 0, \"cache_write_tokens\": 0, \"cache_hit_tokens\": 0, \"total_cache_tokens\": 0, \"has_cache_activity\": false}, \"tool_use_tokens\": 0, \"reasoning_tokens\": 0, \"tool_calls\": 0, \"current_context_tokens\": 7060, \"effective_input_tokens\": 7029, \"display_input_tokens\": 7029}, \"raw_usage\": {\"completion_tokens\": 31, \"prompt_tokens\": 7029, \"total_tokens\": 7060, \"completion_tokens_details\": {\"accepted_prediction_tokens\": null, \"audio_tokens\": null, \"reasoning_tokens\": 27, \"rejected_prediction_tokens\": null}, \"prompt_tokens_details\": {\"audio_tokens\": null, \"cached_tokens\": 0}, \"total_characters\": 0}, \"summary\": {\"model\": \"MiniMax-M2.5\", \"turn_count\": 2, \"cumulative_input_tokens\": 14008, \"cumulative_output_tokens\": 65, \"cumulative_billing_tokens\": 14073, \"cumulative_tool_use_tokens\": 0, \"cumulative_reasoning_tokens\": 0, \"cumulative_tool_calls\": 0, \"current_context_tokens\": 7060, \"context_window_size\": null, \"context_usage_percentage\": null, \"cumulative_cache_read_tokens\": 0, \"cumulative_cache_write_tokens\": 0, \"cumulative_cache_hit_tokens\": 6978, \"cache_hit_rate_percent\": 33.25073858762985, \"cumulative_effective_input_tokens\": 7030}}"
+          }
+        ]
+      },
+      "stop_reason": "endTurn",
+      "is_template": false
+    }
+  ]
+}

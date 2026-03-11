@@ -140,6 +140,15 @@ class ProviderConfig(BaseModel):
     enabled: bool = True
     api_key: Optional[str] = Field(default=None, validation_alias=AliasChoices("api_key", "apiKey"))
     default_model: Optional[str] = Field(default=None, validation_alias=AliasChoices("default_model", "defaultModel"))
+    # Maps this provider to a FastAgent provider name (e.g. "generic" for OpenAI-compatible
+    # endpoints).  When set, agent model strings like "minimax/MiniMax-M2.5" are translated
+    # to "<fastagent_provider>.<model>" (e.g. "generic.MiniMax-M2.5") before being handed
+    # to FastAgent, and the provider credentials are injected as
+    # <FASTAGENT_PROVIDER>_API_KEY / <FASTAGENT_PROVIDER>_BASE_URL env vars.
+    fastagent_provider: Optional[str] = Field(
+        default=None,
+        validation_alias=AliasChoices("fastagent_provider", "fastagentProvider"),
+    )
 
     @field_validator("api_key", mode="before")
     @classmethod
@@ -581,6 +590,9 @@ class GatewayConfig(BaseModel):
 class Config(BaseModel):
     """Root configuration model."""
     version: str = "1.0"
+    # IANA timezone name (e.g. "America/New_York", "Europe/London").
+    # All pyclaw timestamps use this zone.  Omit to use the system local timezone.
+    timezone: Optional[str] = Field(default=None)
     secrets: SecretsConfig = Field(default_factory=SecretsConfig)
     concurrency: ConcurrencyConfig = Field(default_factory=ConcurrencyConfig)
     sessions: SessionsConfig = Field(default_factory=SessionsConfig)

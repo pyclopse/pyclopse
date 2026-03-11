@@ -1,6 +1,7 @@
 """Message bubble component for chat display."""
 
 from datetime import datetime
+from pyclaw.utils.time import now
 from typing import Optional
 
 from textual.widgets import Static
@@ -46,7 +47,7 @@ class MessageBubble(Static):
         super().__init__(*args, **kwargs)
         self.content = content
         self.role = role
-        self.timestamp = timestamp or datetime.now()
+        self.timestamp = timestamp or now()
     
     def compose(self) -> ComposeResult:
         """Compose the message bubble."""

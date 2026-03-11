@@ -4,6 +4,7 @@ Tests for the session reaper added to SessionManager.
 
 import asyncio
 from datetime import datetime, timedelta
+from pyclaw.utils.time import now
 
 import pytest
 
@@ -65,7 +66,7 @@ class TestReapStaleSessions:
         mgr = await _make_manager(tmp_path, ttl_hours=1)
         session = await mgr.create_session("agent1", "telegram", "user1")
         # Artificially age the session beyond TTL
-        session.updated_at = datetime.utcnow() - timedelta(hours=2)
+        session.updated_at = now() - timedelta(hours=2)
         await mgr._reap_stale_sessions()
         assert session.id not in mgr.sessions
 
@@ -77,7 +78,7 @@ class TestReapStaleSessions:
         hist_dir = session.history_dir
         assert hist_dir and hist_dir.exists()
 
-        session.updated_at = datetime.utcnow() - timedelta(hours=2)
+        session.updated_at = now() - timedelta(hours=2)
         await mgr._reap_stale_sessions()
         # Removed from index
         assert session.id not in mgr.sessions
@@ -90,7 +91,7 @@ class TestReapStaleSessions:
         sessions = []
         for i in range(3):
             s = await mgr.create_session("agent1", "telegram", f"user{i}")
-            s.updated_at = datetime.utcnow() - timedelta(hours=2)
+            s.updated_at = now() - timedelta(hours=2)
             sessions.append(s)
         await mgr._reap_stale_sessions()
         for s in sessions:
@@ -101,7 +102,7 @@ class TestReapStaleSessions:
         mgr = await _make_manager(tmp_path, ttl_hours=1)
         fresh = await mgr.create_session("agent1", "telegram", "fresh")
         stale = await mgr.create_session("agent1", "telegram", "stale")
-        stale.updated_at = datetime.utcnow() - timedelta(hours=5)
+        stale.updated_at = now() - timedelta(hours=5)
 
         await mgr._reap_stale_sessions()
         assert fresh.id in mgr.sessions
@@ -157,7 +158,7 @@ class TestReaperTaskLifecycle:
 
         session = await mgr.create_session("agent1", "telegram", "user1")
         # Age it so it's stale
-        session.updated_at = datetime.utcnow() - timedelta(seconds=1)
+        session.updated_at = now() - timedelta(seconds=1)
 
         # Run reaper loop for one iteration then stop
         async def _run_once():
@@ -191,7 +192,7 @@ class TestDailyRollover:
 
         old = await mgr.create_session("agent1", "telegram", "user1")
         # Back-date to yesterday so it looks stale
-        old.updated_at = datetime.now().replace(hour=0, minute=0, second=0, microsecond=0) - timedelta(seconds=1)
+        old.updated_at = now().replace(hour=0, minute=0, second=0, microsecond=0) - timedelta(seconds=1)
 
         new = await mgr.get_or_create_session("agent1", "telegram", "user1")
 
@@ -223,7 +224,7 @@ class TestDailyRollover:
         mgr._stop_event.clear()
 
         old = await mgr.create_session("agent1", "telegram", "user1")
-        old.updated_at = datetime.now().replace(hour=0, minute=0, second=0, microsecond=0) - timedelta(seconds=1)
+        old.updated_at = now().replace(hour=0, minute=0, second=0, microsecond=0) - timedelta(seconds=1)
 
         resumed = await mgr.get_or_create_session("agent1", "telegram", "user1")
         assert resumed.id == old.id

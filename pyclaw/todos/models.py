@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from datetime import datetime
+from pyclaw.utils.time import now
 from enum import Enum
 from typing import Optional
 from uuid import uuid4
@@ -61,7 +62,7 @@ class Todo(BaseModel):
     completed_at: Optional[datetime] = None
 
     def touch(self) -> None:
-        self.updated_at = datetime.utcnow()
+        self.updated_at = now()
 
     def summary(self) -> str:
         """One-line summary for list views."""

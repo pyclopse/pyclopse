@@ -1,0 +1,16 @@
+{
+  "name": "2603110724-lVwk8W",
+  "created_at": "2026-03-11T07:24:47.318342",
+  "last_activity": "2026-03-11T07:24:47.771857",
+  "history_files": [
+    "history_default.json"
+  ],
+  "metadata": {
+    "agent_name": "default",
+    "model": "generic.MiniMax-M2.5",
+    "last_history_by_agent": {
+      "default": "history_default.json"
+    },
+    "first_user_preview": "Tell me a short joke about programming"
+  }
+}

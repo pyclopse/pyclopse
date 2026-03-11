@@ -1,0 +1,17 @@
+{
+  "name": "2603101512-F88NPG",
+  "created_at": "2026-03-10T15:12:00.141459",
+  "last_activity": "2026-03-10T15:17:04.841661",
+  "history_files": [
+    "history_default_previous.json",
+    "history_default.json"
+  ],
+  "metadata": {
+    "agent_name": "default",
+    "model": "generic.MiniMax-M2.5",
+    "last_history_by_agent": {
+      "default": "history_default.json"
+    },
+    "first_user_preview": "Say exactly: \"Pulse fired!\" - no other text."
+  }
+}

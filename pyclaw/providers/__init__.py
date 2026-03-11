@@ -42,11 +42,12 @@ class ChatResponse:
 
 class Provider(ABC):
     """Base class for model providers."""
-    
+
     def __init__(self, config: Dict[str, Any]):
         self.config = config
         self.api_key = config.get("api_key")
         self.default_model = config.get("default_model")
+        self.fastagent_provider = config.get("fastagent_provider")
     
     @abstractmethod
     async def chat(

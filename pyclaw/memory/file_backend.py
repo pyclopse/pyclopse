@@ -49,6 +49,7 @@ import json
 import logging
 import re
 from datetime import datetime
+from pyclaw.utils.time import now
 from pathlib import Path
 from typing import Any, Dict, List, Optional, TYPE_CHECKING
 
@@ -412,7 +413,7 @@ class FileMemoryBackend(MemoryBackend):
     # ------------------------------------------------------------------ #
 
     def _today_path(self) -> Path:
-        return self._daily_dir / f"{datetime.now().strftime('%Y-%m-%d')}.md"
+        return self._daily_dir / f"{now().strftime('%Y-%m-%d')}.md"
 
     def _daily_files(self) -> List[Path]:
         """Return daily ``.md`` files sorted newest-first."""

@@ -4,6 +4,7 @@ import logging
 import json
 from typing import Any, Dict, Optional
 from datetime import datetime
+from pyclaw.utils.time import now
 
 from .base import ChannelAdapter, Message, MessageTarget, MediaAttachment
 
@@ -210,7 +211,7 @@ class DiscordAdapter(ChannelAdapter):
                 sender=msg_data.get("author", {}).get("id", ""),
                 sender_name=msg_data.get("author", {}).get("username", "Unknown"),
                 content=msg_data.get("content", ""),
-                timestamp=datetime.now(),  # Discord doesn't send timestamp in webhook
+                timestamp=now(),  # Discord doesn't send timestamp in webhook
                 metadata={
                     "guild_id": guild_id,
                     "channel_id": msg_data.get("channel_id"),

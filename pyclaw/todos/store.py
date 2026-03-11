@@ -6,6 +6,7 @@ import asyncio
 import json
 import logging
 from datetime import datetime
+from pyclaw.utils.time import now
 from pathlib import Path
 from typing import Optional
 
@@ -121,7 +122,7 @@ class TodoStore:
             if notes is not None:
                 todo.notes = notes
             if status == TodoStatus.DONE:
-                todo.completed_at = datetime.utcnow()
+                todo.completed_at = now()
             todo.touch()
             await self._save()
         return todo

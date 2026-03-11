@@ -5,6 +5,7 @@ _job_notify routing, and /job add --channel --chat parsing.
 
 import pytest
 from datetime import datetime
+from pyclaw.utils.time import now
 from unittest.mock import AsyncMock, MagicMock
 
 from pyclaw.jobs.models import (
@@ -107,8 +108,8 @@ class TestJobNotifyRouting:
             id="r1",
             job_id="jj1",
             job_name="MyJob",
-            started_at=datetime.utcnow(),
-            ended_at=datetime.utcnow(),
+            started_at=now(),
+            ended_at=now(),
             status=JobStatus.COMPLETED if success else JobStatus.FAILED,
         )
         return run

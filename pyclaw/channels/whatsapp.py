@@ -6,6 +6,7 @@ import hmac
 import base64
 from typing import Any, Dict, Optional
 from datetime import datetime
+from pyclaw.utils.time import now
 
 from .base import ChannelAdapter, Message, MessageTarget, MediaAttachment
 
@@ -228,7 +229,7 @@ class WhatsAppAdapter(ChannelAdapter):
                             sender=msg.get("from", ""),
                             sender_name=msg.get("from", ""),  # WhatsApp doesn't provide names
                             content=content,
-                            timestamp=datetime.now(),
+                            timestamp=now(),
                             metadata={
                                 "phone_number_id": phone_number_id,
                                 "message_id": msg.get("id", ""),

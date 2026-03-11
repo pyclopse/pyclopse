@@ -11,6 +11,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 from pyclaw.core.router import IncomingMessage, OutgoingMessage
+from pyclaw.utils.time import now, today_midnight
 
 # Default agents directory
 _DEFAULT_AGENTS_DIR = "~/.pyclaw/agents"
@@ -21,7 +22,7 @@ _SESSION_ALPHABET = string.ascii_letters + string.digits
 def _generate_session_id() -> str:
     """Generate a date-prefixed session ID: YYYY-MM-DD-XXXXXX."""
     suffix = "".join(secrets.choice(_SESSION_ALPHABET) for _ in range(6))
-    return f"{datetime.utcnow().strftime('%Y-%m-%d')}-{suffix}"
+    return f"{now().strftime('%Y-%m-%d')}-{suffix}"
 
 
 @dataclass
@@ -32,8 +33,8 @@ class Session:
     agent_id: str
     channel: str
     user_id: str
-    created_at: datetime = field(default_factory=datetime.utcnow)
-    updated_at: datetime = field(default_factory=datetime.utcnow)
+    created_at: datetime = field(default_factory=now)
+    updated_at: datetime = field(default_factory=now)
     metadata: Dict[str, Any] = field(default_factory=dict)
     context: Dict[str, Any] = field(default_factory=dict)
     is_active: bool = True
@@ -50,7 +51,7 @@ class Session:
 
     def touch(self, count_delta: int = 0) -> None:
         """Update last-activity timestamp and optionally increment message_count."""
-        self.updated_at = datetime.utcnow()
+        self.updated_at = now()
         self.message_count += count_delta
         self.save_metadata()
 
@@ -172,7 +173,7 @@ class SessionManager:
     async def _reap_stale_sessions(self) -> None:
         """Remove sessions that have been idle longer than ttl_hours from the
         in-memory index only — session files are kept on disk forever."""
-        cutoff = datetime.utcnow() - timedelta(hours=self.ttl_hours)
+        cutoff = now() - timedelta(hours=self.ttl_hours)
         to_reap = [
             s.id for s in self.sessions.values() if s.updated_at < cutoff
         ]
@@ -202,8 +203,7 @@ class SessionManager:
 
     def _is_before_today(self, session: "Session") -> bool:
         """Return True if the session's last activity was before today's local midnight."""
-        today_midnight = datetime.combine(datetime.now().date(), datetime.min.time())
-        return session.updated_at < today_midnight
+        return session.updated_at < today_midnight()
 
     async def _archive_and_rollover(self, session: "Session") -> "Session":
         """Archive a stale session's history files and return a fresh replacement."""
@@ -212,7 +212,7 @@ class SessionManager:
         if session.history_dir and session.history_dir.exists():
             archive_dir = session.history_dir / "archived"
             archive_dir.mkdir(parents=True, exist_ok=True)
-            stamp = datetime.utcnow().strftime("%Y%m%d_%H%M%S")
+            stamp = now().strftime("%Y%m%d_%H%M%S")
             for hist_file in ["history.json", "history_previous.json"]:
                 p = session.history_dir / hist_file
                 if p.exists():
@@ -282,7 +282,7 @@ class SessionManager:
         """Get a session by ID."""
         session = self.sessions.get(session_id)
         if session:
-            session.updated_at = datetime.utcnow()
+            session.updated_at = now()
             session.is_active = True
         return session
 
@@ -309,7 +309,7 @@ class SessionManager:
                         and session.agent_id == agent_id and session.is_active):
                     if self.daily_rollover and self._is_before_today(session):
                         return await self._archive_and_rollover(session)
-                    session.updated_at = datetime.utcnow()
+                    session.updated_at = now()
                     return session
 
         # 2. Disk fallback — resume the most recent session even after reaper eviction
@@ -320,7 +320,7 @@ class SessionManager:
                 return await self._archive_and_rollover(session)
             # Re-register in the index so future lookups hit the fast path
             session.is_active = True
-            session.updated_at = datetime.utcnow()
+            session.updated_at = now()
             self.sessions[session.id] = session
             if session.user_id not in self.user_sessions:
                 self.user_sessions[session.user_id] = []
@@ -378,7 +378,7 @@ class SessionManager:
         for key, value in updates.items():
             if hasattr(session, key):
                 setattr(session, key, value)
-        session.updated_at = datetime.utcnow()
+        session.updated_at = now()
         return session
 
     async def delete_session(self, session_id: str) -> bool:

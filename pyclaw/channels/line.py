@@ -6,6 +6,7 @@ import base64
 import logging
 from typing import Any, Dict, Optional
 from datetime import datetime
+from pyclaw.utils.time import now
 
 from .base import ChannelAdapter, Message, MessageTarget, MediaAttachment
 
@@ -194,7 +195,7 @@ class LineAdapter(ChannelAdapter):
                     sender=event.get("source", {}).get("userId", ""),
                     sender_name=event.get("source", {}).get("userId", "Unknown"),
                     content=msg_event.get("text", ""),
-                    timestamp=datetime.now(),
+                    timestamp=now(),
                     metadata={
                         "replyToken": event.get("replyToken"),
                         "source_type": event.get("source", {}).get("type"),
@@ -211,7 +212,7 @@ class LineAdapter(ChannelAdapter):
                     sender=event.get("source", {}).get("userId", ""),
                     sender_name="LINE User",
                     content="[follow]",
-                    timestamp=datetime.now(),
+                    timestamp=now(),
                 )
             
             elif event_type == "unfollow":
@@ -221,7 +222,7 @@ class LineAdapter(ChannelAdapter):
                     sender=event.get("source", {}).get("userId", ""),
                     sender_name="LINE User",
                     content="[unfollow]",
-                    timestamp=datetime.now(),
+                    timestamp=now(),
                 )
             
             return None

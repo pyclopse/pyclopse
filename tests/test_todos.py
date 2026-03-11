@@ -13,6 +13,7 @@ import json
 import os
 import tempfile
 from datetime import datetime, timedelta
+from pyclaw.utils.time import now
 from pathlib import Path
 
 import pytest
@@ -147,7 +148,7 @@ class TestTodoStore:
     async def test_list_sort_priority_then_age(self, store):
         """Critical items come before high; within same priority, oldest first."""
         old_high = Todo(title="old-high", priority=Priority.HIGH)
-        old_high.created_at = datetime.utcnow() - timedelta(hours=2)
+        old_high.created_at = now() - timedelta(hours=2)
         new_high = Todo(title="new-high", priority=Priority.HIGH)
         critical = Todo(title="critical", priority=Priority.CRITICAL)
         for t in [new_high, old_high, critical]:
@@ -217,7 +218,7 @@ class TestTodosNext:
     @pytest.mark.asyncio
     async def test_returns_oldest_highest_priority(self, store):
         old_high = Todo(title="old-high", priority=Priority.HIGH)
-        old_high.created_at = datetime.utcnow() - timedelta(hours=3)
+        old_high.created_at = now() - timedelta(hours=3)
         new_high = Todo(title="new-high", priority=Priority.HIGH)
         critical = Todo(title="critical", priority=Priority.CRITICAL)
         for t in [new_high, old_high, critical]:
@@ -252,7 +253,7 @@ class TestTodosNext:
     @pytest.mark.asyncio
     async def test_oldest_wins_within_priority(self, store):
         old = Todo(title="old", priority=Priority.HIGH)
-        old.created_at = datetime.utcnow() - timedelta(hours=5)
+        old.created_at = now() - timedelta(hours=5)
         new = Todo(title="new", priority=Priority.HIGH)
         for t in [new, old]:
             await store.create(t)

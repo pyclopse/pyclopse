@@ -28,13 +28,8 @@ version: "1.0"
 # ─────────────────────────────────────────────
 # Per-model concurrency limits
 # ─────────────────────────────────────────────
-concurrency:
-  default: 3
-  models:
-    MiniMax-M2.5: 3
-    passthrough: 100
-    gpt-4: 5
-    claude-sonnet-4-5: 5
+# concurrency:
+#   default: 3   # optional global fallback; per-model limits live under providers.*.models
 
 # ─────────────────────────────────────────────
 # Session management
@@ -147,8 +142,17 @@ providers:
   minimax:
     enabled: true
     api_key: "${keychain:minimax-api-key}"   # reads from macOS Keychain
-    defaultModel: "MiniMax-M2.5"
-    base_url: "https://api.minimax.io/v1"
+    api_url: "https://api.minimax.io/v1"
+    # Per-model settings — concurrency limits here replace the concurrency.models section
+    models:
+      MiniMax-M2.5:
+        priority: 1
+        enabled: true
+        concurrency: 3
+      MiniMax-M1:
+        priority: 2
+        enabled: true
+        concurrency: 5
 
 # ─────────────────────────────────────────────
 # Agents
@@ -197,12 +201,20 @@ agents:
     maxTokens: 16384         # increase toward 65536+ for long reasoning tasks
     system_prompt: "You are a helpful assistant."
     useFastagent: true
-    provider:
-      type: "minimax"
-      model: "MiniMax-M2.5"
     heartbeat:
       enabled: false
     # reasoning_split separates thinking from response in streaming (MiniMax extension)
+    request_params:
+      reasoning_split: true
+
+  minimax_m1:
+    name: "MiniMax M1"
+    model: "generic.MiniMax-M1"
+    maxTokens: 16384
+    system_prompt: "You are a helpful assistant."
+    useFastagent: true
+    heartbeat:
+      enabled: false
     request_params:
       reasoning_split: true
 
