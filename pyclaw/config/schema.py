@@ -721,6 +721,13 @@ class A2AAgentConfig(BaseModel):
         validation_alias=AliasChoices("allow_outbound", "allowOutbound"),
         description="Allow this agent to call other agents via A2A client tools.",
     )
+    # "shared" (default) — inbound tasks use the agent's active session, giving
+    # the agent full conversation context.  "isolated" — each inbound A2A task
+    # gets its own fresh session with no prior context.
+    session_mode: str = Field(
+        default="shared",
+        validation_alias=AliasChoices("session_mode", "sessionMode"),
+    )
 
 
 class GatewayA2AConfig(BaseModel):

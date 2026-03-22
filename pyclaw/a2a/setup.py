@@ -142,7 +142,8 @@ def mount_a2a_routes(gateway: "Gateway", fastapi_app: Any) -> int:
                 preferred_transport=TransportProtocol.jsonrpc,
             )
 
-            executor = PyclawAgentExecutor(agent_id, gateway)
+            session_mode = getattr(agent_a2a, "session_mode", "shared") if agent_a2a else "shared"
+            executor = PyclawAgentExecutor(agent_id, gateway, session_mode=session_mode)
             handler = DefaultRequestHandler(
                 agent_executor=executor,
                 task_store=InMemoryTaskStore(),

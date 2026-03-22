@@ -16,16 +16,19 @@ logger = logging.getLogger(__name__)
 class PyclawAgentExecutor(AgentExecutor):
     """Routes an incoming A2A task message through the pyclaw gateway.
 
-    Each inbound A2A request is routed through ``gateway.handle_message()``
-    using ``channel="a2a"``, which means it lands in the agent's single active
-    session — giving the agent full conversation context (same session as
-    Telegram/Slack).  The A2A ``context_id`` is used as the sender_id so that
-    messages within the same A2A conversation context share session state.
+    session_mode="shared" (default):
+        Uses ``channel="a2a"`` → gateway's ``_get_active_session`` → the agent's
+        single active session with full conversation context.
+
+    session_mode="isolated":
+        Uses ``channel="job"`` with the A2A task_id as sender_id →
+        ``_get_or_create_session`` → a fresh session per A2A task, no prior context.
     """
 
-    def __init__(self, agent_id: str, gateway: Any) -> None:
+    def __init__(self, agent_id: str, gateway: Any, session_mode: str = "shared") -> None:
         self._agent_id = agent_id
         self._gateway = gateway
+        self._session_mode = session_mode
 
     async def execute(
         self,
@@ -36,15 +39,21 @@ class PyclawAgentExecutor(AgentExecutor):
         if not message:
             return
 
-        # Use context_id (A2A conversation context) as sender_id so multiple
-        # turns within the same A2A context share the agent's active session.
-        sender_id = context.context_id or context.task_id or "a2a"
+        if self._session_mode == "isolated":
+            # Each A2A task gets its own session — use task_id as the unique key.
+            channel = "job"
+            sender_id = str(context.task_id or "a2a-task")
+        else:
+            # Shared mode: route into the agent's active session (full context).
+            # context_id groups multi-turn A2A conversations; falls back to task_id.
+            channel = "a2a"
+            sender_id = str(context.context_id or context.task_id or "a2a")
 
         try:
             response = await self._gateway.handle_message(
-                channel="a2a",
+                channel=channel,
                 sender="a2a-client",
-                sender_id=str(sender_id),
+                sender_id=sender_id,
                 content=message,
                 agent_id=self._agent_id,
             )
