@@ -3,32 +3,35 @@
 Three-pane layout:
   ┌────────────────────────────────────────────────────────┐
   │  Header (title + clock)                                │
-  │  [Agent1] [Agent2] [Agent3]  ← agent tab strip        │
-  │  [Sessions] [History] [Jobs] [Sys Prompt]  ← view tabs │
+  │  [Agent1] [Agent2] ...  ← agent tab strip             │
+  │  [Sessions][History][Jobs][SysPrompt][Config]...       │
+  │  Status: uptime | messages | active jobs               │
   ├────────────────────────────────────────────────────────┤
-  │                                                        │
   │  Detail pane  (resizable)                              │
-  │                                                        │
   ├────────────────────────────────────────────────────────┤
   │  Log pane — live gateway logs  (resizable)             │
   └────────────────────────────────────────────────────────┘
 
 Key bindings:
-  1  Sessions      2  History     3  Jobs     4  Sys Prompt
+  1  Sessions   2  History   3  Jobs   4  Sys Prompt
+  5  Config     6  Files     7  Skills  8  Run Hist   9  Agent Log
   h  Load history for selected session
   r  Run selected job now
+  v  View run history for selected job
+  e  Edit selected file (Files view only)
+  Ctrl+S  Save file  |  Escape  Cancel edit
   [  Shrink log pane    ]  Grow log pane
-  F5 Refresh current view
-  q  Quit
+  F5 Refresh current view   q  Quit
 """
 from __future__ import annotations
 
-import asyncio
 import json
 import logging
 import queue
 import traceback
-from typing import Any, List, Optional
+from datetime import datetime, timezone
+from pathlib import Path
+from typing import Any, Dict, List, Optional, Tuple
 
 from textual import on, work
 from textual.app import App, ComposeResult
@@ -44,6 +47,7 @@ from textual.widgets import (
     Static,
     Tab,
     Tabs,
+    TextArea,
 )
 
 logger = logging.getLogger(__name__)
@@ -51,6 +55,13 @@ logger = logging.getLogger(__name__)
 # ─────────────────────────────── Log Handler ─────────────────────────────────
 
 _LOG_QUEUE: "queue.SimpleQueue[str]" = queue.SimpleQueue()
+
+# Dirs / extensions excluded from the file browser
+_BROWSER_EXCLUDE_DIRS = frozenset({
+    ".venv", "__pycache__", ".git", "node_modules",
+    "sessions", "runs", "logs", ".fast-agent",
+})
+_BROWSER_EXCLUDE_EXTS = frozenset({".pyc", ".pyo", ".bak"})
 
 
 class _QueueLogHandler(logging.Handler):
@@ -65,6 +76,17 @@ class _QueueLogHandler(logging.Handler):
             self.q.put_nowait(self.format(record))
         except Exception:
             pass
+
+
+# ─────────────────────────────── Helpers ─────────────────────────────────────
+
+def _fmt_size(n: int) -> str:
+    if n < 1024:
+        return f"{n}B"
+    elif n < 1024 * 1024:
+        return f"{n / 1024:.1f}K"
+    else:
+        return f"{n / 1024 / 1024:.1f}M"
 
 
 # ─────────────────────────────── View: Sessions ──────────────────────────────
@@ -100,7 +122,7 @@ class SessionsView(Vertical):
 
     def on_mount(self) -> None:
         t = self.query_one("#sessions-table", DataTable)
-        t.add_columns("Session ID", "Channel", "User", "Msgs", "Updated", "Active")
+        t.add_columns("Session ID", "Channel", "User", "Msgs", "Tokens", "Updated", "Active")
 
     def refresh_for_agent(self, agent_id: str) -> None:
         self._agent_id = agent_id
@@ -109,26 +131,42 @@ class SessionsView(Vertical):
     @work(thread=True)
     def _load(self) -> None:
         sessions: List[Any] = []
+        context_window: Optional[int] = None
         try:
             sm = getattr(self.gateway, "_session_manager", None)
             if sm and self._agent_id:
                 sessions = sm.list_sessions_sync(agent_id=self._agent_id)
+            am = getattr(self.gateway, "_agent_manager", None)
+            if am:
+                agent = am.agents.get(self._agent_id)
+                if agent:
+                    context_window = getattr(agent.config, "context_window", None)
         except Exception as e:
             logger.debug(f"SessionsView load error: {e}")
-        self.app.call_from_thread(self._populate, sessions)
+        self.app.call_from_thread(self._populate, sessions, context_window)
 
-    def _populate(self, sessions: List[Any]) -> None:
+    def _populate(self, sessions: List[Any], context_window: Optional[int]) -> None:
         t = self.query_one("#sessions-table", DataTable)
         hint = self.query_one("#sessions-hint", Static)
         t.clear()
         for s in sessions:
             updated = s.updated_at.strftime("%m-%d %H:%M") if s.updated_at else ""
             active = "yes" if getattr(s, "is_active", False) else "no"
+            ctx = getattr(s, "context", {}) or {}
+            ctx_tokens = ctx.get("_ctx_tokens", 0) or 0
+            if context_window and context_window > 0 and ctx_tokens:
+                pct = ctx_tokens / context_window * 100
+                tok_str = f"{ctx_tokens:,}/{context_window:,} ({pct:.0f}%)"
+            elif ctx_tokens:
+                tok_str = f"{ctx_tokens:,}"
+            else:
+                tok_str = "—"
             t.add_row(
                 s.id,
                 s.channel or "",
                 str(s.user_id or ""),
                 str(s.message_count),
+                tok_str,
                 updated,
                 active,
                 key=s.id,
@@ -265,7 +303,7 @@ class JobsView(Vertical):
 
     def on_mount(self) -> None:
         t = self.query_one("#jobs-table", DataTable)
-        t.add_columns("Name", "Schedule", "Enabled", "Status", "Next Run", "Last Run")
+        t.add_columns("Name", "Schedule", "Enabled", "Status", "Next Run", "Last Run", "Runs")
 
     def refresh_for_agent(self, agent_id: str) -> None:
         self._agent_id = agent_id
@@ -289,7 +327,6 @@ class JobsView(Vertical):
         ]
 
         for job in agent_jobs:
-            # Describe schedule
             sched = getattr(job, "schedule", None)
             if sched is not None:
                 kind = getattr(sched, "kind", "")
@@ -315,6 +352,8 @@ class JobsView(Vertical):
             if getattr(job, "last_run", None):
                 last_run = job.last_run.strftime("%m-%d %H:%M")
 
+            run_count = getattr(job, "run_count", 0)
+
             t.add_row(
                 job.name or job.id,
                 schedule_str,
@@ -322,13 +361,14 @@ class JobsView(Vertical):
                 status,
                 next_run,
                 last_run,
+                str(run_count),
                 key=job.id,
             )
 
         count = len(agent_jobs)
         bar.update(
             f"{count} job{'s' if count != 1 else ''} — agent: {self._agent_id}"
-            "  [r = run selected job now]"
+            "  [r = run now  v = view run history]"
         )
 
     def get_selected_job_id(self) -> Optional[str]:
@@ -406,6 +446,665 @@ class SystemPromptView(ScrollableContainer):
             content.update(text)
 
 
+# ─────────────────────────────── View: Agent Config ──────────────────────────
+
+
+class AgentConfigView(Vertical):
+    """Shows all AgentConfig fields for the active agent."""
+
+    DEFAULT_CSS = """
+    AgentConfigView {
+        height: 1fr;
+        overflow: hidden hidden;
+    }
+    AgentConfigView #cfg-bar {
+        height: 1;
+        background: $panel-darken-1;
+        padding: 0 1;
+        color: $text-muted;
+    }
+    AgentConfigView #cfg-table {
+        height: 1fr;
+    }
+    """
+
+    def __init__(self, gateway: Any, **kwargs: Any) -> None:
+        super().__init__(**kwargs)
+        self.gateway = gateway
+        self._agent_id: str = ""
+
+    def compose(self) -> ComposeResult:
+        yield Static("", id="cfg-bar")
+        yield DataTable(id="cfg-table", zebra_stripes=True, cursor_type="row")
+
+    def on_mount(self) -> None:
+        t = self.query_one("#cfg-table", DataTable)
+        t.add_columns("Field", "Value")
+
+    def refresh_for_agent(self, agent_id: str) -> None:
+        self._agent_id = agent_id
+        self._load()
+
+    def _load(self) -> None:
+        t = self.query_one("#cfg-table", DataTable)
+        bar = self.query_one("#cfg-bar", Static)
+        t.clear()
+
+        am = getattr(self.gateway, "_agent_manager", None)
+        if not am:
+            bar.update("Agent manager not available")
+            return
+
+        agent = am.agents.get(self._agent_id)
+        if not agent:
+            bar.update(f"Agent not found: {self._agent_id}")
+            return
+
+        cfg = agent.config
+
+        rows: List[Tuple[str, str]] = [
+            ("name", cfg.name),
+            ("model", cfg.model),
+            ("max_tokens", str(cfg.max_tokens)),
+            ("temperature", str(cfg.temperature)),
+            ("top_p", str(cfg.top_p) if cfg.top_p is not None else "—"),
+            ("context_window", f"{cfg.context_window:,}" if cfg.context_window else "—"),
+            ("max_iterations", str(cfg.max_iterations) if cfg.max_iterations is not None else "—"),
+            ("parallel_tool_calls", str(cfg.parallel_tool_calls) if cfg.parallel_tool_calls is not None else "—"),
+            ("streaming_timeout", str(cfg.streaming_timeout) if cfg.streaming_timeout is not None else "—"),
+            ("reasoning_effort", cfg.reasoning_effort or "—"),
+            ("text_verbosity", cfg.text_verbosity or "—"),
+            ("service_tier", cfg.service_tier or "—"),
+            ("show_thinking", str(cfg.show_thinking)),
+            ("typing_mode", cfg.typing_mode),
+            ("use_fastagent", str(cfg.use_fastagent)),
+            ("workflow", cfg.workflow or "—"),
+        ]
+
+        # Queue config
+        q_cfg = getattr(cfg, "queue", None)
+        if q_cfg:
+            rows.append(("queue.mode", str(getattr(q_cfg, "mode", "—"))))
+            rows.append(("queue.debounce_ms", str(getattr(q_cfg, "debounce_ms", "—"))))
+            rows.append(("queue.cap", str(getattr(q_cfg, "cap", "—"))))
+
+        # Fallbacks
+        fallbacks = getattr(cfg, "fallbacks", [])
+        rows.append(("fallbacks", ", ".join(fallbacks) if fallbacks else "—"))
+
+        # Tools profile
+        tools_cfg = getattr(cfg, "tools", None)
+        if tools_cfg:
+            rows.append(("tools.profile", str(getattr(tools_cfg, "profile", "—"))))
+
+        # Extra request_params
+        rp = getattr(cfg, "request_params", None)
+        if rp:
+            for k, v in rp.items():
+                rows.append((f"request_params.{k}", str(v)))
+
+        for field_name, value in rows:
+            t.add_row(field_name, value, key=field_name)
+
+        bar.update(f"Agent config — {self._agent_id}  ({len(rows)} fields)")
+
+
+# ─────────────────────────────── View: File Browser ──────────────────────────
+
+
+class FileBrowserView(Vertical):
+    """File browser + viewer/editor for ~/.pyclaw/agents/{id}/"""
+
+    DEFAULT_CSS = """
+    FileBrowserView {
+        height: 1fr;
+        overflow: hidden hidden;
+    }
+    FileBrowserView #fb-bar {
+        height: 1;
+        background: $panel-darken-1;
+        padding: 0 1;
+        color: $text-muted;
+    }
+    FileBrowserView #fb-table {
+        height: 35%;
+    }
+    FileBrowserView #fb-content-bar {
+        height: 1;
+        background: $panel-darken-2;
+        padding: 0 1;
+        color: $text-muted;
+    }
+    FileBrowserView #fb-view {
+        height: 1fr;
+        overflow-y: scroll;
+    }
+    FileBrowserView #fb-editor {
+        height: 1fr;
+        display: none;
+    }
+    """
+
+    def __init__(self, gateway: Any, **kwargs: Any) -> None:
+        super().__init__(**kwargs)
+        self.gateway = gateway
+        self._agent_id: str = ""
+        self._current_file: Optional[Path] = None
+        self._editing: bool = False
+        self._agents_dir = Path("~/.pyclaw/agents").expanduser()
+
+    def compose(self) -> ComposeResult:
+        yield Static("", id="fb-bar")
+        yield DataTable(id="fb-table", zebra_stripes=True, cursor_type="row")
+        yield Static("— select a file above —", id="fb-content-bar")
+        yield RichLog(id="fb-view", auto_scroll=False, markup=False, highlight=True)
+        yield TextArea(id="fb-editor")
+
+    def on_mount(self) -> None:
+        t = self.query_one("#fb-table", DataTable)
+        t.add_columns("File", "Size", "Modified")
+
+    def refresh_for_agent(self, agent_id: str) -> None:
+        self._agent_id = agent_id
+        self._current_file = None
+        self._exit_edit_mode()
+        self._load_file_list()
+
+    @work(thread=True)
+    def _load_file_list(self) -> None:
+        agent_dir = self._agents_dir / self._agent_id
+        files: List[Tuple[str, str, str]] = []
+        try:
+            if agent_dir.exists():
+                for p in sorted(agent_dir.rglob("*")):
+                    if not p.is_file():
+                        continue
+                    parts = p.relative_to(agent_dir).parts
+                    if any(part in _BROWSER_EXCLUDE_DIRS for part in parts):
+                        continue
+                    if p.suffix in _BROWSER_EXCLUDE_EXTS:
+                        continue
+                    rel = str(p.relative_to(agent_dir))
+                    size = _fmt_size(p.stat().st_size)
+                    mtime = datetime.fromtimestamp(p.stat().st_mtime).strftime("%m-%d %H:%M")
+                    files.append((rel, size, mtime))
+        except Exception as e:
+            logger.debug(f"FileBrowserView list error: {e}")
+        self.app.call_from_thread(self._populate_list, files)
+
+    def _populate_list(self, files: List[Tuple[str, str, str]]) -> None:
+        t = self.query_one("#fb-table", DataTable)
+        bar = self.query_one("#fb-bar", Static)
+        t.clear()
+        for rel, size, mtime in files:
+            t.add_row(rel, size, mtime, key=rel)
+        bar.update(
+            f"{len(files)} files — {self._agent_id}"
+            "  [Enter=view  e=edit  Ctrl+S=save  Escape=cancel]"
+        )
+
+    @on(DataTable.RowSelected, "#fb-table")
+    def on_file_selected(self, event: DataTable.RowSelected) -> None:
+        rel = str(event.row_key.value)
+        self._current_file = self._agents_dir / self._agent_id / rel
+        self._exit_edit_mode()
+        self._load_file_content()
+
+    @work(thread=True)
+    def _load_file_content(self) -> None:
+        content = ""
+        error = ""
+        if self._current_file and self._current_file.exists():
+            try:
+                content = self._current_file.read_text(encoding="utf-8", errors="replace")
+            except Exception as e:
+                error = str(e)
+        self.app.call_from_thread(self._display_content, content, error)
+
+    def _display_content(self, content: str, error: str) -> None:
+        view = self.query_one("#fb-view", RichLog)
+        bar = self.query_one("#fb-content-bar", Static)
+        view.clear()
+        if error:
+            view.write(f"Error reading file: {error}")
+            bar.update(f"Error — {self._current_file}")
+        else:
+            view.write(content)
+            rel = self._rel_path()
+            bar.update(f"{rel}  ({len(content):,} chars)  [e = edit]")
+
+    def enter_edit_mode(self) -> bool:
+        """Switch to TextArea edit mode. Returns True if successful."""
+        if not self._current_file or self._editing:
+            return False
+        try:
+            content = self._current_file.read_text(encoding="utf-8", errors="replace")
+        except Exception:
+            return False
+        self._editing = True
+        editor = self.query_one("#fb-editor", TextArea)
+        view = self.query_one("#fb-view", RichLog)
+        editor.load_text(content)
+        view.display = False
+        editor.display = True
+        editor.focus()
+        bar = self.query_one("#fb-content-bar", Static)
+        bar.update(f"EDITING: {self._rel_path()}  [Ctrl+S=save  Escape=cancel]")
+        return True
+
+    def save_file(self) -> bool:
+        """Save the TextArea content to disk. Returns True on success."""
+        if not self._editing or not self._current_file:
+            return False
+        editor = self.query_one("#fb-editor", TextArea)
+        content = editor.text
+        try:
+            self._current_file.write_text(content, encoding="utf-8")
+            # Tell the file watcher we did this write so it doesn't re-trigger
+            fw = getattr(getattr(self.app, "gateway", None), "_file_watcher", None)
+            if fw:
+                fw.acknowledge(self._current_file)
+        except Exception as e:
+            bar = self.query_one("#fb-content-bar", Static)
+            bar.update(f"Save FAILED: {e}")
+            return False
+        self._exit_edit_mode()
+        # Re-display the saved content
+        self._load_file_content()
+        return True
+
+    def cancel_edit(self) -> bool:
+        """Exit edit mode without saving. Returns True if was editing."""
+        if not self._editing:
+            return False
+        self._exit_edit_mode()
+        self._load_file_content()
+        return True
+
+    def _exit_edit_mode(self) -> None:
+        self._editing = False
+        try:
+            self.query_one("#fb-editor", TextArea).display = False
+            self.query_one("#fb-view", RichLog).display = True
+        except Exception:
+            pass
+
+    def _rel_path(self) -> str:
+        if not self._current_file:
+            return ""
+        try:
+            return str(self._current_file.relative_to(self._agents_dir / self._agent_id))
+        except Exception:
+            return str(self._current_file)
+
+    def is_editing(self) -> bool:
+        return self._editing
+
+
+# ─────────────────────────────── View: Skills ────────────────────────────────
+
+
+class SkillsView(Vertical):
+    """Lists discovered skills + SKILL.md body viewer."""
+
+    DEFAULT_CSS = """
+    SkillsView {
+        height: 1fr;
+        overflow: hidden hidden;
+    }
+    SkillsView #sk-bar {
+        height: 1;
+        background: $panel-darken-1;
+        padding: 0 1;
+        color: $text-muted;
+    }
+    SkillsView #sk-table {
+        height: 40%;
+    }
+    SkillsView #sk-body-bar {
+        height: 1;
+        background: $panel-darken-2;
+        padding: 0 1;
+        color: $text-muted;
+    }
+    SkillsView #sk-body {
+        height: 1fr;
+    }
+    """
+
+    def __init__(self, gateway: Any, **kwargs: Any) -> None:
+        super().__init__(**kwargs)
+        self.gateway = gateway
+        self._agent_id: str = ""
+
+    def compose(self) -> ComposeResult:
+        yield Static("", id="sk-bar")
+        yield DataTable(id="sk-table", zebra_stripes=True, cursor_type="row")
+        yield Static("Select a skill to view its SKILL.md", id="sk-body-bar")
+        yield RichLog(id="sk-body", auto_scroll=False, markup=False, highlight=True)
+
+    def on_mount(self) -> None:
+        t = self.query_one("#sk-table", DataTable)
+        t.add_columns("Name", "Version", "Allowed Tools", "Description")
+
+    def refresh_for_agent(self, agent_id: str) -> None:
+        self._agent_id = agent_id
+        self._load()
+
+    @work(thread=True)
+    def _load(self) -> None:
+        skills: List[Any] = []
+        try:
+            from pyclaw.skills.registry import discover_skills
+
+            gw = getattr(self.app, "gateway", None)
+            am = getattr(gw, "_agent_manager", None)
+            gw_dirs: List[str] = []
+            agent_dirs: List[str] = []
+            if am:
+                agent = am.agents.get(self._agent_id)
+                if agent:
+                    pc = getattr(agent, "pyclaw_config", None)
+                    gw_cfg = getattr(pc, "gateway", None) if pc else None
+                    gw_dirs = list(getattr(gw_cfg, "skills_dirs", None) or [])
+                    agent_dirs = list(getattr(agent.config, "skills_dirs", None) or [])
+            extra = gw_dirs + agent_dirs
+            skills = discover_skills(
+                agent_name=self._agent_id,
+                config_dir="~/.pyclaw",
+                extra_dirs=extra or None,
+            )
+        except Exception as e:
+            logger.debug(f"SkillsView load error: {e}")
+        self.app.call_from_thread(self._populate, skills)
+
+    def _populate(self, skills: List[Any]) -> None:
+        t = self.query_one("#sk-table", DataTable)
+        bar = self.query_one("#sk-bar", Static)
+        t.clear()
+        for skill in skills:
+            t.add_row(
+                skill.name,
+                skill.version or "—",
+                " ".join(skill.allowed_tools) if skill.allowed_tools else "—",
+                (skill.description or "")[:80],
+                key=skill.name,
+            )
+        bar.update(
+            f"{len(skills)} skill{'s' if len(skills) != 1 else ''} — agent: {self._agent_id}"
+            "  [Enter = view SKILL.md]"
+        )
+
+    @on(DataTable.RowSelected, "#sk-table")
+    def on_skill_selected(self, event: DataTable.RowSelected) -> None:
+        self._load_body(str(event.row_key.value))
+
+    @work(thread=True)
+    def _load_body(self, skill_name: str) -> None:
+        body = ""
+        error = ""
+        try:
+            from pyclaw.skills.registry import find_skill
+
+            skill = find_skill(skill_name, agent_name=self._agent_id, config_dir="~/.pyclaw")
+            if skill:
+                body = skill.read_content()
+            else:
+                error = f"Skill not found: {skill_name}"
+        except Exception as e:
+            error = str(e)
+        self.app.call_from_thread(self._display_body, skill_name, body, error)
+
+    def _display_body(self, skill_name: str, body: str, error: str) -> None:
+        log = self.query_one("#sk-body", RichLog)
+        bar = self.query_one("#sk-body-bar", Static)
+        log.clear()
+        if error:
+            bar.update(f"Error — {error[:100]}")
+            log.write(error)
+        else:
+            bar.update(f"SKILL.md — {skill_name}  ({len(body):,} chars)")
+            log.write(body)
+
+
+# ─────────────────────────────── View: Run History ───────────────────────────
+
+
+class RunHistoryView(Vertical):
+    """Shows run history for a job from ~/.pyclaw/agents/{id}/runs/ JSONL."""
+
+    DEFAULT_CSS = """
+    RunHistoryView {
+        height: 1fr;
+        overflow: hidden hidden;
+    }
+    RunHistoryView #rh-bar {
+        height: 1;
+        background: $panel-darken-1;
+        padding: 0 1;
+        color: $text-muted;
+    }
+    RunHistoryView #rh-table {
+        height: 40%;
+    }
+    RunHistoryView #rh-detail-bar {
+        height: 1;
+        background: $panel-darken-2;
+        padding: 0 1;
+        color: $text-muted;
+    }
+    RunHistoryView #rh-detail {
+        height: 1fr;
+    }
+    """
+
+    def __init__(self, gateway: Any, **kwargs: Any) -> None:
+        super().__init__(**kwargs)
+        self.gateway = gateway
+        self._agent_id: str = ""
+        self._job_id: str = ""
+        self._job_name: str = ""
+        self._runs: List[Dict[str, Any]] = []
+
+    def compose(self) -> ComposeResult:
+        yield Static(
+            "Select a job in Jobs view then press v to load run history.",
+            id="rh-bar",
+        )
+        yield DataTable(id="rh-table", zebra_stripes=True, cursor_type="row")
+        yield Static("Select a run to view its output", id="rh-detail-bar")
+        yield RichLog(id="rh-detail", auto_scroll=False, markup=False, highlight=False)
+
+    def on_mount(self) -> None:
+        t = self.query_one("#rh-table", DataTable)
+        t.add_columns("Started", "Duration", "Status", "Output Preview")
+
+    def load_job(self, agent_id: str, job_id: str, job_name: str = "") -> None:
+        self._agent_id = agent_id
+        self._job_id = job_id
+        self._job_name = job_name
+        self.query_one("#rh-bar", Static).update(
+            f"Loading runs for: {job_name or job_id} …"
+        )
+        self._load()
+
+    @work(thread=True)
+    def _load(self) -> None:
+        runs: List[Dict[str, Any]] = []
+        runs_file = (
+            Path("~/.pyclaw/agents").expanduser()
+            / self._agent_id
+            / "runs"
+            / f"{self._job_id}.jsonl"
+        )
+        try:
+            if runs_file.exists():
+                lines = runs_file.read_text().splitlines()
+                for line in reversed(lines):
+                    line = line.strip()
+                    if line:
+                        try:
+                            runs.append(json.loads(line))
+                        except json.JSONDecodeError:
+                            pass
+        except Exception as e:
+            logger.debug(f"RunHistoryView load error: {e}")
+        self.app.call_from_thread(self._populate, runs)
+
+    def _populate(self, runs: List[Dict[str, Any]]) -> None:
+        self._runs = runs
+        t = self.query_one("#rh-table", DataTable)
+        bar = self.query_one("#rh-bar", Static)
+        t.clear()
+        for i, run in enumerate(runs):
+            started_raw = run.get("started_at", "")
+            started_str = started_raw
+            try:
+                started_str = datetime.fromisoformat(started_raw).strftime("%m-%d %H:%M:%S")
+            except Exception:
+                pass
+            dur = ""
+            try:
+                s = datetime.fromisoformat(run.get("started_at", ""))
+                e = datetime.fromisoformat(run.get("ended_at", ""))
+                dur = f"{(e - s).total_seconds():.1f}s"
+            except Exception:
+                pass
+            status = run.get("status", "?")
+            preview = (run.get("stdout", "") or "").replace("\n", " ")[:60]
+            t.add_row(started_str, dur, status, preview, key=str(i))
+        bar.update(
+            f"{len(runs)} run{'s' if len(runs) != 1 else ''} — {self._job_name or self._job_id}"
+            "  [Enter = view output]"
+        )
+
+    @on(DataTable.RowSelected, "#rh-table")
+    def on_run_selected(self, event: DataTable.RowSelected) -> None:
+        idx = int(str(event.row_key.value))
+        if 0 <= idx < len(self._runs):
+            run = self._runs[idx]
+            log = self.query_one("#rh-detail", RichLog)
+            detail_bar = self.query_one("#rh-detail-bar", Static)
+            log.clear()
+            log.write(f"Run ID:  {run.get('id', '?')}")
+            log.write(f"Status:  {run.get('status', '?')}")
+            log.write(f"Started: {run.get('started_at', '?')}")
+            log.write(f"Ended:   {run.get('ended_at', '?')}")
+            if run.get("error"):
+                log.write(f"Error:   {run['error']}")
+            log.write("")
+            log.write("=== STDOUT ===")
+            log.write(run.get("stdout", "") or "(empty)")
+            if run.get("stderr"):
+                log.write("")
+                log.write("=== STDERR ===")
+                log.write(run["stderr"])
+            detail_bar.update(f"Run {run.get('id', '?')}  [{run.get('status', '?')}]")
+
+
+# ─────────────────────────────── View: Agent Log ─────────────────────────────
+
+
+class AgentLogView(Vertical):
+    """Live tail of ~/.pyclaw/agents/{id}/logs/agent.log"""
+
+    DEFAULT_CSS = """
+    AgentLogView {
+        height: 1fr;
+        overflow: hidden hidden;
+    }
+    AgentLogView #al-bar {
+        height: 1;
+        background: $panel-darken-1;
+        padding: 0 1;
+        color: $text-muted;
+    }
+    AgentLogView #al-log {
+        height: 1fr;
+    }
+    """
+
+    TAIL_LINES = 500
+
+    def __init__(self, gateway: Any, **kwargs: Any) -> None:
+        super().__init__(**kwargs)
+        self.gateway = gateway
+        self._agent_id: str = ""
+        self._log_path: Optional[Path] = None
+        self._last_size: int = 0
+
+    def compose(self) -> ComposeResult:
+        yield Static("", id="al-bar")
+        yield RichLog(id="al-log", auto_scroll=True, markup=False, highlight=False)
+
+    def refresh_for_agent(self, agent_id: str) -> None:
+        if self._agent_id == agent_id:
+            return
+        self._agent_id = agent_id
+        self._log_path = (
+            Path("~/.pyclaw/agents").expanduser() / agent_id / "logs" / "agent.log"
+        )
+        self._last_size = 0
+        self._do_load()
+
+    def tail_refresh(self) -> None:
+        """Append any new log lines since last read."""
+        if self._agent_id:
+            self._do_tail()
+
+    @work(thread=True)
+    def _do_load(self) -> None:
+        lines: List[str] = []
+        exists = False
+        try:
+            if self._log_path and self._log_path.exists():
+                exists = True
+                all_lines = self._log_path.read_text(
+                    encoding="utf-8", errors="replace"
+                ).splitlines()
+                lines = all_lines[-self.TAIL_LINES:]
+                self._last_size = self._log_path.stat().st_size
+        except Exception as e:
+            lines = [f"Error reading log: {e}"]
+        self.app.call_from_thread(self._populate, lines, exists)
+
+    def _populate(self, lines: List[str], exists: bool) -> None:
+        log = self.query_one("#al-log", RichLog)
+        bar = self.query_one("#al-bar", Static)
+        log.clear()
+        if not exists:
+            bar.update(f"No agent.log found for: {self._agent_id}")
+            log.write(f"Log file not found: {self._log_path}")
+            return
+        for line in lines:
+            log.write(line)
+        bar.update(
+            f"agent.log — {self._agent_id}  (last {len(lines)} lines, live tail)"
+        )
+
+    @work(thread=True)
+    def _do_tail(self) -> None:
+        new_lines: List[str] = []
+        try:
+            if self._log_path and self._log_path.exists():
+                size = self._log_path.stat().st_size
+                if size > self._last_size:
+                    with open(self._log_path, encoding="utf-8", errors="replace") as f:
+                        f.seek(self._last_size)
+                        new_content = f.read()
+                    self._last_size = size
+                    new_lines = new_content.splitlines()
+        except Exception as e:
+            logger.debug(f"AgentLogView tail error: {e}")
+        if new_lines:
+            self.app.call_from_thread(self._append_lines, new_lines)
+
+    def _append_lines(self, lines: List[str]) -> None:
+        log = self.query_one("#al-log", RichLog)
+        for line in lines:
+            log.write(line)
+
+
 # ─────────────────────────────── Main Dashboard ──────────────────────────────
 
 
@@ -420,32 +1119,34 @@ class GatewayDashboard(App):
         background: $surface;
     }
 
-    /* Agent tab strip */
     #agent-tabs {
         height: 3;
         background: $panel;
     }
 
-    /* View selector tabs */
     #view-tabs {
         height: 3;
         background: $panel-darken-1;
     }
 
-    /* Vertical split area fills all remaining space */
+    #status-bar {
+        height: 1;
+        background: $panel-darken-2;
+        padding: 0 1;
+        color: $text-muted;
+    }
+
     #split-area {
         height: 1fr;
         overflow: hidden hidden;
     }
 
-    /* Detail pane — 7/10 of split area by default */
     #detail-pane {
         height: 7fr;
         border-bottom: solid $border;
         overflow: hidden hidden;
     }
 
-    /* Log pane — 3/10 of split area by default */
     #log-pane {
         height: 3fr;
         overflow: hidden hidden;
@@ -475,16 +1176,24 @@ class GatewayDashboard(App):
         Binding("2", "view_history", "2:History", show=True),
         Binding("3", "view_jobs", "3:Jobs", show=True),
         Binding("4", "view_sysprompt", "4:SysPrompt", show=True),
-        Binding("h", "load_history", "h:Load Hist", show=True),
-        Binding("r", "run_job", "r:Run Job", show=True),
-        Binding("[", "shrink_log", "[:Shrink Log", show=True),
-        Binding("]", "grow_log", "]:Grow Log", show=True),
+        Binding("5", "view_config", "5:Config", show=True),
+        Binding("6", "view_files", "6:Files", show=True),
+        Binding("7", "view_skills", "7:Skills", show=True),
+        Binding("8", "view_runhistory", "8:RunHist", show=True),
+        Binding("9", "view_agentlog", "9:AgentLog", show=True),
+        Binding("h", "load_history", "h:Hist", show=True),
+        Binding("r", "run_job", "r:Run", show=True),
+        Binding("v", "view_job_runs", "v:Runs", show=True),
+        Binding("e", "edit_file", "e:Edit", show=False),
+        Binding("ctrl+s", "save_file", "Ctrl+S:Save", show=False, priority=True),
+        Binding("escape", "cancel_edit", "Esc:Cancel", show=False, priority=True),
+        Binding("[", "shrink_log", "[:Shrink", show=True),
+        Binding("]", "grow_log", "]:Grow", show=True),
         Binding("f5", "refresh_view", "F5:Refresh", show=False),
         Binding("q", "quit", "q:Quit", show=True),
         Binding("ctrl+q", "quit", "Quit", show=False),
     ]
 
-    # Reactive state
     _log_pct: reactive[int] = reactive(30)
     _active_agent: reactive[str] = reactive("")
     _active_view: reactive[str] = reactive("sessions")
@@ -499,30 +1208,36 @@ class GatewayDashboard(App):
 
     def compose(self) -> ComposeResult:
         yield Header(show_clock=True)
-
-        # Agent tab strip — tabs added dynamically in on_mount
         yield Tabs(id="agent-tabs")
-
-        # View selector tabs
         yield Tabs(
             Tab("Sessions", id="tab-sessions"),
             Tab("History", id="tab-history"),
             Tab("Jobs", id="tab-jobs"),
             Tab("Sys Prompt", id="tab-sysprompt"),
+            Tab("Config", id="tab-config"),
+            Tab("Files", id="tab-files"),
+            Tab("Skills", id="tab-skills"),
+            Tab("Run Hist", id="tab-runhistory"),
+            Tab("Agent Log", id="tab-agentlog"),
             id="view-tabs",
         )
+        yield Static("", id="status-bar")
 
-        # Split: detail pane (top) + log pane (bottom)
         with Vertical(id="split-area"):
             with ContentSwitcher(id="detail-pane", initial="view-sessions"):
                 yield SessionsView(self.gateway, id="view-sessions")
                 yield HistoryView(self.gateway, id="view-history")
                 yield JobsView(self.gateway, id="view-jobs")
                 yield SystemPromptView(self.gateway, id="view-sysprompt")
+                yield AgentConfigView(self.gateway, id="view-config")
+                yield FileBrowserView(self.gateway, id="view-files")
+                yield SkillsView(self.gateway, id="view-skills")
+                yield RunHistoryView(self.gateway, id="view-runhistory")
+                yield AgentLogView(self.gateway, id="view-agentlog")
 
             with Vertical(id="log-pane"):
                 yield Static(
-                    "Gateway Logs  — [ / ] to resize pane",
+                    "Gateway Logs  — [ / ] to resize",
                     id="log-header",
                 )
                 yield RichLog(
@@ -538,11 +1253,6 @@ class GatewayDashboard(App):
 
     def on_mount(self) -> None:
         root = logging.getLogger()
-
-        # Remove StreamHandlers from root logger AND from uvicorn's own loggers
-        # (uvicorn installs handlers directly on its loggers, bypassing root).
-        # Any handler that writes to a stream (stdout/stderr) will bleed through
-        # the Textual display; file handlers and our queue handler are fine.
         _sweep_targets = [
             root,
             logging.getLogger("uvicorn"),
@@ -561,9 +1271,6 @@ class GatewayDashboard(App):
                     target_logger.removeHandler(h)
                     self._suppressed_handlers.append((target_logger, h))
 
-        # Attach queue-based log handler — all logs flow here instead
-
-        # Attach queue-based log handler — all logs flow here instead
         fmt = logging.Formatter(
             "%(asctime)s %(name)-20s %(levelname)-7s %(message)s",
             datefmt="%H:%M:%S",
@@ -573,19 +1280,17 @@ class GatewayDashboard(App):
         self._log_handler.setLevel(logging.INFO)
         root.addHandler(self._log_handler)
 
-        # Build agent tabs
         self._populate_agent_tabs()
 
-        # Periodic tasks
         self.set_interval(0.2, self._drain_logs)
         self.set_interval(5.0, self._auto_refresh)
+        self.set_interval(2.0, self._tail_agent_log)
 
     def on_unmount(self) -> None:
         root = logging.getLogger()
         if self._log_handler:
             root.removeHandler(self._log_handler)
             self._log_handler = None
-        # Restore suppressed console handlers to their original loggers
         for target_logger, h in self._suppressed_handlers:
             target_logger.addHandler(h)
         self._suppressed_handlers.clear()
@@ -603,7 +1308,6 @@ class GatewayDashboard(App):
         for agent_id in agents:
             agent_tabs.add_tab(Tab(agent_id, id=f"agent-{agent_id}"))
         if agents:
-            # Select first agent; Tabs fires TabActivated which triggers refresh
             self._active_agent = agents[0]
 
     @on(Tabs.TabActivated, "#agent-tabs")
@@ -623,6 +1327,11 @@ class GatewayDashboard(App):
             "tab-history": "history",
             "tab-jobs": "jobs",
             "tab-sysprompt": "sysprompt",
+            "tab-config": "config",
+            "tab-files": "files",
+            "tab-skills": "skills",
+            "tab-runhistory": "runhistory",
+            "tab-agentlog": "agentlog",
         }
         view = tab_map.get(event.tab.id or "")
         if view:
@@ -637,8 +1346,7 @@ class GatewayDashboard(App):
         self._refresh_view_for_agent(self._active_agent)
 
     def _set_view_tab(self, tab_id: str) -> None:
-        view_tabs = self.query_one("#view-tabs", Tabs)
-        view_tabs.active = tab_id
+        self.query_one("#view-tabs", Tabs).active = tab_id
 
     def _refresh_view_for_agent(self, agent_id: str) -> None:
         if not agent_id or agent_id == "(no agents)":
@@ -650,12 +1358,68 @@ class GatewayDashboard(App):
             self.query_one(JobsView).refresh_for_agent(agent_id)
         elif view == "sysprompt":
             self.query_one(SystemPromptView).refresh_for_agent(agent_id)
-        # History is loaded on demand (h key), not auto-refreshed
+        elif view == "config":
+            self.query_one(AgentConfigView).refresh_for_agent(agent_id)
+        elif view == "files":
+            self.query_one(FileBrowserView).refresh_for_agent(agent_id)
+        elif view == "skills":
+            self.query_one(SkillsView).refresh_for_agent(agent_id)
+        elif view == "agentlog":
+            self.query_one(AgentLogView).refresh_for_agent(agent_id)
+        # history and runhistory are loaded on demand
 
     def _auto_refresh(self) -> None:
-        """Periodic refresh for live-data views."""
         if self._active_view in ("sessions", "jobs"):
             self._refresh_view_for_agent(self._active_agent)
+        self._update_status_bar()
+
+    def _tail_agent_log(self) -> None:
+        if self._active_view == "agentlog":
+            self.query_one(AgentLogView).tail_refresh()
+
+    # ── Status bar ────────────────────────────────────────────────────────────
+
+    def _update_status_bar(self) -> None:
+        bar = self.query_one("#status-bar", Static)
+        parts: List[str] = []
+
+        usage = getattr(self.gateway, "_usage", {}) or {}
+
+        started_at = usage.get("started_at")
+        if started_at:
+            try:
+                now_utc = datetime.now(timezone.utc)
+                if isinstance(started_at, datetime):
+                    sa = started_at if started_at.tzinfo else started_at.replace(tzinfo=timezone.utc)
+                else:
+                    sa = datetime.fromisoformat(str(started_at))
+                    if sa.tzinfo is None:
+                        sa = sa.replace(tzinfo=timezone.utc)
+                total_secs = int((now_utc - sa).total_seconds())
+                h, rem = divmod(max(0, total_secs), 3600)
+                m, s = divmod(rem, 60)
+                parts.append(f"Up: {h}h{m:02d}m{s:02d}s")
+            except Exception:
+                pass
+
+        msgs_total = usage.get("messages_total") or usage.get("messages", 0)
+        if msgs_total:
+            parts.append(f"Msgs: {msgs_total}")
+
+        msgs_by_agent = usage.get("messages_by_agent", {}) or {}
+        if self._active_agent and msgs_by_agent.get(self._active_agent):
+            parts.append(f"{self._active_agent}: {msgs_by_agent[self._active_agent]}")
+
+        js = getattr(self.gateway, "_job_scheduler", None)
+        if js:
+            running = getattr(js, "_running_jobs", set())
+            total_jobs = len(js.jobs)
+            if running:
+                parts.append(f"Jobs: {len(running)} running / {total_jobs}")
+            else:
+                parts.append(f"Jobs: {total_jobs} scheduled")
+
+        bar.update("  |  ".join(parts) if parts else "Gateway active")
 
     # ── Actions ───────────────────────────────────────────────────────────────
 
@@ -675,25 +1439,41 @@ class GatewayDashboard(App):
         self._switch_view("sysprompt")
         self._set_view_tab("tab-sysprompt")
 
+    def action_view_config(self) -> None:
+        self._switch_view("config")
+        self._set_view_tab("tab-config")
+
+    def action_view_files(self) -> None:
+        self._switch_view("files")
+        self._set_view_tab("tab-files")
+
+    def action_view_skills(self) -> None:
+        self._switch_view("skills")
+        self._set_view_tab("tab-skills")
+
+    def action_view_runhistory(self) -> None:
+        self._switch_view("runhistory")
+        self._set_view_tab("tab-runhistory")
+
+    def action_view_agentlog(self) -> None:
+        self._switch_view("agentlog")
+        self._set_view_tab("tab-agentlog")
+
     def action_load_history(self) -> None:
-        """Load history for the session currently selected in Sessions view."""
-        sessions_view = self.query_one(SessionsView)
-        session_id = sessions_view.get_selected_session_id()
+        session_id = self.query_one(SessionsView).get_selected_session_id()
         if not session_id:
             return
         self.action_view_history()
         self.query_one(HistoryView).load_session(self._active_agent, session_id)
 
     async def action_run_job(self) -> None:
-        """Run the job currently selected in the Jobs view."""
         if self._active_view != "jobs":
             self.action_view_jobs()
             return
-        jobs_view = self.query_one(JobsView)
-        job_id = jobs_view.get_selected_job_id()
+        job_id = self.query_one(JobsView).get_selected_job_id()
         log = self.query_one("#log-richlog", RichLog)
         if not job_id:
-            log.write("[dashboard] No job selected — navigate to Jobs view and select a row")
+            log.write("[dashboard] No job selected")
             return
         js = getattr(self.gateway, "_job_scheduler", None)
         if not js:
@@ -701,12 +1481,49 @@ class GatewayDashboard(App):
             return
         job = js.jobs.get(job_id)
         name = (job.name or job_id) if job else job_id
-        log.write(f"[dashboard] Triggering job: {name} ({job_id})")
+        log.write(f"[dashboard] Triggering job: {name}")
         try:
             await js.run_job_now(job_id)
             log.write(f"[dashboard] Job triggered: {name}")
         except Exception as e:
             log.write(f"[dashboard] Error triggering job: {e}")
+
+    def action_view_job_runs(self) -> None:
+        job_id = self.query_one(JobsView).get_selected_job_id()
+        log = self.query_one("#log-richlog", RichLog)
+        if not job_id:
+            log.write("[dashboard] Select a job in Jobs view first (press 3)")
+            return
+        js = getattr(self.gateway, "_job_scheduler", None)
+        job_name = ""
+        if js:
+            job = js.jobs.get(job_id)
+            job_name = (job.name or job_id) if job else job_id
+        self.action_view_runhistory()
+        self.query_one(RunHistoryView).load_job(self._active_agent, job_id, job_name)
+
+    def action_edit_file(self) -> None:
+        if self._active_view != "files":
+            return
+        fb = self.query_one(FileBrowserView)
+        if not fb.enter_edit_mode():
+            log = self.query_one("#log-richlog", RichLog)
+            log.write("[dashboard] Select a file first (press Enter on a file row)")
+
+    def action_save_file(self) -> None:
+        if self._active_view != "files":
+            return
+        fb = self.query_one(FileBrowserView)
+        log = self.query_one("#log-richlog", RichLog)
+        if fb.save_file():
+            log.write(f"[dashboard] Saved: {fb._rel_path()}")
+        elif fb.is_editing():
+            log.write("[dashboard] Save failed — check log for details")
+
+    def action_cancel_edit(self) -> None:
+        if self._active_view != "files":
+            return
+        self.query_one(FileBrowserView).cancel_edit()
 
     def action_refresh_view(self) -> None:
         self._refresh_view_for_agent(self._active_agent)
