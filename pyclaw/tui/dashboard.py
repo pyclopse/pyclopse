@@ -1114,27 +1114,156 @@ class AgentLogView(Vertical):
             log.write(line)
 
 
+# ─────────────────────────────── A2A card builder ────────────────────────────
+
+
+def _build_a2a_card(agent_id: str, gateway: Any) -> dict:
+    """Build an A2A-spec AgentCard dict for *agent_id*."""
+    am = getattr(gateway, "_agent_manager", None)
+    agent = am.agents.get(agent_id) if am else None
+    cfg = agent.config if agent else None
+
+    # Base URL: try to derive from gateway REST API port
+    gw_cfg = getattr(gateway, "_config", None)
+    api_port = 8080
+    try:
+        api_port = gw_cfg.gateway.api_port or 8080
+    except Exception:
+        pass
+    base_url = f"http://localhost:{api_port}"
+    agent_url = f"{base_url}/a2a/{agent_id}"
+
+    # Pyclaw version
+    try:
+        from pyclaw import __version__ as _pyclaw_ver
+        version = _pyclaw_ver
+    except Exception:
+        version = "0.0.0"
+
+    # Description
+    description = ""
+    if cfg:
+        description = getattr(cfg, "description", "") or ""
+    if not description:
+        description = f"pyclaw agent: {agent_id}"
+
+    # Capabilities
+    has_telegram = bool(getattr(gateway, "_tg_app", None))
+    has_slack = bool(getattr(gateway, "_slack_web_client", None) or getattr(gateway, "_slack_socket", None))
+    push_notifications = has_telegram or has_slack
+    capabilities = {
+        "streaming": True,
+        "pushNotifications": push_notifications,
+        "stateTransitionHistory": False,
+    }
+
+    # Authentication — check if API key is configured
+    security_schemes: dict = {}
+    security: list = []
+    api_key_cfg = None
+    try:
+        api_key_cfg = gw_cfg.gateway.api_key if gw_cfg else None
+    except Exception:
+        pass
+    if api_key_cfg:
+        security_schemes["apiKey"] = {
+            "type": "apiKey",
+            "name": "X-API-Key",
+            "in": "header",
+        }
+        security.append({"apiKey": []})
+
+    # Skills — convert pyclaw skills to A2A AgentSkill objects
+    a2a_skills: list = []
+    try:
+        from pyclaw.skills.registry import discover_skills
+        extra_dirs = list(getattr(cfg, "skills_dirs", None) or []) if cfg else []
+        if gw_cfg and gw_cfg.gateway:
+            for d in (getattr(gw_cfg.gateway, "skills_dirs", None) or []):
+                if d not in extra_dirs:
+                    extra_dirs.append(d)
+        skills = discover_skills(
+            agent_name=agent_id,
+            config_dir="~/.pyclaw",
+            extra_dirs=extra_dirs or None,
+        )
+        for s in sorted(skills, key=lambda x: x.name.lower()):
+            skill_entry: dict = {
+                "id": f"skill:{s.name}",
+                "name": s.name,
+                "description": "",
+                "tags": ["skill"],
+            }
+            # Pull description from frontmatter if available
+            try:
+                content = s.read_content()
+                for line in content.splitlines():
+                    if line.strip().startswith("description:"):
+                        skill_entry["description"] = line.split(":", 1)[1].strip()
+                        break
+            except Exception:
+                pass
+            if s.version:
+                skill_entry["version"] = s.version
+            if getattr(s, "allowed_tools", None):
+                skill_entry["tags"] = ["skill"] + [
+                    f"tool:{t}" for t in s.allowed_tools
+                ]
+            a2a_skills.append(skill_entry)
+    except Exception:
+        pass
+
+    card: dict = {
+        "protocolVersion": "0.2.5",
+        "name": agent_id,
+        "description": description,
+        "url": agent_url,
+        "version": version,
+        "provider": {
+            "organization": "pyclaw",
+            "url": base_url,
+        },
+        "documentationUrl": f"{base_url}/docs",
+        "capabilities": capabilities,
+        "defaultInputModes": ["text/plain"],
+        "defaultOutputModes": ["text/plain"],
+        "skills": a2a_skills,
+    }
+    if security_schemes:
+        card["securitySchemes"] = security_schemes
+    if security:
+        card["security"] = security
+
+    return card
+
+
 # ─────────────────────────────── View: Agent Card ────────────────────────────
 
 
 class AgentCardView(Vertical):
-    """Summary card for the active agent."""
+    """A2A Agent Card view — displays the agent's Google A2A protocol card."""
 
     DEFAULT_CSS = """
     AgentCardView {
         height: 1fr;
-        overflow-y: auto;
+        overflow: hidden hidden;
     }
-    #ac-header {
+    #ac-bar {
         height: 1;
         background: $panel;
         padding: 0 1;
         color: $text-muted;
     }
-    #ac-content {
-        height: 1fr;
+    #ac-card {
+        height: 3fr;
         overflow-y: auto;
         padding: 1 2;
+        border-bottom: solid $border;
+    }
+    #ac-json {
+        height: 2fr;
+        overflow-y: auto;
+        padding: 0 1;
     }
     """
 
@@ -1142,120 +1271,127 @@ class AgentCardView(Vertical):
         super().__init__(**kwargs)
         self.gateway = gateway
         self._agent_id: str = ""
+        self._card: dict = {}
 
     def compose(self) -> ComposeResult:
-        yield Static("Agent Card", id="ac-header")
-        yield RichLog(id="ac-content", markup=True, highlight=False, auto_scroll=False)
+        yield Static(
+            "A2A Agent Card  — \\[y] copy JSON",
+            id="ac-bar",
+        )
+        yield RichLog(id="ac-card", markup=True, highlight=False, auto_scroll=False)
+        yield RichLog(id="ac-json", markup=False, highlight=True, auto_scroll=False)
 
     def refresh_for_agent(self, agent_id: str) -> None:
+        if agent_id == self._agent_id:
+            return  # avoid flicker on every auto-refresh tick
         self._agent_id = agent_id
         self._load(agent_id)
 
+    def force_refresh(self) -> None:
+        self._load(self._agent_id)
+
     @work(thread=True)
     def _load(self, agent_id: str) -> None:
-        lines: List[str] = []
         try:
-            am = getattr(self.gateway, "_agent_manager", None)
-            agent = am.agents.get(agent_id) if am else None
-            if not agent:
-                lines.append(f"[dim]No agent: {agent_id}[/dim]")
-            else:
-                cfg = agent.config
-
-                lines.append(f"[bold cyan]{agent_id}[/bold cyan]")
-                lines.append("")
-
-                # Model
-                model = getattr(cfg, "model", None) or "(default)"
-                lines.append(f"  [bold]Model:[/bold]       {model}")
-
-                # Context window
-                ctx = getattr(cfg, "context_window", None)
-                if ctx:
-                    lines.append(f"  [bold]Context:[/bold]     {ctx:,} tokens")
-
-                # Status
-                runner = agent._session_runners.get("__base__")
-                status = "ready" if runner else "idle"
-                lines.append(f"  [bold]Status:[/bold]      {status}")
-
-                lines.append("")
-
-                # Sessions
-                sm = getattr(self.gateway, "_session_manager", None)
-                session_count = 0
-                msg_count = 0
-                if sm:
-                    sessions = sm.list_sessions_sync(agent_id=agent_id)
-                    session_count = len(sessions)
-                    msg_count = sum(
-                        getattr(s, "message_count", 0) or 0 for s in sessions
-                    )
-                lines.append(f"  [bold]Sessions:[/bold]    {session_count}  ({msg_count} messages total)")
-
-                # Jobs
-                js = getattr(self.gateway, "_job_scheduler", None)
-                job_count = 0
-                if js:
-                    job_count = sum(
-                        1 for j in js.jobs.values()
-                        if getattr(j, "run", None) and
-                           getattr(j.run, "agent", None) == agent_id
-                    )
-                lines.append(f"  [bold]Jobs:[/bold]        {job_count} assigned")
-
-                # Skills
-                try:
-                    from pyclaw.skills.registry import discover_skills
-                    extra_dirs = list(getattr(cfg, "skills_dirs", None) or [])
-                    gw_cfg = getattr(self.gateway, "_config", None)
-                    if gw_cfg and gw_cfg.gateway:
-                        for d in (getattr(gw_cfg.gateway, "skills_dirs", None) or []):
-                            if d not in extra_dirs:
-                                extra_dirs.append(d)
-                    skills = discover_skills(
-                        agent_name=agent_id,
-                        config_dir="~/.pyclaw",
-                        extra_dirs=extra_dirs or None,
-                    )
-                    lines.append(f"  [bold]Skills:[/bold]      {len(skills)}")
-                    if skills:
-                        for s in sorted(skills, key=lambda x: x.name.lower())[:10]:
-                            lines.append(f"    • {s.name}  [dim]v{s.version}[/dim]")
-                        if len(skills) > 10:
-                            lines.append(f"    … and {len(skills) - 10} more")
-                except Exception as e:
-                    lines.append(f"  [bold]Skills:[/bold]      (error: {e})")
-
-                lines.append("")
-
-                # Config summary
-                lines.append("  [bold]Config:[/bold]")
-                for attr in (
-                    "description", "prompt_preset", "show_thinking",
-                    "typing_mode", "memory_backend",
-                ):
-                    val = getattr(cfg, attr, None)
-                    if val is not None:
-                        lines.append(f"    {attr}: {val}")
-
-                # OTel span count
-                from pyclaw.core import otel_store
-                store = otel_store.get_store()
-                if store is not None:
-                    lines.append("")
-                    lines.append(f"  [bold]OTel spans:[/bold]  {len(store)} buffered")
-
+            card = _build_a2a_card(agent_id, self.gateway)
         except Exception as e:
-            lines.append(f"[red]Error loading agent card: {e}[/red]")
+            card = {"error": str(e)}
+        self.app.call_from_thread(self._populate, card)
 
-        self.app.call_from_thread(self._populate, lines)
+    def _populate(self, card: dict) -> None:
+        self._card = card
+        self._render_card(card)
+        self._render_json(card)
 
-    def _populate(self, lines: List[str]) -> None:
-        log = self.query_one("#ac-content", RichLog)
+    def _render_card(self, card: dict) -> None:
+        log = self.query_one("#ac-card", RichLog)
         log.clear()
-        for line in lines:
-            log.write(line)
+
+        name = card.get("name", "?")
+        version = card.get("version", "?")
+        proto = card.get("protocolVersion", "?")
+        log.write(f"[bold cyan]{name}[/bold cyan]  [dim]v{version}[/dim]  "
+                  f"[dim]· A2A protocol {proto}[/dim]")
+        log.write("")
+
+        desc = card.get("description", "")
+        if desc:
+            log.write(f"  {desc}")
+            log.write("")
+
+        url = card.get("url", "")
+        log.write(f"  [bold]Endpoint:[/bold]         {url}")
+
+        doc = card.get("documentationUrl", "")
+        if doc:
+            log.write(f"  [bold]Documentation:[/bold]    {doc}")
+
+        provider = card.get("provider", {})
+        if provider.get("organization"):
+            log.write(f"  [bold]Provider:[/bold]         {provider['organization']}")
+
+        log.write("")
+        in_modes = "  ".join(card.get("defaultInputModes", []))
+        out_modes = "  ".join(card.get("defaultOutputModes", []))
+        log.write(f"  [bold]Input modes:[/bold]      {in_modes}")
+        log.write(f"  [bold]Output modes:[/bold]     {out_modes}")
+
+        # Capabilities
+        log.write("")
+        log.write("  [bold]CAPABILITIES[/bold]")
+        caps = card.get("capabilities", {})
+        for cap_key, label in (
+            ("streaming", "Streaming"),
+            ("pushNotifications", "Push Notifications"),
+            ("stateTransitionHistory", "State History"),
+        ):
+            val = caps.get(cap_key, False)
+            mark = "[green]✓[/green]" if val else "[dim]✗[/dim]"
+            log.write(f"    {mark}  {label}")
+
+        # Auth
+        schemes = card.get("securitySchemes", {})
+        if schemes:
+            log.write("")
+            log.write("  [bold]AUTHENTICATION[/bold]")
+            for scheme_name, scheme in schemes.items():
+                stype = scheme.get("type", "?")
+                if stype == "apiKey":
+                    loc = scheme.get("in", "?")
+                    hdr = scheme.get("name", "?")
+                    log.write(f"    • {scheme_name}: API key  ({loc}: {hdr})")
+                else:
+                    log.write(f"    • {scheme_name}: {stype}")
+        else:
+            log.write("")
+            log.write("  [bold]AUTHENTICATION[/bold]")
+            log.write("    [dim]None (open)[/dim]")
+
+        # Skills
+        skills = card.get("skills", [])
+        log.write("")
+        log.write(f"  [bold]SKILLS[/bold]  [dim]({len(skills)})[/dim]")
+        if skills:
+            for s in skills:
+                sid = s.get("id", "")
+                sname = s.get("name", "?")
+                sdesc = s.get("description", "")
+                tags = s.get("tags", [])
+                tag_str = "  ".join(f"[dim]{t}[/dim]" for t in tags[:3])
+                desc_str = f"  [dim]{sdesc[:60]}[/dim]" if sdesc else ""
+                log.write(f"    [cyan]{sid}[/cyan]{desc_str}")
+                if tag_str:
+                    log.write(f"      {tag_str}")
+        else:
+            log.write("    [dim](none)[/dim]")
+
+    def _render_json(self, card: dict) -> None:
+        log = self.query_one("#ac-json", RichLog)
+        log.clear()
+        log.write(json.dumps(card, indent=2))
+
+    def get_json(self) -> str:
+        return json.dumps(self._card, indent=2)
 
 
 # ─────────────────────────────── View: Traces ────────────────────────────────
@@ -1652,6 +1788,8 @@ class GatewayDashboard(App):
         # history and runhistory are loaded on demand
 
     def _auto_refresh(self) -> None:
+        # agentcard uses change-detection (refresh_for_agent is a no-op when
+        # agent hasn't changed) so it's safe to call every 5 s
         if self._active_view in ("sessions", "jobs", "agentcard", "traces"):
             self._refresh_view_for_agent(self._active_agent)
         self._update_status_bar()
@@ -1817,7 +1955,10 @@ class GatewayDashboard(App):
         self.query_one(FileBrowserView).cancel_edit()
 
     def action_refresh_view(self) -> None:
-        self._refresh_view_for_agent(self._active_agent)
+        if self._active_view == "agentcard":
+            self.query_one(AgentCardView).force_refresh()
+        else:
+            self._refresh_view_for_agent(self._active_agent)
 
     def action_shrink_log(self) -> None:
         self._set_log_pct(max(10, self._log_pct - 5))
@@ -1872,7 +2013,9 @@ class GatewayDashboard(App):
         view = self._active_view
         agent = self._active_agent
         try:
-            if view == "history":
+            if view == "agentcard":
+                return self.query_one(AgentCardView).get_json()
+            elif view == "history":
                 hv = self.query_one(HistoryView)
                 sm = getattr(self.gateway, "_session_manager", None)
                 if sm and hv._session_id:
