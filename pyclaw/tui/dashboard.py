@@ -174,7 +174,7 @@ class SessionsView(Vertical):
         count = len(sessions)
         hint.update(
             f"{count} session{'s' if count != 1 else ''} — agent: {self._agent_id}"
-            "  [h = load history for selected]"
+            "  \\[h = load history for selected]"
         )
 
     def get_selected_session_id(self) -> Optional[str]:
@@ -265,7 +265,7 @@ class HistoryView(Vertical):
         else:
             bar.update(
                 f"Session: {self._session_id}  "
-                f"({len(content):,} chars)  [scroll with arrow keys / page up/down]"
+                f"({len(content):,} chars)  \\[scroll with arrow keys / page up/down]"
             )
             log.write(content)
 
@@ -368,7 +368,7 @@ class JobsView(Vertical):
         count = len(agent_jobs)
         bar.update(
             f"{count} job{'s' if count != 1 else ''} — agent: {self._agent_id}"
-            "  [r = run now  v = view run history]"
+            "  \\[r = run now  v = view run history]"
         )
 
     def get_selected_job_id(self) -> Optional[str]:
@@ -640,7 +640,7 @@ class FileBrowserView(Vertical):
             t.add_row(rel, size, mtime, key=rel)
         bar.update(
             f"{len(files)} files — {self._agent_id}"
-            "  [Enter=view  e=edit  Ctrl+S=save  Escape=cancel]"
+            "  \\[Enter=view  e=edit  Ctrl+S=save  Escape=cancel]"
         )
 
     @on(DataTable.RowSelected, "#fb-table")
@@ -671,7 +671,7 @@ class FileBrowserView(Vertical):
         else:
             view.write(content)
             rel = self._rel_path()
-            bar.update(f"{rel}  ({len(content):,} chars)  [e = edit]")
+            bar.update(f"{rel}  ({len(content):,} chars)  \\[e = edit]")
 
     def enter_edit_mode(self) -> bool:
         """Switch to TextArea edit mode. Returns True if successful."""
@@ -689,7 +689,7 @@ class FileBrowserView(Vertical):
         editor.display = True
         editor.focus()
         bar = self.query_one("#fb-content-bar", Static)
-        bar.update(f"EDITING: {self._rel_path()}  [Ctrl+S=save  Escape=cancel]")
+        bar.update(f"EDITING: {self._rel_path()}  \\[Ctrl+S=save  Escape=cancel]")
         return True
 
     def save_file(self) -> bool:
@@ -832,7 +832,7 @@ class SkillsView(Vertical):
             )
         bar.update(
             f"{len(skills)} skill{'s' if len(skills) != 1 else ''} — agent: {self._agent_id}"
-            "  [Enter = view SKILL.md]"
+            "  \\[Enter = view SKILL.md]"
         )
 
     @on(DataTable.RowSelected, "#sk-table")
@@ -975,7 +975,7 @@ class RunHistoryView(Vertical):
             t.add_row(started_str, dur, status, preview, key=str(i))
         bar.update(
             f"{len(runs)} run{'s' if len(runs) != 1 else ''} — {self._job_name or self._job_id}"
-            "  [Enter = view output]"
+            "  \\[Enter = view output]"
         )
 
     @on(DataTable.RowSelected, "#rh-table")
@@ -999,7 +999,7 @@ class RunHistoryView(Vertical):
                 log.write("")
                 log.write("=== STDERR ===")
                 log.write(run["stderr"])
-            detail_bar.update(f"Run {run.get('id', '?')}  [{run.get('status', '?')}]")
+            detail_bar.update(f"Run {run.get('id', '?')}  \\[{run.get('status', '?')}]")
 
 
 # ─────────────────────────────── View: Agent Log ─────────────────────────────
@@ -1237,7 +1237,7 @@ class GatewayDashboard(App):
 
             with Vertical(id="log-pane"):
                 yield Static(
-                    "Gateway Logs  — [ / ] to resize",
+                    "Gateway Logs  — \\[ / ] to resize",
                     id="log-header",
                 )
                 yield RichLog(
