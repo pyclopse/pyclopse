@@ -137,10 +137,13 @@ class TestTelegramMultiBotSchema:
         assert cfg.bot_token == "legacy"
         assert cfg.bots == {}
 
-    def test_telegram_bot_config_env_var(self, monkeypatch):
-        monkeypatch.setenv("MY_BOT_TOKEN", "resolved-token")
+    def test_telegram_bot_config_secret_ref_stored_literally(self):
+        # ${...} references are resolved by SecretsManager.resolve_raw() before
+        # Pydantic validation runs (in ConfigLoader). Passing them directly to
+        # model_validate stores the literal string — resolution is not the
+        # model's responsibility.
         cfg = TelegramBotConfig.model_validate({"botToken": "${MY_BOT_TOKEN}"})
-        assert cfg.bot_token == "resolved-token"
+        assert cfg.bot_token == "${MY_BOT_TOKEN}"
 
 
 # ── gateway routing tests ─────────────────────────────────────────────────────
@@ -160,14 +163,15 @@ class TestMultiBotGatewayRouting:
             },
         })
         gw = _make_gateway(tg)
+        gw.enqueue_message = AsyncMock(return_value="reply")
         gw.handle_message = AsyncMock(return_value="reply")
         bot_mock = AsyncMock()
 
         msg = _make_message(user_id=42)
         await gw._handle_telegram_message(msg, bot_name="ritchie", bot=bot_mock)
 
-        gw.handle_message.assert_called_once()
-        call_kwargs = gw.handle_message.call_args.kwargs
+        gw.enqueue_message.assert_called_once()
+        call_kwargs = gw.enqueue_message.call_args.kwargs
         assert call_kwargs["agent_id"] == "ritchie"
 
     @pytest.mark.asyncio
@@ -181,6 +185,7 @@ class TestMultiBotGatewayRouting:
             },
         })
         gw = _make_gateway(tg)
+        gw.enqueue_message = AsyncMock(return_value="reply")
         gw.handle_message = AsyncMock(return_value="reply")
 
         bot_main = AsyncMock()
@@ -192,8 +197,8 @@ class TestMultiBotGatewayRouting:
         await gw._handle_telegram_message(msg1, bot_name="main", bot=bot_main)
         await gw._handle_telegram_message(msg2, bot_name="ritchie", bot=bot_ritchie)
 
-        assert gw.handle_message.call_count == 2
-        calls = gw.handle_message.call_args_list
+        assert gw.enqueue_message.call_count == 2
+        calls = gw.enqueue_message.call_args_list
         assert calls[0].kwargs["agent_id"] == "main"
         assert calls[1].kwargs["agent_id"] == "ritchie"
 
@@ -208,6 +213,7 @@ class TestMultiBotGatewayRouting:
             },
         })
         gw = _make_gateway(tg)
+        gw.enqueue_message = AsyncMock(return_value="reply")
         gw.handle_message = AsyncMock(return_value="reply")
 
         # Both messages have the same message_id=999
@@ -218,7 +224,7 @@ class TestMultiBotGatewayRouting:
         await gw._handle_telegram_message(msg_ritchie, bot_name="ritchie", bot=AsyncMock())
 
         # Both should be processed — they're different bots
-        assert gw.handle_message.call_count == 2
+        assert gw.enqueue_message.call_count == 2
 
     @pytest.mark.asyncio
     async def test_dedup_blocks_same_bot_duplicate(self):
@@ -228,6 +234,7 @@ class TestMultiBotGatewayRouting:
             "bots": {"main": {"botToken": "tok-main", "agent": "main"}},
         })
         gw = _make_gateway(tg)
+        gw.enqueue_message = AsyncMock(return_value="reply")
         gw.handle_message = AsyncMock(return_value="reply")
         bot_mock = AsyncMock()
 
@@ -237,7 +244,7 @@ class TestMultiBotGatewayRouting:
         await gw._handle_telegram_message(msg1, bot_name="main", bot=bot_mock)
         await gw._handle_telegram_message(msg2, bot_name="main", bot=bot_mock)
 
-        assert gw.handle_message.call_count == 1
+        assert gw.enqueue_message.call_count == 1
 
     @pytest.mark.asyncio
     async def test_per_bot_allowed_users_overrides_parent(self):
@@ -249,12 +256,13 @@ class TestMultiBotGatewayRouting:
             },
         })
         gw = _make_gateway(tg)
+        gw.enqueue_message = AsyncMock(return_value="reply")
         gw.handle_message = AsyncMock(return_value="reply")
 
         msg = _make_message(user_id=99)
         await gw._handle_telegram_message(msg, bot_name="special", bot=AsyncMock())
 
-        gw.handle_message.assert_called_once()
+        gw.enqueue_message.assert_called_once()
 
     @pytest.mark.asyncio
     async def test_per_bot_allowed_users_blocks_non_listed(self):
@@ -266,12 +274,13 @@ class TestMultiBotGatewayRouting:
             },
         })
         gw = _make_gateway(tg)
+        gw.enqueue_message = AsyncMock(return_value="reply")
         gw.handle_message = AsyncMock(return_value="reply")
 
         msg = _make_message(user_id=42)
         await gw._handle_telegram_message(msg, bot_name="restricted", bot=AsyncMock())
 
-        gw.handle_message.assert_not_called()
+        gw.enqueue_message.assert_not_called()
 
     @pytest.mark.asyncio
     async def test_replies_use_the_bot_that_received_the_message(self):
@@ -333,7 +342,6 @@ class TestMultiBotLifecycle:
         gw._tg_bots = {}
         gw._tg_chat_ids = {}
         gw._tg_polling_tasks = {}
-        gw._pulse_runner = None
 
         # Pre-populate bots (normally done by _init_telegram)
         bot_a = AsyncMock()
@@ -380,7 +388,6 @@ class TestMultiBotLifecycle:
         gw._agent_manager = None
         gw._session_manager = None
         gw._job_scheduler = None
-        gw._pulse_runner = None
         gw._channels = {}
         gw._hook_registry = None
         gw._mcp_server_task = None

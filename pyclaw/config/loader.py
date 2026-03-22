@@ -19,6 +19,11 @@ for env_path in [
         break
 
 
+# Dedicated secrets registry file — lives outside pyclaw.yaml so it can be
+# managed independently (different permissions, separate git-ignore, etc.)
+SECRETS_FILE_PATH = "~/.pyclaw/secrets/secrets.yaml"
+
+
 DEFAULT_CONFIG_PATHS = [
     "~/.pyclaw/config/pyclaw.yaml",
     "~/.pyclaw/config.yaml",
@@ -52,6 +57,39 @@ def save_yaml(data: Dict[str, Any], file_path: Union[str, Path]) -> None:
     
     with open(path, "w") as f:
         yaml.safe_dump(data, f, default_flow_style=False, sort_keys=False)
+
+
+def load_secrets_registry(config_path: Optional[Union[str, Path]] = None) -> Dict[str, Any]:
+    """Load the secrets registry.
+
+    Checks ``~/.pyclaw/secrets/secrets.yaml`` first.  If that file does not
+    exist, falls back to the ``secrets:`` block inside the main config file
+    (for users who have not yet migrated).
+
+    Args:
+        config_path: Path to the main pyclaw config file, used only for the
+                     fallback lookup.  If omitted, ``find_config_file()`` is
+                     called to locate it.
+    """
+    secrets_path = expand_path(SECRETS_FILE_PATH)
+    if secrets_path.exists():
+        try:
+            return load_yaml(secrets_path)
+        except Exception as e:
+            import logging
+            logging.getLogger("pyclaw.config").warning(
+                f"Failed to load secrets file {secrets_path}: {e}"
+            )
+
+    # Fallback: secrets: block inside pyclaw.yaml
+    cfg_path = Path(str(config_path)) if config_path else find_config_file()
+    if cfg_path and cfg_path.exists():
+        try:
+            return load_yaml(cfg_path).get("secrets", {})
+        except Exception:
+            pass
+
+    return {}
 
 
 def find_config_file(search_paths: Optional[list] = None) -> Optional[Path]:
@@ -88,8 +126,9 @@ class ConfigLoader:
         # Load YAML
         data = load_yaml(path)
 
-        # Resolve secrets before Pydantic validation
-        manager = SecretsManager(data.get("secrets", {}))
+        # Resolve secrets before Pydantic validation.
+        # Registry is loaded from secrets.yaml (or pyclaw.yaml fallback).
+        manager = SecretsManager(load_secrets_registry(path))
         data = manager.resolve_raw(data)
 
         # Validate with Pydantic

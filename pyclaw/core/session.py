@@ -41,6 +41,10 @@ class Session:
     message_count: int = 0
     # Absolute path to the session directory (set by SessionManager)
     history_dir: Optional[Path] = field(default=None, repr=False, compare=False)
+    # Routing fields: updated each message so replies go back to the right place
+    last_channel: Optional[str] = field(default=None)
+    last_user_id: Optional[str] = field(default=None)
+    last_thread_ts: Optional[str] = field(default=None)
 
     @property
     def history_path(self) -> Optional[Path]:
@@ -86,6 +90,9 @@ class Session:
                 k: v for k, v in self.context.items()
                 if not k.startswith("_")
             },
+            "last_channel": self.last_channel,
+            "last_user_id": self.last_user_id,
+            "last_thread_ts": self.last_thread_ts,
         }
 
     @classmethod
@@ -103,6 +110,9 @@ class Session:
             metadata=data.get("metadata", {}),
             context=data.get("context", {}),
             history_dir=history_dir,
+            last_channel=data.get("last_channel"),
+            last_user_id=data.get("last_user_id"),
+            last_thread_ts=data.get("last_thread_ts"),
         )
 
 
@@ -201,6 +211,74 @@ class SessionManager:
         """Return the directory for a session: agents_dir/{agent_id}/sessions/{session_id}/"""
         return self._agents_dir / agent_id / "sessions" / session_id
 
+    def _active_session_path(self, agent_id: str) -> Path:
+        """Path to the active_session pointer file for this agent."""
+        return self._agents_dir / agent_id / "active_session"
+
+    def set_active_session(self, agent_id: str, session_id: str) -> None:
+        """Atomically write the active session pointer for an agent."""
+        path = self._active_session_path(agent_id)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        tmp = path.with_suffix(".tmp")
+        tmp.write_text(session_id)
+        tmp.replace(path)
+
+    async def get_active_session(self, agent_id: str) -> Optional["Session"]:
+        """Return the agent's current active session, handling daily rollover.
+
+        Returns None if no active session pointer exists.
+        """
+        path = self._active_session_path(agent_id)
+        if not path.exists():
+            return None
+        try:
+            session_id = path.read_text().strip()
+        except Exception:
+            return None
+        if not session_id:
+            return None
+
+        # Fast path: already in memory
+        session = self.sessions.get(session_id)
+        if session is None:
+            # Load from disk
+            session_dir = self._session_dir(agent_id, session_id)
+            meta_file = session_dir / "session.json"
+            if not meta_file.exists():
+                # Stale pointer — clear it
+                try:
+                    path.unlink()
+                except Exception:
+                    pass
+                return None
+            try:
+                data = json.loads(meta_file.read_text())
+                session = Session.from_dict(data, history_dir=session_dir)
+                self.sessions[session.id] = session
+                if session.user_id not in self.user_sessions:
+                    self.user_sessions[session.user_id] = []
+                if session.id not in self.user_sessions[session.user_id]:
+                    self.user_sessions[session.user_id].append(session.id)
+                if session.channel not in self.channel_sessions:
+                    self.channel_sessions[session.channel] = []
+                if session.id not in self.channel_sessions[session.channel]:
+                    self.channel_sessions[session.channel].append(session.id)
+            except Exception as e:
+                self._logger.debug(f"Could not load active session {session_id}: {e}")
+                try:
+                    path.unlink()
+                except Exception:
+                    pass
+                return None
+
+        # Daily rollover
+        if self.daily_rollover and self._is_before_today(session):
+            new_session = await self._archive_and_rollover(session)
+            self.set_active_session(agent_id, new_session.id)
+            return new_session
+
+        return session
+
     def _is_before_today(self, session: "Session") -> bool:
         """Return True if the session's last activity was before today's local midnight."""
         return session.updated_at < today_midnight()
@@ -228,8 +306,12 @@ class SessionManager:
         # Remove old session from index (keeps disk files)
         self._remove_from_index(session.id)
 
-        # Create and return a fresh session
+        # Create and return a fresh session, preserving routing context
         new_session = await self.create_session(session.agent_id, session.channel, session.user_id)
+        new_session.last_channel = session.last_channel
+        new_session.last_user_id = session.last_user_id
+        new_session.last_thread_ts = session.last_thread_ts
+        new_session.save_metadata()
         self._logger.info(
             f"Daily rollover: archived {session.id} → new session {new_session.id} "
             f"for {session.user_id} on {session.channel}"
@@ -246,13 +328,22 @@ class SessionManager:
         channel: str,
         user_id: str,
         metadata: Optional[Dict[str, Any]] = None,
+        ephemeral: bool = False,
     ) -> Session:
-        """Create a new session."""
+        """Create a new session.
+
+        Parameters
+        ----------
+        ephemeral:
+            When True the session is memory-only — no session.json is written to
+            disk and ``history_dir`` is left as None.  Use this for isolated job
+            sessions that must not accumulate on disk.
+        """
         if len(self.sessions) >= self.max_sessions:
             await self._evict_oldest_session()
 
         session_id = _generate_session_id()
-        history_dir = self._session_dir(agent_id, session_id)
+        history_dir = None if ephemeral else self._session_dir(agent_id, session_id)
         session = Session(
             id=session_id,
             agent_id=agent_id,
@@ -272,9 +363,11 @@ class SessionManager:
             self.channel_sessions[channel] = []
         self.channel_sessions[channel].append(session.id)
 
-        session.save_metadata()
+        if not ephemeral:
+            session.save_metadata()
         self._logger.debug(
             f"Created session {session.id} for user {user_id} on {channel}"
+            + (" (ephemeral)" if ephemeral else "")
         )
         return session
 
@@ -292,6 +385,7 @@ class SessionManager:
         channel: str,
         user_id: str,
         create_if_not_exists: bool = True,
+        ephemeral: bool = False,
     ) -> Optional[Session]:
         """Get existing session or create a new one.
 
@@ -336,7 +430,7 @@ class SessionManager:
             return session
 
         if create_if_not_exists:
-            return await self.create_session(agent_id, channel, user_id)
+            return await self.create_session(agent_id, channel, user_id, ephemeral=ephemeral)
 
         return None
 

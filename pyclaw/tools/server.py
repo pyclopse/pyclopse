@@ -39,10 +39,70 @@ from typing import Any, Optional
 
 from fastmcp import FastMCP, Context
 from fastmcp.server.dependencies import get_http_headers
+from fastmcp.server.middleware import Middleware, MiddlewareContext
 
 logger = logging.getLogger(__name__)
 
 mcp = FastMCP("pyclaw")
+
+
+# ---------------------------------------------------------------------------
+# Tool call logging middleware
+# Logs every tool call to the per-agent logger (pyclaw.agent.<name>).
+# ---------------------------------------------------------------------------
+
+class _ToolLoggingMiddleware(Middleware):
+    """Log MCP tool calls to the per-agent logger."""
+
+    async def on_call_tool(self, context: MiddlewareContext, call_next) -> Any:
+        # Resolve calling agent and session from HTTP request headers
+        try:
+            headers = get_http_headers()
+            agent_name = (headers.get("x-agent-name") or "unknown") if headers else "unknown"
+            session_id = (headers.get("x-session-id") or "") if headers else ""
+        except Exception:
+            agent_name = "unknown"
+            session_id = ""
+
+        alogger = logging.getLogger(f"pyclaw.agent.{agent_name}")
+        prefix = (
+            f"[{agent_name}-{session_id.rsplit('-', 1)[-1]}]" if session_id else f"[{agent_name}]"
+        )
+        tool_name = context.message.name
+        args = context.message.arguments or {}
+
+        # Build a brief args preview — truncate long values
+        arg_parts = []
+        for k, v in args.items():
+            v_s = repr(v)
+            if len(v_s) > 120:
+                v_s = v_s[:117] + "…"
+            arg_parts.append(f"{k}={v_s}")
+        args_str = ", ".join(arg_parts)
+
+        alogger.info("%s [TOOL] %s(%s)", prefix, tool_name, args_str)
+        try:
+            result = await call_next(context)
+        except Exception as exc:
+            alogger.warning("%s [TOOL] %s raised %s: %s", prefix, tool_name, type(exc).__name__, exc)
+            raise
+
+        # Extract text preview from ToolResult content blocks
+        try:
+            content_parts = []
+            for block in (result.content if hasattr(result, "content") else []):
+                text = getattr(block, "text", None)
+                if text:
+                    content_parts.append(str(text))
+            preview = " ".join(content_parts)[:300].replace("\n", " ")
+        except Exception:
+            preview = repr(result)[:300]
+
+        alogger.info("%s [TOOL] %s → %s", prefix, tool_name, preview)
+        return result
+
+
+mcp.add_middleware(_ToolLoggingMiddleware())
 
 # ---------------------------------------------------------------------------
 # bash / exec
@@ -117,12 +177,16 @@ async def bash(
 
     effective_timeout = timeout or _SHELL_TIMEOUT
     work_dir = cwd or os.getcwd()
+    # Strip VIRTUAL_ENV so uv resolves the project environment from the
+    # command's working directory rather than inheriting pyclaw's venv.
+    clean_env = {k: v for k, v in os.environ.items() if k != "VIRTUAL_ENV"}
 
     try:
         if background:
             proc = await asyncio.create_subprocess_shell(
                 command,
                 cwd=work_dir,
+                env=clean_env,
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE,
             )
@@ -132,6 +196,7 @@ async def bash(
         proc = await asyncio.create_subprocess_shell(
             command,
             cwd=work_dir,
+            env=clean_env,
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
         )
@@ -332,7 +397,12 @@ def _agent_memory_service(agent_name: Optional[str] = None):
     from pyclaw.memory.file_backend import FileMemoryBackend
 
     config_dir = os.environ.get("PYCLAW_CONFIG_DIR", "~/.pyclaw")
-    name = agent_name or os.environ.get("PYCLAW_AGENT_NAME", "default")
+    name = agent_name or os.environ.get("PYCLAW_AGENT_NAME")
+    if not name:
+        raise RuntimeError(
+            "Cannot access agent memory: no agent name available. "
+            "X-Agent-Name header missing from MCP request."
+        )
     agent_dir = str(Path(config_dir).expanduser() / "agents" / name)
 
     # Try to reuse the global hook registry and embedding backend
@@ -593,52 +663,147 @@ async def sessions_send(
 # ---------------------------------------------------------------------------
 
 @mcp.tool()
-async def sessions_spawn(
+def subagent_spawn(
     task: str,
-    agent_id: Optional[str] = None,
-    label: Optional[str] = None,
-    timeout_seconds: int = 120,
+    agent: Optional[str] = None,
+    model: Optional[str] = None,
+    timeout_seconds: int = 300,
+    prompt_preset: str = "minimal",
+    instruction: Optional[str] = None,
 ) -> str:
     """
-    Spawn a new sub-agent session to handle a task and return the result.
+    Spawn a background subagent to handle a task. Returns immediately with a job_id.
+    The subagent runs asynchronously; its result is delivered back to your session
+    when complete. Use subagents_list() to check status.
 
     Args:
-        task: The task or prompt to give the spawned agent
-        agent_id: Agent to use (defaults to main agent)
-        label: Optional label for the spawned session
-        timeout_seconds: Max seconds to wait for response
+        task: The task or prompt to give the subagent
+        agent: Agent to use (defaults to the calling agent)
+        model: Optional model override for the subagent
+        timeout_seconds: Max execution time in seconds (default 300)
+        prompt_preset: System prompt preset — "minimal" (default), "full", or "task"
+        instruction: Optional extra instruction appended to the subagent's system prompt
     """
     try:
-        import httpx
+        caller = _get_caller_agent()
+        target_agent = agent or caller
+        if not target_agent:
+            return "[ERROR] Cannot determine agent — pass agent= explicitly"
 
-        if not agent_id:
-            cfg_path = Path("~/.pyclaw/config/pyclaw.yaml").expanduser()
-            if cfg_path.exists():
-                import yaml  # type: ignore
-                cfg = yaml.safe_load(cfg_path.read_text())
-                agents = cfg.get("agents", {})
-                agent_id = next(iter(agents), "main")
-            else:
-                agent_id = "main"
-
-        url = f"{_GATEWAY_BASE}/api/v1/agents/{agent_id}/messages"
-        payload: dict = {
-            "content": task,
-            "channel": "spawn",
-        }
-        if label:
-            payload["label"] = label
-
-        async with httpx.AsyncClient(timeout=timeout_seconds + 10) as client:
-            resp = await client.post(url, json=payload)
-            if resp.status_code == 200:
-                data = resp.json()
-                response_text = data.get("response", data.get("content", str(data)))
-                session = data.get("session_id", "unknown")
-                return f"[SPAWNED session={session}]\n{response_text}"
-            return f"[ERROR] Gateway returned {resp.status_code}: {resp.text[:300]}"
+        data = _subagents_api("/", method="POST", json={
+            "agent": target_agent,
+            "task": task,
+            "model": model,
+            "timeout_seconds": timeout_seconds,
+            "prompt_preset": prompt_preset,
+            "instruction": instruction,
+        })
+        return (
+            f"[SUBAGENT SPAWNED]\n"
+            f"job_id:     {data['job_id']}\n"
+            f"agent:      {data['agent']}\n"
+            f"session_id: {data['session_id']}\n"
+            f"task:       {data['task']}\n"
+            f"Result will be delivered to your session when complete."
+        )
     except Exception as e:
-        return f"[ERROR] sessions_spawn failed: {e}"
+        return _fmt_http_err(e) if hasattr(e, "response") else f"[ERROR] {e}"
+
+
+@mcp.tool()
+def subagents_list() -> str:
+    """
+    List all active subagents spawned by the calling agent.
+    Shows job_id, status, task summary, and session_id for each.
+    """
+    try:
+        caller = _get_caller_agent()
+        params = f"?agent={caller}" if caller else ""
+        data = _subagents_api(f"/{params}")
+        agents = data.get("subagents", [])
+        if not agents:
+            return "No active subagents."
+        lines = [f"Active subagents ({len(agents)}):"]
+        for s in agents:
+            lines.append(
+                f"  [{s['status']}] {s['name']}  job_id={s['job_id'][:8]}…  "
+                f"agent={s['agent']}  session={s.get('session_id','')[:8]}…"
+            )
+            lines.append(f"    task: {str(s.get('task',''))[:120]}")
+        return "\n".join(lines)
+    except Exception as e:
+        return f"[ERROR] {e}"
+
+
+@mcp.tool()
+def subagent_status(job_id: str) -> str:
+    """
+    Get the current status and details of a subagent.
+
+    Args:
+        job_id: The job_id returned by subagent_spawn
+    """
+    try:
+        data = _subagents_api(f"/{job_id}")
+        return json.dumps(data, indent=2, default=str)
+    except Exception as e:
+        return _fmt_http_err(e, job_id)
+
+
+@mcp.tool()
+def subagent_kill(job_id: str) -> str:
+    """
+    Cancel a running subagent immediately.
+
+    Args:
+        job_id: The job_id returned by subagent_spawn
+    """
+    try:
+        _subagents_api(f"/{job_id}", method="DELETE")
+        return f"[OK] Subagent {job_id[:8]}… killed."
+    except Exception as e:
+        return _fmt_http_err(e, job_id)
+
+
+@mcp.tool()
+def subagent_interrupt(job_id: str, task: str) -> str:
+    """
+    Interrupt a running subagent and restart it with a new task (steer).
+    The original subagent is killed and a new one is spawned with the new task,
+    preserving the same spawning session for result delivery.
+
+    Args:
+        job_id: The job_id of the subagent to interrupt
+        task: The new task to give the replacement subagent
+    """
+    try:
+        data = _subagents_api(f"/{job_id}/interrupt", method="POST", json={"task": task})
+        return (
+            f"[SUBAGENT INTERRUPTED]\n"
+            f"old_job_id: {data['old_job_id'][:8]}…\n"
+            f"new_job_id: {data['new_job_id']}\n"
+            f"new task:   {data['task']}"
+        )
+    except Exception as e:
+        return _fmt_http_err(e, job_id)
+
+
+@mcp.tool()
+def subagent_send(job_id: str, message: str) -> str:
+    """
+    Queue a follow-up message for a running subagent. The message is processed
+    as an additional turn after the subagent's current task completes, using the
+    same session. The response is delivered back to your session.
+
+    Args:
+        job_id: The job_id of the subagent to send to
+        message: The follow-up message or instruction
+    """
+    try:
+        _subagents_api(f"/{job_id}/send", method="POST", json={"message": message})
+        return f"[OK] Message queued for subagent {job_id[:8]}…"
+    except Exception as e:
+        return _fmt_http_err(e, job_id)
 
 
 # ---------------------------------------------------------------------------
@@ -664,11 +829,9 @@ async def agents_list() -> str:
             if not isinstance(agent_cfg, dict):
                 continue
             model = agent_cfg.get("model", "?")
-            heartbeat = agent_cfg.get("heartbeat", {})
-            hb_enabled = heartbeat.get("enabled", False) if isinstance(heartbeat, dict) else False
             mcp = agent_cfg.get("mcp_servers", [])
             lines.append(
-                f"• {agent_id} | model={model} | mcp={mcp} | heartbeat={'on' if hb_enabled else 'off'}"
+                f"• {agent_id} | model={model} | mcp={mcp}"
             )
         return "\n".join(lines)
     except Exception as e:
@@ -900,6 +1063,16 @@ def _jobs_api(path: str, method: str = "GET", **kwargs) -> dict:
         return resp.json()
 
 
+def _subagents_api(path: str, method: str = "GET", **kwargs) -> dict:
+    """Call the subagents HTTP API synchronously."""
+    import httpx
+    url = f"{_GATEWAY_BASE}/api/v1/subagents{path}"
+    with httpx.Client(timeout=15) as client:
+        resp = getattr(client, method.lower())(url, **kwargs)
+        resp.raise_for_status()
+        return resp.json()
+
+
 def _fmt_http_err(e: Exception, resource_id: str = "") -> str:
     """Convert an httpx HTTP error to a friendly tool result string."""
     status = getattr(getattr(e, "response", None), "status_code", None)
@@ -994,7 +1167,7 @@ def jobs_create_command(
             "description": description or None, "timeout_seconds": timeout_seconds,
             "deliver_channel": deliver_channel or None,
             "deliver_chat_id": deliver_chat_id or None,
-            "owner": _get_caller_agent(),
+            "agent": _get_caller_agent() or "",
         })
         j = data.get("job", {})
         return f"[OK] Created command job '{j.get('name')}' (id={j.get('id')}) next_run={j.get('next_run')}"
@@ -1039,7 +1212,6 @@ def jobs_create_agent(
             "description": description or None, "timeout_seconds": timeout_seconds,
             "deliver_channel": deliver_channel or None,
             "deliver_chat_id": deliver_chat_id or None,
-            "owner": _get_caller_agent(),
         })
         j = data.get("job", {})
         return f"[OK] Created agent job '{j.get('name')}' (id={j.get('id')}) next_run={j.get('next_run')}"
@@ -1055,6 +1227,8 @@ def jobs_update(
     timeout_seconds: int = 0,
     deliver_channel: str = "",
     deliver_chat_id: str = "",
+    report_to_agent: str = "",
+    deliver_none: bool = False,
 ) -> str:
     """
     Update a job's schedule, enabled state, or delivery config.
@@ -1066,6 +1240,8 @@ def jobs_update(
         timeout_seconds: New timeout in seconds (0 = keep current)
         deliver_channel: New delivery channel (empty = keep current)
         deliver_chat_id: New delivery chat ID (empty = keep current)
+        report_to_agent: Agent name to deliver results to active session (empty = keep current, "none" = clear)
+        deliver_none: Set to true to suppress all delivery notifications
     """
     try:
         payload: dict = {}
@@ -1079,6 +1255,10 @@ def jobs_update(
             payload["deliver_channel"] = deliver_channel
         if deliver_chat_id:
             payload["deliver_chat_id"] = deliver_chat_id
+        if report_to_agent:
+            payload["report_to_agent"] = None if report_to_agent == "none" else report_to_agent
+        if deliver_none:
+            payload["deliver_none"] = True
         if not payload:
             return "[ERROR] No update fields provided."
         data = _jobs_api(f"/{job}", method="PATCH", json=payload)
@@ -1093,9 +1273,14 @@ def jobs_delete(job: str) -> str:
     """
     Permanently delete a scheduled job.
 
+    System jobs (names starting and ending with __) cannot be deleted.
+    Use jobs_enable or jobs_disable to control them instead.
+
     Args:
         job: Job name or ID
     """
+    if job.startswith("__") and job.endswith("__"):
+        return f"[FORBIDDEN] System job '{job}' cannot be deleted. Use jobs_enable or jobs_disable to control it."
     try:
         data = _jobs_api(f"/{job}", method="DELETE")
         return f"[OK] Deleted job '{data.get('deleted')}'"
@@ -1432,20 +1617,51 @@ def todos_next(all_agents: bool = False) -> str:
 # Skills — discover and read agent skills (agentskills.io format)
 # ---------------------------------------------------------------------------
 
+def _discover_all_skills(caller: Optional[str] = None) -> list:
+    """Discover skills from global dir + all agents' skill dirs (deduped, caller wins)."""
+    from pyclaw.skills.registry import discover_skills, get_skill_dirs, _parse_skill_dir
+    import os as _os
+    from pathlib import Path
+    config_dir = Path(_os.path.expanduser("~/.pyclaw"))
+    # Build ordered list: global, then other agents, then caller last (wins on conflict)
+    dirs = list(get_skill_dirs(None))  # global only first
+    agents_root = config_dir / "agents"
+    if agents_root.exists():
+        for agent_dir in sorted(agents_root.iterdir()):
+            if agent_dir.is_dir() and agent_dir.name != (caller or ""):
+                dirs.extend(get_skill_dirs(agent_dir.name))
+    if caller:
+        dirs.extend(get_skill_dirs(caller))  # caller last so it overrides
+    seen: dict = {}
+    for skill_dir in dirs:
+        if not skill_dir.exists():
+            continue
+        for entry in sorted(skill_dir.iterdir()):
+            if entry.is_dir():
+                skill = _parse_skill_dir(entry)
+                if skill:
+                    seen[skill.name.lower()] = skill
+    return list(seen.values())
+
+
 @mcp.tool()
 def skills_list(all_agents: bool = False) -> str:
     """
     List all available skills with their names and descriptions.
 
     By default, lists skills for the calling agent (global + agent-specific).
-    Set all_agents=True to list global skills only.
+    Set all_agents=True to include skills from ALL agents, not just the caller.
 
     Use skill_read(name) to get the full instructions for a specific skill.
     """
     try:
         from pyclaw.skills.registry import discover_skills
-        agent = None if all_agents else _get_caller_agent()
-        skills = discover_skills(agent_name=agent)
+        caller = _get_caller_agent()
+        if all_agents or caller is None:
+            # No caller identified — search all agents so nothing is hidden
+            skills = _discover_all_skills(caller)
+        else:
+            skills = discover_skills(agent_name=caller)
         if not skills:
             return "No skills installed. Add skill directories to ~/.pyclaw/skills/."
         lines = [f"Available skills ({len(skills)}):"]
@@ -1475,9 +1691,16 @@ def skill_read(name: str) -> str:
         from pyclaw.skills.registry import find_skill
         agent = _get_caller_agent()
         skill = find_skill(name, agent_name=agent)
-        if skill is None:
-            # Try global fallback
+        if skill is None and agent is not None:
+            # Caller identified but skill not in their dirs — try global fallback
             skill = find_skill(name)
+        if skill is None:
+            # No caller or still not found — search all agents
+            key = name.lower().strip()
+            for s in _discover_all_skills(agent):
+                if s.name.lower() == key:
+                    skill = s
+                    break
         if skill is None:
             return f"[ERROR] Skill {name!r} not found. Use skills_list() to see available skills."
         return skill.read_content()
@@ -1587,12 +1810,12 @@ def config_set(path: str, value: str) -> str:
     Set a config value using dot-notation path and reload (where hot-reloadable).
 
     Hot-reloadable (no restart): system_prompt, model, temperature, max_tokens,
-      heartbeat settings, job schedules, security exec_approvals mode.
+      job schedules, security exec_approvals mode.
     Requires restart: new agents, host/port, bot tokens, mcp_port.
 
     Args:
         path:  Dot-notation key path, e.g. "agents.assistant.model"
-               or "gateway.port" or "agents.assistant.heartbeat.enabled".
+               or "gateway.port" or "agents.assistant.tools.profile".
                Use bracket notation for keys that contain dots (e.g. model names):
                  "providers.minimax.models.[MiniMax-M2.5].concurrency"
         value: New value as JSON or a plain string.
@@ -1696,7 +1919,7 @@ def config_validate() -> str:
 def config_reload() -> str:
     """
     Reload configuration from disk and apply all hot-reloadable changes.
-    Hot-reloadable: model, temperature, max_tokens, system_prompt, heartbeat,
+    Hot-reloadable: model, temperature, max_tokens, system_prompt,
     security exec_approvals mode.  Changes to host/port/tokens need a restart.
     """
     try:
@@ -1952,6 +2175,42 @@ async def workflow_parallel(
 # Entry point — transport controlled by PYCLAW_MCP_TRANSPORT env var
 #   streamable-http (default): HTTP server on PYCLAW_MCP_PORT (default 8081)
 #   stdio: stdio transport for direct subprocess use (e.g. tests)
+# ---------------------------------------------------------------------------
+# Secrets
+# ---------------------------------------------------------------------------
+
+@mcp.tool()
+async def secrets_list() -> str:
+    """
+    List all secret names registered in the pyclaw secrets registry.
+
+    Returns the names and their source types — never the actual values.
+    Use secret_get() to resolve a specific value.
+    """
+    try:
+        r = await _config_api("secrets")
+        return json.dumps(r, indent=2)
+    except Exception as e:
+        return f"[ERROR] {e}"
+
+
+@mcp.tool()
+async def secret_get(name: str) -> str:
+    """
+    Retrieve a named secret value from the pyclaw secrets registry.
+
+    The secret must be registered under 'secrets:' in pyclaw.yaml.
+
+    Args:
+        name: Registered secret name (e.g. AV_KEY, ALPACA_KEY, MINIMAX_API_KEY).
+    """
+    try:
+        r = await _config_api(f"secrets/{name}")
+        return r.get("value", "")
+    except Exception as e:
+        return f"[ERROR] {e}"
+
+
 # ---------------------------------------------------------------------------
 
 if __name__ == "__main__":

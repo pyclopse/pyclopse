@@ -15,7 +15,154 @@ from pyclaw.jobs.scheduler import JobScheduler
 from pyclaw.core.agent import Agent, AgentManager
 from pyclaw.core.session import SessionManager
 from pyclaw.core.router import MessageRouter, IncomingMessage, OutgoingMessage
-from pyclaw.pulse import PulseRunner, PulseTask, PulseActiveHours
+from pyclaw.core.queue import QueueManager
+
+
+def _parse_job_token(response: str) -> tuple[str, str]:
+    """Detect a delivery token at the start of a job response.
+
+    Returns ``(token, content)`` where *token* is one of:
+
+    - ``'NO_REPLY'``  — full response is ≤ 100 chars and starts with ``NO_REPLY``
+    - ``'SUMMARIZE'`` — first whitespace-separated word is ``SUMMARIZE``
+    - ``''``          — no token; delivery is verbatim
+
+    *content* is the response with the token prefix stripped (or the full
+    response when there is no token or for ``NO_REPLY``).
+    """
+    stripped = response.strip()
+    if stripped.upper().startswith("NO_REPLY") and len(stripped) <= 100:
+        return "NO_REPLY", stripped
+    words = stripped.split(None, 1)
+    if words and words[0].upper() == "SUMMARIZE":
+        return "SUMMARIZE", words[1].strip() if len(words) > 1 else ""
+    return "", response
+
+
+def _build_job_tool_turns(
+    job_name: str,
+    result: str,
+) -> list:
+    """Return turns injecting a job result into session history.
+
+    Job results are injected as a user/assistant pair:
+    - user:      "[Context: <job> @ HH:MM]"   — signals this is external context
+    - assistant: the job result text           — agent's acknowledgement
+
+    This two-message form preserves strict user/assistant alternation required
+    by OpenAI-compat providers (MiniMax, etc.) regardless of what the previous
+    message in history was.  A single assistant-only turn was previously used but
+    caused "tool call result does not follow tool call" (MiniMax 400) whenever
+    multiple jobs fired in succession, creating consecutive assistant messages.
+    """
+    from pyclaw.utils.time import now
+    ts = now().strftime("%H:%M")
+    return [
+        {
+            "role": "user",
+            "content": [{"type": "text", "text": f"[Context: {job_name} @ {ts}]"}],
+        },
+        {
+            "role": "assistant",
+            "content": [{"type": "text", "text": result}],
+            "stop_reason": "endTurn",
+        },
+    ]
+
+
+async def _inject_turns_to_disk(
+    history_path: Any,
+    turns: list,
+    job_name: str,
+    logger: Any,
+) -> None:
+    """Append *turns* directly to a history.json file without a live runner.
+
+    Uses the same ``{"messages": [...]}`` envelope that FastAgent's
+    ``save_messages`` produces so the file remains loadable by ``load_messages``.
+    Performs an atomic write with the same current/previous rotation used by
+    ``AgentRunner._save_history``.
+    """
+    import json
+    import os
+    import tempfile
+    from pathlib import Path
+
+    path = Path(history_path)
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        messages: list = []
+        if path.exists():
+            with open(path, encoding="utf-8") as fh:
+                data = json.load(fh)
+            messages = data.get("messages", [])
+        messages.extend(turns)
+        prev_path = path.parent / "history_previous.json"
+        tmp_path = None
+        try:
+            with tempfile.NamedTemporaryFile(
+                mode="w",
+                encoding="utf-8",
+                delete=False,
+                dir=path.parent,
+                prefix=".history.tmp.",
+                suffix=".json",
+            ) as tmp:
+                json.dump({"messages": messages}, tmp)
+                tmp_path = tmp.name
+            if path.exists():
+                os.replace(path, prev_path)
+            os.replace(tmp_path, path)
+            logger.info(
+                f"Job {job_name}: injected {len(turns)} turns to disk history (no live runner)"
+            )
+        except Exception:
+            if tmp_path:
+                try:
+                    os.unlink(tmp_path)
+                except OSError:
+                    pass
+            raise
+    except Exception as e:
+        logger.warning(f"Job {job_name}: disk history injection failed: {e}")
+
+
+def _snapshot_ctx_tokens(agent: Any, session: Any) -> None:
+    """Read token count from the live FA runner and persist it in session.context.
+
+    Called after every agent response so that /status can report context usage
+    even when the runner is not currently active (e.g. after a gateway restart
+    or before the first message in a new day's session).
+    """
+    try:
+        runner = agent._session_runners.get(session.id)
+        if runner is None or getattr(runner, "_app", None) is None:
+            return
+        agent_name = getattr(runner, "agent_name", None)
+        fa_agent = runner._app._agent(agent_name)
+        # Prefer exact usage accumulator (Anthropic/OpenAI providers)
+        accumulator = getattr(fa_agent, "usage_accumulator", None)
+        ctx_tokens = 0
+        if accumulator is not None:
+            ctx_tokens = accumulator.current_context_tokens or 0
+        # Fallback: estimate from live in-memory message history (generic/MiniMax)
+        if ctx_tokens == 0:
+            history = getattr(fa_agent, "message_history", None) or []
+            total_chars = 0
+            for msg in history:
+                content = getattr(msg, "content", None)
+                if content is None:
+                    continue
+                if isinstance(content, str):
+                    total_chars += len(content)
+                elif isinstance(content, list):
+                    for part in content:
+                        total_chars += len(str(getattr(part, "text", part) or ""))
+            ctx_tokens = total_chars // 4
+        if ctx_tokens:
+            session.context["_ctx_tokens"] = ctx_tokens
+    except Exception:
+        pass  # Never break message handling over a metrics snapshot
 
 
 class Gateway:
@@ -32,6 +179,7 @@ class Gateway:
         self._sandbox: Optional[Sandbox] = None
         self._job_scheduler: Optional[JobScheduler] = None
         self._todo_store: Optional[Any] = None
+        self._file_watcher: Optional[Any] = None
 
         # Core
         self._agent_manager: Optional[AgentManager] = None
@@ -59,9 +207,6 @@ class Gateway:
         self._command_registry = CommandRegistry()
         register_builtin_commands(self._command_registry, self)
 
-        # Pulse runner for heartbeats
-        self._pulse_runner: Optional[PulseRunner] = None
-        self._last_pulse_result: Optional[str] = None  # For TUI to display
         # Multi-bot Telegram: keyed by bot_name ("_default" for legacy single-bot)
         self._tg_bots: Dict[str, Any] = {}
         self._tg_chat_ids: Dict[str, Optional[str]] = {}
@@ -69,6 +214,9 @@ class Gateway:
         self._slack_web_client: Optional[Any] = None  # AsyncWebClient for outbound Slack messages
         # Active processing tasks keyed by session ID (used by /stop)
         self._active_tasks: Dict[str, asyncio.Task] = {}
+
+        # Per-session message queue (handles rapid inbound bursts)
+        self._queue_manager = QueueManager()
 
         # Inbound dedup cache: "channel:message_id" → timestamp of first processing
         self._seen_message_ids: Dict[str, float] = {}
@@ -88,6 +236,8 @@ class Gateway:
             "messages_by_channel": {},
             "started_at": _time.time(),
         }
+        # Thread/topic → agent bindings set by /focus
+        self._thread_bindings: Dict[str, str] = {}
 
     @property
     def config(self) -> Config:
@@ -168,20 +318,6 @@ class Gateway:
     def memory_service(self) -> Optional[Any]:
         """Get the global MemoryService (available after initialize())."""
         return self._memory_service
-
-    @property
-    def pulse_runner(self) -> Optional[PulseRunner]:
-        """Get pulse runner."""
-        return self._pulse_runner
-    
-    @property
-    def last_pulse_result(self) -> Optional[str]:
-        """Get last pulse result (for TUI display)."""
-        return self._last_pulse_result
-    
-    def clear_pulse_result(self) -> None:
-        """Clear pulse result after TUI reads it."""
-        self._last_pulse_result = None
 
     # ── backward-compat accessors for single-bot code paths ──────────────────
 
@@ -299,8 +435,8 @@ class Gateway:
         # Initialize TODO store
         await self._init_todos()
 
-        # Initialize pulse runner
-        await self._init_pulse()
+        # Start file watcher (config + jobs hot-reload)
+        await self._init_file_watcher()
 
         self._initialized = True
         self._logger.info("Gateway initialization complete")
@@ -390,17 +526,26 @@ class Gateway:
         set_memory_service(self._memory_service)
         self._logger.info(f"Memory service ready (backend={mem_cfg.backend})")
 
+    @staticmethod
+    def _collect_model_limits(providers_cfg: Any) -> Dict[str, int]:
+        """Collect per-model concurrency limits from all configured providers."""
+        limits: Dict[str, int] = {}
+        for provider in vars(providers_cfg).values():
+            if provider is None:
+                continue
+            models = getattr(provider, "models", None)
+            if not models:
+                continue
+            for model_name, model_cfg in models.items():
+                if getattr(model_cfg, "enabled", True):
+                    limits[model_name] = model_cfg.concurrency
+        return limits
+
     async def _init_concurrency(self) -> None:
         """Initialize per-model concurrency manager from config."""
         from pyclaw.core.concurrency import init_manager
         cc = self.config.concurrency
-        # Build model limits from provider model configs.
-        model_limits: Dict[str, int] = {}
-        mm_cfg = self.config.providers.minimax
-        if mm_cfg:
-            for model_name, model_cfg in mm_cfg.models.items():
-                if model_cfg.enabled:
-                    model_limits[model_name] = model_cfg.concurrency
+        model_limits = self._collect_model_limits(self.config.providers)
         init_manager(model_limits=model_limits, default=cc.default)
         self._logger.info(
             f"Concurrency manager: default={cc.default}, models={model_limits or '{}'}"
@@ -479,6 +624,7 @@ class Gateway:
                 provider_config=provider_config,
                 session_manager=self.session_manager,
                 config_dir=config_dir,
+                pyclaw_config=self._config,
             )
 
         await self.agent_manager.start_all()
@@ -681,15 +827,217 @@ class Gateway:
 
         async def _agent_executor(job: Any) -> dict:
             """Run an agent-type job: send message to agent, return response."""
+            import uuid as _uuid
+            from pyclaw.core.prompt_builder import build_job_prompt
+
+            agent_run = job.run
+            job_agent_id = getattr(agent_run, "agent", None)
+            deliver = getattr(job, "deliver", None)
+
+            # Session key: isolated = unique per run, persistent = shared per job
+            session_mode = getattr(agent_run, "session_mode", "isolated")
+            if session_mode == "isolated":
+                session_user_id = f"job-{job.id}-{_uuid.uuid4().hex[:8]}"
+            else:
+                session_user_id = f"job-{job.id}"
+
+            # Derive config_dir (same logic as _init_agents)
+            if self._config_loader.config_path:
+                _cp = self._config_loader.config_path
+                _config_dir = str(_cp.parent if _cp.is_file() else _cp)
+            else:
+                _config_dir = "~/.pyclaw"
+
+            # Build the job-specific system prompt from AgentRun flags.
+            # Combine gateway.skills_dirs (global) + agent.skills_dirs (per-agent).
+            _gw_skill_dirs = list(self.config.gateway.skills_dirs or [])
+            _agent_obj = self.agent_manager.agents.get(job_agent_id or "")
+            _agent_skill_dirs = list(getattr(getattr(_agent_obj, "config", None), "skills_dirs", None) or [])
+            _extra_dirs = _gw_skill_dirs + _agent_skill_dirs or None
+            job_instruction = build_job_prompt(
+                agent_name=job_agent_id or "",
+                config_dir=_config_dir,
+                agent_run=agent_run,
+                extra_dirs=_extra_dirs,
+            )
+
+            is_subagent = getattr(job, "spawned_by_session", None) is not None
+            session = None
             try:
-                response = await self.handle_message(
-                    message=job.run.message,
-                    agent_id=job.run.agent,
-                    session_id=f"job:{job.id}",
-                    sender_id="job-scheduler",
+                # Create/get session with the right key.
+                # Isolated sessions are ephemeral — no session.json written to disk so
+                # they don't accumulate in ~/.pyclaw/agents/{agent}/sessions/.
+                session = await self._get_or_create_session(
+                    agent_id=job_agent_id,
                     channel="job",
-                    model_override=job.run.model,
+                    user_id=session_user_id,
+                    ephemeral=(session_mode == "isolated"),
                 )
+                if session is None:
+                    return {"success": False, "error": "Could not create job session"}
+
+                # Inject job prompt and ephemeral flag into session context
+                session.context["instruction_override"] = job_instruction
+                if session_mode == "isolated":
+                    session.context["no_history"] = True
+
+                # Register session ID in scheduler so subagent tools can find it
+                if is_subagent and self._job_scheduler:
+                    self._job_scheduler._subagent_sessions[job.id] = session.id
+
+                response = await self.handle_message(
+                    content=agent_run.message,
+                    agent_id=job_agent_id,
+                    sender="job-scheduler",
+                    sender_id=session_user_id,
+                    channel="job",
+                )
+
+                # Process any queued follow-up messages (subagent_send)
+                if is_subagent and self._job_scheduler:
+                    queued = self._job_scheduler.pop_queued_messages(job.id)
+                    for follow_up in queued:
+                        try:
+                            response = await self.handle_message(
+                                content=follow_up,
+                                agent_id=job_agent_id,
+                                sender="job-scheduler",
+                                sender_id=session_user_id,
+                                channel="job",
+                            )
+                            # Deliver each follow-up response back to spawning session
+                            await self._deliver_to_spawning_session(job, agent_run, response, prefix="↩️")
+                        except Exception as _qe:
+                            self._logger.error(f"subagent follow-up failed: {_qe}")
+
+                # Deliver result: report_to_session takes priority over report_to_agent
+                report_session_id = getattr(agent_run, "report_to_session", None)
+                report_agent = getattr(agent_run, "report_to_agent", None)
+                self._logger.info(
+                    f"Job {job.name}: report_to_session={report_session_id!r} "
+                    f"report_to_agent={report_agent!r} response_len={len(response) if response else 0}"
+                )
+                if report_session_id and response:
+                    await self._deliver_to_spawning_session(job, agent_run, response)
+                elif report_agent and response:
+                    try:
+                        target_session = await self.session_manager.get_active_session(report_agent)
+                        self._logger.info(
+                            f"Job {job.name}: report_to_agent={report_agent!r} "
+                            f"target_session={target_session.id if target_session else None}"
+                        )
+
+                        token, content = _parse_job_token(response)
+                        token_label = token if token else "VERBATIM"
+                        self._logger.info(
+                            f"Job {job.name}: delivery token={token_label!r}"
+                        )
+
+                        async def _try_inject(result_text: str) -> None:
+                            """Inject a job result turn into the target session history.
+
+                            Uses the live session runner when available.  Falls back to
+                            writing directly to the history file on disk so that injection
+                            always succeeds even when no runner has been created yet (e.g.
+                            after a reboot or midnight session rollover before the first
+                            user message).  The runner picks up the injected turns via
+                            _load_history() on the next user interaction.
+                            """
+                            if not target_session:
+                                self._logger.info(
+                                    f"Job {job.name}: inject skipped — no active session for {report_agent!r}"
+                                )
+                                return
+                            if not self._agent_manager:
+                                self._logger.info(
+                                    f"Job {job.name}: inject skipped — agent manager not ready"
+                                )
+                                return
+                            target_agent = self._agent_manager.get_agent(report_agent)
+                            if not target_agent:
+                                self._logger.info(
+                                    f"Job {job.name}: inject skipped — agent {report_agent!r} not found in manager"
+                                )
+                                return
+                            turns = _build_job_tool_turns(
+                                job.name, result_text
+                            )
+                            target_runner = target_agent._session_runners.get(target_session.id)
+                            if target_runner:
+                                await target_runner.inject_turns(turns)
+                                return
+                            # No live runner — write directly to the history file
+                            history_path = getattr(target_session, "history_path", None)
+                            if not history_path:
+                                self._logger.info(
+                                    f"Job {job.name}: inject skipped — session {target_session.id} has no history_path"
+                                )
+                                return
+                            await _inject_turns_to_disk(
+                                history_path, turns, job.name, self._logger
+                            )
+
+                        if token == "NO_REPLY":
+                            await _try_inject(response)
+                            self._logger.info(
+                                f"Job {job.name}: NO_REPLY — delivery suppressed"
+                            )
+
+                        elif token == "SUMMARIZE":
+                            await _try_inject(content)
+                            if target_session:
+                                channel = target_session.last_channel or target_session.channel
+                                user_id = target_session.last_user_id or target_session.user_id
+                                await self.handle_message(
+                                    channel=channel,
+                                    sender="job-scheduler",
+                                    sender_id=user_id,
+                                    content=(
+                                        f"[System] Job '{job.name}' completed. "
+                                        f"Please summarize and report this to the user.\n\n{content}"
+                                    ),
+                                    agent_id=report_agent,
+                                    dispatch_response=True,
+                                )
+                            else:
+                                self._logger.warning(
+                                    f"Job {job.name}: SUMMARIZE — no active session for"
+                                    f" {report_agent!r}, result dropped"
+                                )
+
+                        else:  # verbatim
+                            await _try_inject(response)
+                            if target_session:
+                                await self._deliver_to_session(target_session, response)
+                            else:
+                                self._logger.warning(
+                                    f"Job {job.name}: verbatim — no active session for"
+                                    f" {report_agent!r}, result dropped"
+                                )
+
+                    except Exception as _re:
+                        self._logger.error(f"report_to_agent delivery failed: {_re}", exc_info=True)
+                elif report_agent and not response:
+                    self._logger.warning(f"Job {job.name}: report_to_agent={report_agent!r} but response is empty")
+                    try:
+                        target_session = await self.session_manager.get_active_session(report_agent)
+                        if target_session:
+                            channel = target_session.last_channel or target_session.channel
+                            user_id = target_session.last_user_id or target_session.user_id
+                            await self.handle_message(
+                                channel=channel,
+                                sender="job-scheduler",
+                                sender_id=user_id,
+                                content=(
+                                    f"[System] Job '{job.name}' completed but returned no summary. "
+                                    f"Please let the user know the scan ran but produced no output."
+                                ),
+                                agent_id=report_agent,
+                                dispatch_response=True,
+                            )
+                    except Exception as _re:
+                        self._logger.error(f"report_to_agent empty-response delivery failed: {_re}", exc_info=True)
+
                 return {
                     "success": True,
                     "stdout": response or "",
@@ -698,9 +1046,56 @@ class Gateway:
                 }
             except Exception as e:
                 return {"success": False, "error": str(e), "exit_code": 1}
+            finally:
+                # Evict isolated session runners and session index entries immediately
+                # to free memory — ephemeral sessions have no disk representation so
+                # there is no value in keeping them in memory after the run completes.
+                if session_mode == "isolated" and session is not None:
+                    if self._agent_manager:
+                        agent_obj = self._agent_manager.get_agent(job_agent_id)
+                        if agent_obj:
+                            await agent_obj.evict_session_runner(session.id)
+                    if self._session_manager:
+                        self._session_manager._remove_from_index(session.id)
 
         async def _job_notify(job: Any, run: Any) -> None:
             """Send job completion/failure notification."""
+            spawning_session_id = getattr(job, "spawned_by_session", None)
+
+            # Subagent jobs: send start/finish directly to the spawning session's
+            # channel without going through the agent LLM (no _run_lock contention).
+            if spawning_session_id is not None:
+                if not self._session_manager:
+                    return
+                try:
+                    spawning_session = await self._session_manager.get_session(spawning_session_id)
+                except Exception:
+                    spawning_session = None
+                if not spawning_session:
+                    return
+                s_channel = spawning_session.last_channel or spawning_session.channel
+                s_user_id = spawning_session.last_user_id or spawning_session.user_id
+                s_agent_id = spawning_session.agent_id
+                if s_channel == "telegram":
+                    bot, chat_id = self._bot_and_chat_for_agent(s_agent_id)
+                    chat_id = chat_id or s_user_id
+                    if bot and chat_id:
+                        label = getattr(job, "name", job.id)
+                        if run.status == JobStatus.RUNNING:
+                            text = f"▶️ Subagent *{label}* started."
+                        else:
+                            ok = run.status == JobStatus.COMPLETED
+                            icon = "✅" if ok else "❌"
+                            duration = f" ({run.duration_ms():.0f}ms)" if run.duration_ms() else ""
+                            text = f"{icon} Subagent *{label}* finished{duration}."
+                            if run.error:
+                                text += f"\nError: {run.error}"
+                        try:
+                            await bot.send_message(chat_id=chat_id, text=text, parse_mode="Markdown")
+                        except Exception as e:
+                            self._logger.error(f"Subagent notify send failed: {e}")
+                return
+
             # Determine delivery target
             deliver = getattr(job, "deliver", None)
             if deliver and getattr(deliver, "mode", None) == "none":
@@ -710,25 +1105,25 @@ class Gateway:
             chat_id = None
             if deliver and getattr(deliver, "mode", None) == "announce":
                 chat_id = getattr(deliver, "chat_id", None)
-            # Fall back to the default Telegram chat (whoever last messaged)
-            chat_id = chat_id or self._telegram_chat_id
 
-            if not self._telegram_bot or not chat_id:
+            # If the job runs an agent, use that agent's bot + chat_id
+            job_agent_id = getattr(getattr(job, "run", None), "agent", None)
+            if job_agent_id:
+                agent_bot, agent_chat_id = self._bot_and_chat_for_agent(job_agent_id)
+            else:
+                agent_bot, agent_chat_id = self._telegram_bot, self._telegram_chat_id
+
+            bot = agent_bot or self._telegram_bot
+            # Fall back to the default Telegram chat (whoever last messaged)
+            chat_id = chat_id or agent_chat_id or self._telegram_chat_id
+
+            if not bot or not chat_id:
                 return
 
-            ok = run.status == JobStatus.COMPLETED
-            icon = "✅" if ok else "❌"
-            duration = f" ({run.duration_ms():.0f}ms)" if run.duration_ms() else ""
-            lines = [f"{icon} Job *{job.name}*{duration}"]
-            if run.stdout:
-                lines.append(f"```\n{run.stdout.strip()[:500]}\n```")
-            if run.stderr:
-                lines.append(f"⚠️ stderr: {run.stderr.strip()[:200]}")
-            if run.error:
-                lines.append(f"Error: {run.error}")
-
-            # Webhook delivery
+            # Webhook delivery (completion only)
             if deliver and getattr(deliver, "mode", None) == "webhook":
+                if run.status == JobStatus.RUNNING:
+                    return
                 try:
                     import httpx
                     payload = {
@@ -745,19 +1140,61 @@ class Gateway:
                     self._logger.error(f"Webhook delivery failed: {e}")
                 return
 
+            is_timeout = (
+                run.status == JobStatus.FAILED
+                and bool(run.error and "timed out" in run.error.lower())
+            )
+
+            if run.status == JobStatus.RUNNING:
+                text = f"▶️ Job *{job.name}* started."
+            elif is_timeout:
+                duration = f" ({run.duration_ms():.0f}ms)" if run.duration_ms() else ""
+                text = f"⏱️ Job *{job.name}* timed out{duration}."
+            else:
+                ok = run.status == JobStatus.COMPLETED
+                icon = "✅" if ok else "❌"
+                duration = f" ({run.duration_ms():.0f}ms)" if run.duration_ms() else ""
+                text = f"{icon} Job *{job.name}* finished{duration}."
+                if run.error:
+                    text += f"\nError: {run.error}"
+
             try:
-                await self._telegram_bot.send_message(
+                await bot.send_message(
                     chat_id=chat_id,
-                    text="\n".join(lines),
+                    text=text,
                     parse_mode="Markdown",
                 )
             except Exception as e:
                 self._logger.error(f"Job notify send failed: {e}")
 
+            # On timeout, notify report_to_agent so it can tell the user
+            if is_timeout and run.status != JobStatus.RUNNING:
+                report_agent = getattr(getattr(job, "run", None), "report_to_agent", None)
+                if report_agent:
+                    try:
+                        target_session = await self.session_manager.get_active_session(report_agent)
+                        if target_session:
+                            _channel = target_session.last_channel or target_session.channel
+                            _user_id = target_session.last_user_id or target_session.user_id
+                            await self.handle_message(
+                                channel=_channel,
+                                sender="job-scheduler",
+                                sender_id=_user_id,
+                                content=(
+                                    f"[System] Job '{job.name}' timed out after {job.timeout_seconds}s. "
+                                    f"Please let the user know the scan did not complete in time."
+                                ),
+                                agent_id=report_agent,
+                                dispatch_response=True,
+                            )
+                    except Exception as _te:
+                        self._logger.error(f"report_to_agent timeout delivery failed: {_te}", exc_info=True)
+
         self._job_scheduler = JobScheduler(
             self.config.jobs,
             agent_executor=_agent_executor,
             notify_callback=_job_notify,
+            default_timezone=self.config.timezone,
         )
         await self._job_scheduler.start()
         self._logger.info("Job scheduler started")
@@ -769,94 +1206,56 @@ class Gateway:
         self._todo_store = TodoStore(persist_path=persist)
         self._logger.info(f"TODO store initialised ({persist})")
 
-    async def _init_pulse(self) -> None:
-        """Initialize pulse runner for heartbeats."""
-        self._logger.info("Initializing pulse runner")
+    async def _init_file_watcher(self) -> None:
+        """Start a file watcher for config.yaml and all agents/*/jobs.yaml.
 
-        # Create agent executor
-        async def pulse_executor(agent_id: str, prompt: str) -> str:
-            """Execute pulse task - run agent with prompt, send to Telegram."""
-            from datetime import datetime as _dt
-            ts = _dt.now().strftime("%H:%M:%S")
-            self._logger.info(f"🫀 Pulse tick [{ts}] agent={agent_id}")
+        When a watched file changes on disk the relevant subsystem is reloaded
+        automatically (config → gateway.reload_config, jobs → scheduler.reload_agent_jobs).
+        The scheduler is also given a reference to the watcher so it can
+        acknowledge its own writes and avoid spurious reload loops.
+        """
+        from pyclaw.core.watcher import FileWatcher
 
-            result = "🫀 Pulse"
-            try:
-                agent = self._agent_manager.get_agent(agent_id)
-                if agent:
-                    agent_result = await agent.run_heartbeat(prompt)
-                    if agent_result and not agent_result.startswith("I hit an internal error"):
-                        from pyclaw.agents.runner import strip_thinking_tags
-                        result = strip_thinking_tags(agent_result)
-                    else:
-                        self._logger.warning(f"Agent heartbeat failed: {agent_result}")
-                else:
-                    self._logger.warning(f"No agent found for pulse: {agent_id}")
-            except Exception as e:
-                self._logger.error(f"Pulse agent error: {e}")
+        watcher = FileWatcher(poll_interval=0.5, debounce=0.5)
+        watched = 0
 
-            # Always store for TUI display
-            self._last_pulse_result = result
+        # Watch the main config file
+        if self._config_loader.config_path:
+            config_file = Path(self._config_loader.config_path)
+            if config_file.exists():
+                async def _on_config_change() -> None:
+                    self._logger.info("Config file changed — reloading")
+                    try:
+                        await self.reload_config()
+                        # Acknowledge so watcher doesn't fire again for our own writes
+                        watcher.acknowledge(config_file)
+                    except Exception as exc:
+                        self._logger.warning(f"Config hot-reload failed: {exc}")
 
-            # Always send to Telegram via the bot configured for this agent
-            _pulse_bot, _pulse_chat_id = self._bot_and_chat_for_agent(agent_id)
-            if _pulse_bot and _pulse_chat_id:
-                try:
-                    await _pulse_bot.send_message(
-                        chat_id=_pulse_chat_id,
-                        text=f"🫀 [{ts}] {result}",
-                    )
-                    self._logger.info(f"Pulse sent to Telegram (agent={agent_id}): {result[:80]}")
-                except Exception as te:
-                    self._logger.error(f"Telegram pulse send failed (agent={agent_id}): {te}")
+                watcher.watch(config_file, _on_config_change)
+                watched += 1
 
-            # Send to Slack if configured
-            slack_cfg = self.config.channels.slack if self.config.channels else None
-            if self._slack_web_client and slack_cfg and slack_cfg.pulse_channel:
-                try:
-                    await self._slack_web_client.chat_postMessage(
-                        channel=slack_cfg.pulse_channel,
-                        text=f"🫀 [{ts}] {result}",
-                    )
-                    self._logger.info(f"Pulse sent to Slack #{slack_cfg.pulse_channel}: {result[:80]}")
-                except Exception as se:
-                    self._logger.error(f"Slack pulse send failed: {se}")
+        # Watch each agent's jobs.yaml
+        if self._job_scheduler and self._agent_manager:
+            for agent_id in list(self._agent_manager.agents):
+                jobs_path = self._job_scheduler._agents_dir / agent_id / "jobs.yaml"
+                if jobs_path.exists():
+                    async def _on_jobs_change(aid: str = agent_id) -> None:
+                        self._logger.info(f"jobs.yaml changed for '{aid}' — reloading")
+                        try:
+                            await self._job_scheduler.reload_agent_jobs(aid)
+                        except Exception as exc:
+                            self._logger.warning(f"Jobs hot-reload failed for '{aid}': {exc}")
 
-            return result
+                    watcher.watch(jobs_path, _on_jobs_change)
+                    watched += 1
 
-        # Create pulse runner with executor
-        self._pulse_runner = PulseRunner(agent_executor=pulse_executor)
+            # Give the scheduler a reference so _flush() can acknowledge writes
+            self._job_scheduler._file_watcher = watcher
 
-        # Register pulse tasks from agent heartbeat configs
-        for agent_id, agent_config_dict in self.config.agents.model_dump().items():
-            heartbeat_config = agent_config_dict.get("heartbeat", {})
-            if heartbeat_config.get("enabled", False):
-                # Parse interval (e.g., "5m" -> 300 seconds)
-                interval_str = heartbeat_config.get("every", "30m")
-                interval_seconds = self._parse_interval(interval_str)
-
-                # Create active hours if specified
-                active_hours_config = heartbeat_config.get("activeHours")
-                active_hours = None
-                if active_hours_config:
-                    active_hours = PulseActiveHours(
-                        start=active_hours_config.get("start", "00:00"),
-                        end=active_hours_config.get("end", "23:59"),
-                    )
-
-                pulse_task = PulseTask(
-                    agent_id=agent_id,
-                    interval_seconds=interval_seconds,
-                    prompt=heartbeat_config.get("prompt", "Check for updates."),
-                    active_hours=active_hours,
-                    enabled=True,
-                )
-                self._pulse_runner.register_task(pulse_task)
-                self._logger.info(
-                    f"Registered pulse task for agent '{agent_id}' every {interval_seconds}s"
-                )
-
-        self._logger.info("Pulse runner initialized")
+        await watcher.start()
+        self._file_watcher = watcher
+        self._logger.info(f"File watcher started — watching {watched} file(s)")
 
     async def _telegram_poll_bot(self, bot_name: str, bot: Any) -> None:
         """Long-poll one Telegram bot for incoming messages and dispatch them."""
@@ -930,6 +1329,8 @@ class Gateway:
         user_id = str(message.from_user.id)
         chat_id = str(message.chat.id)
         text = message.text or ""
+        # Telegram group topics expose a thread ID
+        tg_thread_id = str(message.message_thread_id) if getattr(message, "message_thread_id", None) else None
 
         self._logger.info(
             f"Telegram message received: bot={bot_name} user={user_id} chat={chat_id} "
@@ -978,9 +1379,15 @@ class Gateway:
         # Resolve which agent handles this bot's messages
         agent_id = self._agent_id_for_bot(bot_name)
 
+        # Check for a /focus thread binding — it overrides the bot-level agent
+        if tg_thread_id:
+            bound_agent = getattr(self, "_thread_bindings", {}).get(f"telegram:{tg_thread_id}")
+            if bound_agent:
+                agent_id = bound_agent
+
         # Intercept slash commands before routing to the agent
         if text.strip().startswith("/"):
-            session = await self._get_or_create_session(
+            session = await self._get_active_session(
                 agent_id=agent_id,
                 channel="telegram",
                 user_id=user_id,
@@ -1000,6 +1407,7 @@ class Gateway:
                 session=session,
                 sender_id=user_id,
                 channel="telegram",
+                thread_id=tg_thread_id,
             )
             reply = await self._command_registry.dispatch(text.strip(), ctx)
             if reply is not None:
@@ -1048,21 +1456,16 @@ class Gateway:
             typing_task = asyncio.create_task(_keep_typing())
 
         try:
-            task = asyncio.create_task(self.handle_message(
+            session_key = f"telegram:{user_id}"
+            response = await self.enqueue_message(
+                session_key=session_key,
+                content=text,
                 channel="telegram",
                 sender=sender_name,
                 sender_id=user_id,
-                content=text,
                 message_id=str(message.message_id),
                 agent_id=agent_id,
-            ))
-            # Track task by session key so /stop can cancel it
-            session_key = f"telegram:{user_id}"
-            self._active_tasks[session_key] = task
-            try:
-                response = await task
-            finally:
-                self._active_tasks.pop(session_key, None)
+            )
             if response:
                 _agent = self._agent_manager.get_agent(agent_id) if self._agent_manager else None
                 _show_thinking = getattr(getattr(_agent, "config", None), "show_thinking", False)
@@ -1126,7 +1529,9 @@ class Gateway:
 
         # ── session / agent setup ─────────────────────────────────────────
         agent_id = self._agent_id_for_bot(bot_name)
-        session = await self._get_or_create_session(
+        # Use the same active-session pointer path as slash commands so both
+        # paths always land on the same session and share the same history.
+        session = await self._get_active_session(
             agent_id=agent_id, channel="telegram", user_id=user_id
         )
         if session is None:
@@ -1227,7 +1632,6 @@ class Gateway:
 
                 now = time.monotonic()
                 if stream_msg_id is None:
-                    typing_active = False  # stop refreshing typing indicator
                     try:
                         msg = await bot.send_message(
                             chat_id=chat_id, text=display,
@@ -1448,16 +1852,24 @@ class Gateway:
         else:
             session_key = user_id
 
-        # Get agent + session
+        # Get agent + session (one active session per agent; all channels share it)
+        slack_thread_id = thread_ts or ts if threading_enabled else None
         agent_id = (
             next(iter(self._agent_manager.agents))
             if self._agent_manager and self._agent_manager.agents
             else "default"
         )
-        session = await self._get_or_create_session(
+        # Check for a /focus thread binding — it overrides default agent selection
+        if slack_thread_id:
+            bound_agent = getattr(self, "_thread_bindings", {}).get(f"slack:{slack_thread_id}")
+            if bound_agent:
+                agent_id = bound_agent
+
+        session = await self._get_active_session(
             agent_id=agent_id,
             channel="slack",
-            user_id=session_key,
+            user_id=user_id,
+            thread_ts=thread_ts or ts if threading_enabled else None,
         )
 
         # Intercept slash commands
@@ -1477,6 +1889,7 @@ class Gateway:
                 session=session,
                 sender_id=user_id,
                 channel="slack",
+                thread_id=slack_thread_id,
             )
             reply = await self._command_registry.dispatch(text.strip(), ctx)
             if reply is not None:
@@ -1490,12 +1903,19 @@ class Gateway:
             return
 
         # Handle message via agent
-        response = await self.handle_message(
+        slack_queue_key = (
+            f"slack:{thread_ts or ts}"
+            if threading_enabled and (thread_ts or ts)
+            else f"slack:{user_id}"
+        )
+        response = await self.enqueue_message(
+            session_key=slack_queue_key,
+            content=text,
             channel="slack",
             sender=user_id,
             sender_id=user_id,
-            content=text,
             message_id=ts,
+            agent_id=agent_id,
         )
 
         if response:
@@ -1736,22 +2156,6 @@ class Gateway:
             chunks.append(remaining.strip())
         return chunks
 
-    @staticmethod
-    def _parse_interval(interval_str: str) -> int:
-        """Parse interval string like '30m', '1h', '5s' to seconds."""
-        interval_str = interval_str.lower().strip()
-
-        if interval_str.endswith("s"):
-            return int(interval_str[:-1])
-        elif interval_str.endswith("m"):
-            return int(interval_str[:-1]) * 60
-        elif interval_str.endswith("h"):
-            return int(interval_str[:-1]) * 3600
-        elif interval_str.endswith("d"):
-            return int(interval_str[:-1]) * 86400
-        else:
-            return int(interval_str)
-
     async def start(self) -> None:
         """Start the gateway."""
         if self._is_running:
@@ -1759,11 +2163,6 @@ class Gateway:
             return
 
         await self.initialize()
-
-        # Start pulse runner
-        if self._pulse_runner:
-            await self._pulse_runner.start()
-            self._logger.info("Pulse runner started")
 
         self._is_running = True
         self._logger.info("pyclaw Gateway started")
@@ -1909,13 +2308,14 @@ class Gateway:
         if self._session_manager:
             await self.session_manager.stop()
 
+        # Stop file watcher before job scheduler (avoids a reload racing with shutdown)
+        if getattr(self, "_file_watcher", None):
+            await self._file_watcher.stop()
+            self._file_watcher = None
+
         # Stop job scheduler
         if self._job_scheduler:
             await self.job_scheduler.stop()
-
-        # Stop pulse runner
-        if self._pulse_runner:
-            await self._pulse_runner.stop()
 
         # Stop channel plugins
         for name, channel in list(self._channels.items()):
@@ -1936,10 +2336,12 @@ class Gateway:
         agent_id: str,
         channel: str,
         user_id: str,
+        ephemeral: bool = False,
     ) -> Optional[Any]:
-        """Wrapper around SessionManager.get_or_create_session that fires session:created."""
+        """Wrapper around SessionManager.get_or_create_session that fires session:created.
+        Used for job sessions and backwards-compat paths."""
         session = await self.session_manager.get_or_create_session(
-            agent_id=agent_id, channel=channel, user_id=user_id
+            agent_id=agent_id, channel=channel, user_id=user_id, ephemeral=ephemeral
         )
         if session and session.id not in self._known_session_ids:
             self._known_session_ids.add(session.id)
@@ -1951,6 +2353,155 @@ class Gateway:
             })
         return session
 
+    async def _get_active_session(
+        self,
+        agent_id: str,
+        channel: str,
+        user_id: str,
+        thread_ts: Optional[str] = None,
+    ) -> Optional[Any]:
+        """Get or create the single active session for this agent, update routing fields.
+
+        All channels share one session per agent. channel/user_id/thread_ts are
+        stored as last_* fields so replies can be routed back correctly.
+        """
+        session = await self.session_manager.get_active_session(agent_id)
+        is_new = session is None
+        if is_new:
+            session = await self.session_manager.create_session(
+                agent_id=agent_id,
+                channel=channel,
+                user_id=user_id,
+            )
+            if session:
+                self.session_manager.set_active_session(agent_id, session.id)
+
+        if session is None:
+            return None
+
+        # Update routing fields so replies go back via the right channel
+        session.last_channel = channel
+        session.last_user_id = user_id
+        session.last_thread_ts = thread_ts
+        session.save_metadata()
+
+        if is_new or session.id not in self._known_session_ids:
+            self._known_session_ids.add(session.id)
+            await self._fire(HookEvent.SESSION_CREATED, {
+                "session_id": session.id,
+                "agent_id": session.agent_id,
+                "channel": channel,
+                "user_id": user_id,
+            })
+        return session
+
+    async def _deliver_to_session(self, session: Any, text: str) -> None:
+        """Deliver a text message to the user via the session's active channel."""
+        channel = session.last_channel or session.channel
+        user_id = session.last_user_id or session.user_id
+        thread_ts = getattr(session, "last_thread_ts", None)
+
+        if channel == "telegram":
+            bot, chat_id = self._bot_and_chat_for_agent(session.agent_id)
+            chat_id = chat_id or user_id
+            if bot and chat_id:
+                try:
+                    for chunk in self._split_message(text):
+                        await bot.send_message(chat_id=chat_id, text=chunk)
+                except Exception as e:
+                    self._logger.error(f"_deliver_to_session telegram failed: {e}")
+        elif channel == "slack":
+            if self._slack_web_client:
+                try:
+                    kwargs: dict = {"channel": user_id, "text": text}
+                    if thread_ts:
+                        kwargs["thread_ts"] = thread_ts
+                    await self._slack_web_client.chat_postMessage(**kwargs)
+                except Exception as e:
+                    self._logger.error(f"_deliver_to_session slack failed: {e}")
+
+    async def _deliver_to_spawning_session(
+        self,
+        job: Any,
+        agent_run: Any,
+        response: Optional[str],
+        prefix: str = "📋",
+    ) -> None:
+        """Deliver a subagent result back to the session that spawned it."""
+        if not response:
+            return
+        report_session_id = getattr(agent_run, "report_to_session", None)
+        if not report_session_id or not self._session_manager:
+            return
+        try:
+            target_session = await self._session_manager.get_session(report_session_id)
+            if target_session:
+                label = getattr(job, "name", job.id)
+                channel = target_session.last_channel or target_session.channel
+                user_id = target_session.last_user_id or target_session.user_id
+                agent_id = target_session.agent_id
+                await self.handle_message(
+                    channel=channel,
+                    sender="job-scheduler",
+                    sender_id=user_id,
+                    content=(
+                        f"[System] Subagent '{label}' has completed with the following results. "
+                        f"Please summarize and report this to the user.\n\n{response}"
+                    ),
+                    agent_id=agent_id,
+                    dispatch_response=True,
+                )
+            else:
+                self._logger.warning(
+                    f"report_to_session: session {report_session_id[:8]}… not found"
+                )
+        except Exception as _e:
+            self._logger.error(f"report_to_session delivery failed: {_e}")
+
+    async def enqueue_message(
+        self,
+        session_key: str,
+        content: str,
+        agent_id: Optional[str] = None,
+        **handle_kwargs,
+    ) -> Optional[str]:
+        """Route an inbound message through the per-session message queue.
+
+        *session_key* is the channel-scoped routing key (e.g. ``"telegram:12345"``
+        or ``"slack:T123/U456"``).  *handle_kwargs* are forwarded verbatim to
+        ``Gateway.handle_message()``.
+        """
+        resolved_agent_id = agent_id or (
+            next(iter(self._agent_manager.agents))
+            if self._agent_manager and self._agent_manager.agents
+            else "default"
+        )
+        agent = self._agent_manager.get_agent(resolved_agent_id) if self._agent_manager else None
+
+        from pyclaw.config.schema import QueueConfig
+        base_config: QueueConfig = (
+            agent.config.queue
+            if agent and hasattr(agent.config, "queue")
+            else QueueConfig()
+        )
+
+        async def _dispatch(msg_content: str, **kwargs) -> Optional[str]:
+            return await self.handle_message(content=msg_content, **kwargs)
+
+        queue = self._queue_manager.get_or_create(
+            session_key=session_key,
+            base_config=base_config,
+            dispatch_fn=_dispatch,
+        )
+        future = await queue.enqueue(content, agent_id=resolved_agent_id, **handle_kwargs)
+        # Register the drain task so /stop can cancel it
+        if queue._drain_task and not queue._drain_task.done():
+            self._active_tasks[session_key] = queue._drain_task
+        try:
+            return await future
+        finally:
+            self._active_tasks.pop(session_key, None)
+
     async def handle_message(
         self,
         channel: str,
@@ -1959,6 +2510,7 @@ class Gateway:
         content: str,
         message_id: Optional[str] = None,
         agent_id: Optional[str] = None,
+        dispatch_response: bool = False,
     ) -> Optional[str]:
         """Handle an incoming message."""
         # Create incoming message
@@ -1978,12 +2530,20 @@ class Gateway:
                 else "default"
             )
 
-        # Get or create session (fires session:created for new sessions)
-        session = await self._get_or_create_session(
-            agent_id=agent_id,
-            channel=channel,
-            user_id=sender_id,
-        )
+        # Get the agent's active session (one per agent; all channels share it).
+        # Job channel uses the old isolated-session path.
+        if channel == "job":
+            session = await self._get_or_create_session(
+                agent_id=agent_id,
+                channel=channel,
+                user_id=sender_id,
+            )
+        else:
+            session = await self._get_active_session(
+                agent_id=agent_id,
+                channel=channel,
+                user_id=sender_id,
+            )
 
         if session is None:
             return "Could not create session"
@@ -2008,14 +2568,59 @@ class Gateway:
                 message_preview=content[:100],
             )
 
+        # Check activation_mode — "mention" requires the agent name in the message
+        activation_mode = session.context.get("activation_mode", "always")
+        if activation_mode == "mention":
+            agent_name_hint = session.agent_id.lower()
+            if agent_name_hint not in content.lower():
+                self._logger.debug(
+                    f"activation_mode=mention: skipping message without mention of {agent_name_hint!r}"
+                )
+                return None
+
         # Get agent
         agent = self.agent_manager.get_agent(session.agent_id)
         if agent is None:
             return "No agent available"
 
+        # Fire message:preprocessed — all checks passed, message is about to reach the agent
+        await self._fire(HookEvent.MESSAGE_PREPROCESSED, {
+            "body_for_agent": content,
+            "channel": channel,
+            "sender_id": sender_id,
+            "session_id": session.id,
+            "agent_id": session.agent_id,
+            "transcript": None,  # populated when voice input is added
+        })
+
+        # Fire agent:bootstrap when a session runner is being created for the first time
+        is_new_runner = session.id not in agent._session_runners
+        if is_new_runner:
+            from pyclaw.core.prompt_builder import BOOTSTRAP_FILES, get_agent_dir
+            agent_dir = get_agent_dir(agent.id, agent.config_dir)
+            loaded_files = [
+                str(agent_dir / f)
+                for f in BOOTSTRAP_FILES
+                if (agent_dir / f).exists()
+            ]
+            await self._fire(HookEvent.AGENT_BOOTSTRAP, {
+                "agent_id": agent.id,
+                "session_id": session.id,
+                "workspace_dir": str(agent_dir),
+                "bootstrap_files": loaded_files,
+            })
+
         # Handle message
         response = await agent.handle_message(message, session)
         response_text = response.content if response else None
+
+        # Snapshot context token count into session after each response so that
+        # /status can display it even before the runner is next accessed.
+        _snapshot_ctx_tokens(agent, session)
+
+        # Check send_policy — "off" suppresses the outbound reply
+        if session.context.get("send_policy") == "off":
+            response_text = None
 
         # Fire agent:after_response
         await self._fire(HookEvent.AGENT_RESPONSE, {
@@ -2050,6 +2655,10 @@ class Gateway:
             "agent_id": agent.id,
             "response": response_text,
         })
+
+        # Auto-dispatch the response back via the session's channel when requested
+        if dispatch_response and response_text and session:
+            await self._deliver_to_session(session, response_text)
 
         return response_text
 
@@ -2088,10 +2697,8 @@ class Gateway:
         # Concurrency limits — rebuild from provider model configs
         old_cc = old_config.concurrency
         new_cc = new_cfg.concurrency
-        old_mm = old_config.providers.minimax
-        new_mm = new_cfg.providers.minimax
-        old_limits = {n: m.concurrency for n, m in old_mm.models.items() if m.enabled} if old_mm else {}
-        new_limits = {n: m.concurrency for n, m in new_mm.models.items() if m.enabled} if new_mm else {}
+        old_limits = self._collect_model_limits(old_config.providers)
+        new_limits = self._collect_model_limits(new_cfg.providers)
         if old_cc.default != new_cc.default or old_limits != new_limits:
             from pyclaw.core.concurrency import init_manager
             init_manager(model_limits=new_limits, default=new_cc.default)
@@ -2150,17 +2757,6 @@ class Gateway:
             self._logger.info("Config reload: no changes detected")
 
         return changed
-
-    async def run_heartbeats(self) -> None:
-        """Run heartbeat checks for all agents."""
-        for agent in self.agent_manager.list_agents():
-            if agent.config.heartbeat.enabled:
-                try:
-                    result = await agent.run_heartbeat(agent.config.heartbeat.prompt)
-                    if result:
-                        self._logger.debug(f"Heartbeat result for {agent.name}: {result}")
-                except Exception as e:
-                    self._logger.error(f"Heartbeat error for {agent.name}: {e}")
 
     def get_status(self) -> Dict[str, Any]:
         """Get gateway status."""

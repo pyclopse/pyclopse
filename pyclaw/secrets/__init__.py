@@ -1,14 +1,19 @@
 """Secrets management for pyclaw."""
-from .models import SecretRef, SecretSource, SecretsConfig, EnvProviderConfig, FileProviderConfig, ExecProviderConfig, KeychainProviderConfig
-from .manager import SecretsManager
+from .models import (
+    EnvSecretDef,
+    FileSecretDef,
+    ExecSecretDef,
+    KeychainSecretDef,
+    SecretsConfig,
+)
+from .manager import SecretsManager, ResolutionError
 
 __all__ = [
-    "SecretRef",
-    "SecretSource",
+    "EnvSecretDef",
+    "FileSecretDef",
+    "ExecSecretDef",
+    "KeychainSecretDef",
     "SecretsConfig",
-    "EnvProviderConfig",
-    "FileProviderConfig",
-    "ExecProviderConfig",
-    "KeychainProviderConfig",
     "SecretsManager",
+    "ResolutionError",
 ]

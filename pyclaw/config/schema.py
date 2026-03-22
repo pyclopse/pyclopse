@@ -1,11 +1,54 @@
 """Configuration schema definitions using Pydantic."""
 
-from pydantic import BaseModel, Field, field_validator, ConfigDict, AliasChoices
+from pydantic import BaseModel, Field, ConfigDict, AliasChoices
 from typing import Optional, List, Dict, Any
 from enum import Enum
-import os
 
 from pyclaw.secrets.models import SecretsConfig
+
+
+class QueueMode(str, Enum):
+    """Message queue processing mode."""
+    FOLLOWUP = "followup"
+    COLLECT = "collect"
+    INTERRUPT = "interrupt"
+    STEER = "steer"
+    STEER_BACKLOG = "steer-backlog"
+    STEER_PLUS_BACKLOG = "steer+backlog"
+    QUEUE = "queue"
+
+
+class DropPolicy(str, Enum):
+    """Queue overflow drop policy."""
+    OLD = "old"
+    NEW = "new"
+    SUMMARIZE = "summarize"
+
+
+class QueueModeByChannel(BaseModel):
+    """Per-channel queue mode overrides (OC QueueModeByProvider)."""
+    telegram: Optional[QueueMode] = None
+    slack: Optional[QueueMode] = None
+    discord: Optional[QueueMode] = None
+    whatsapp: Optional[QueueMode] = None
+    signal: Optional[QueueMode] = None
+    imessage: Optional[QueueMode] = None
+    googlechat: Optional[QueueMode] = None
+
+
+class QueueConfig(BaseModel):
+    """Per-agent message queue configuration."""
+    mode: QueueMode = QueueMode.COLLECT
+    debounce_ms: int = Field(
+        default=300,
+        validation_alias=AliasChoices("debounce_ms", "debounceMs"),
+    )
+    cap: int = 20
+    drop: DropPolicy = DropPolicy.OLD
+    by_channel: QueueModeByChannel = Field(
+        default_factory=QueueModeByChannel,
+        validation_alias=AliasChoices("by_channel", "byChannel"),
+    )
 
 
 class SecurityMode(str, Enum):
@@ -150,16 +193,6 @@ class ProviderConfig(BaseModel):
         validation_alias=AliasChoices("fastagent_provider", "fastagentProvider"),
     )
 
-    @field_validator("api_key", mode="before")
-    @classmethod
-    def resolve_env_var(cls, v: Optional[str]) -> Optional[str]:
-        """Resolve environment variables in format ${VAR_NAME}."""
-        if v is None:
-            return None
-        if isinstance(v, str) and v.startswith("${") and v.endswith("}"):
-            var_name = v[2:-1]
-            return os.environ.get(var_name)
-        return v
 
 
 class OpenAIProviderConfig(ProviderConfig):
@@ -207,14 +240,6 @@ class ProvidersConfig(BaseModel):
     minimax: Optional[MiniMaxProviderConfig] = None
 
 
-class HeartbeatConfig(BaseModel):
-    """Heartbeat configuration for an agent."""
-    enabled: bool = True
-    every: str = "30m"
-    prompt: str = "Check for any important updates."
-    active_hours: Optional[Dict[str, str]] = Field(default=None, validation_alias="activeHours")
-
-
 class ToolsConfig(BaseModel):
     """
     Tools configuration for an agent.
@@ -258,7 +283,6 @@ class AgentConfig(BaseModel):
     streaming_timeout: Optional[float] = Field(default=None, validation_alias=AliasChoices("streaming_timeout", "streamingTimeout"))
     system_prompt: str = Field("You are a helpful assistant.", validation_alias=AliasChoices("system_prompt", "systemPrompt"))
     tools: ToolsConfig = Field(default_factory=ToolsConfig)
-    heartbeat: HeartbeatConfig = Field(default_factory=HeartbeatConfig)
     # FastAgent-specific config (extra fields allowed)
     use_fastagent: bool = Field(default=False, validation_alias=AliasChoices("use_fastagent", "useFastagent"))
     workflow: Optional[str] = None
@@ -282,6 +306,102 @@ class AgentConfig(BaseModel):
         default=None,
         validation_alias=AliasChoices("request_params", "requestParams"),
     )
+    # FastAgent model-level settings applied at runner init time.
+    # reasoning_effort: off | none | minimal | low | medium | high | xhigh | max | auto
+    reasoning_effort: Optional[str] = Field(
+        default=None,
+        validation_alias=AliasChoices("reasoning_effort", "reasoningEffort"),
+    )
+    # text_verbosity: low | medium | high
+    text_verbosity: Optional[str] = Field(
+        default=None,
+        validation_alias=AliasChoices("text_verbosity", "textVerbosity"),
+    )
+    # service_tier: fast | flex
+    service_tier: Optional[str] = Field(
+        default=None,
+        validation_alias=AliasChoices("service_tier", "serviceTier"),
+    )
+    # Model fallback chain — ordered list of fallback models tried on error.
+    # Example: fallbacks: [claude-sonnet, gpt-4o]
+    fallbacks: List[str] = Field(
+        default_factory=list,
+    )
+    # Model context window size (tokens). Used by /status to show context utilisation.
+    # Leave unset if unknown; pyclaw will estimate from history file size.
+    # Examples: 200000 (Claude), 128000 (GPT-4o), 196608 (MiniMax-M2.5)
+    context_window: Optional[int] = Field(
+        default=None,
+        validation_alias=AliasChoices("context_window", "contextWindow"),
+    )
+    # Message queue configuration — controls how rapid inbound messages are handled
+    # while the agent is processing a previous message.
+    queue: QueueConfig = Field(default_factory=QueueConfig)
+    # Additional skill search directories for this agent only.
+    # Skills here override same-named global skills. Searched after ~/.pyclaw/skills/
+    # and ~/.pyclaw/agents/{name}/skills/ but before any gateway.skills_dirs paths.
+    skills_dirs: List[str] = Field(
+        default_factory=list,
+        validation_alias=AliasChoices("skills_dirs", "skillsDirs"),
+    )
+
+    # ── Workflow: orchestrator / iterative_planner ────────────────────────────
+    # workflow: orchestrator
+    #   agents: [researcher, writer]
+    #   planType: full          # "full" (one upfront plan) | "iterative" (step-by-step)
+    #   planIterations: 5       # max planning iterations; -1 = unlimited (iterative_planner default)
+    plan_type: Optional[str] = Field(
+        default=None,
+        validation_alias=AliasChoices("plan_type", "planType"),
+    )
+    plan_iterations: Optional[int] = Field(
+        default=None,
+        validation_alias=AliasChoices("plan_iterations", "planIterations"),
+    )
+
+    # ── Workflow: evaluator_optimizer ─────────────────────────────────────────
+    # workflow: evaluator_optimizer
+    #   generator: drafter        # agent that produces responses
+    #   evaluator: critic         # agent that scores responses
+    #   minRating: GOOD           # EXCELLENT | GOOD | FAIR | POOR
+    #   maxRefinements: 3
+    #   refinementInstruction: "Improve based on the critique."
+    generator: Optional[str] = None
+    evaluator: Optional[str] = None
+    min_rating: Optional[str] = Field(
+        default=None,
+        validation_alias=AliasChoices("min_rating", "minRating"),
+    )
+    max_refinements: Optional[int] = Field(
+        default=None,
+        validation_alias=AliasChoices("max_refinements", "maxRefinements"),
+    )
+    refinement_instruction: Optional[str] = Field(
+        default=None,
+        validation_alias=AliasChoices("refinement_instruction", "refinementInstruction"),
+    )
+
+    # ── Workflow: maker (K-voting) ────────────────────────────────────────────
+    # workflow: maker
+    #   worker: classifier        # agent to sample from
+    #   k: 3                      # consensus margin required
+    #   maxSamples: 50            # give up after this many attempts
+    #   matchStrategy: normalized # "exact" | "normalized" | "structured"
+    #   redFlagMaxLength: 200     # discard responses longer than N chars
+    worker: Optional[str] = None
+    k: Optional[int] = None
+    max_samples: Optional[int] = Field(
+        default=None,
+        validation_alias=AliasChoices("max_samples", "maxSamples"),
+    )
+    match_strategy: Optional[str] = Field(
+        default=None,
+        validation_alias=AliasChoices("match_strategy", "matchStrategy"),
+    )
+    red_flag_max_length: Optional[int] = Field(
+        default=None,
+        validation_alias=AliasChoices("red_flag_max_length", "redFlagMaxLength"),
+    )
 
 
 class AgentsConfig(BaseModel):
@@ -300,21 +420,20 @@ class NodeConfig(BaseModel):
     require_approval: bool = Field(True, validation_alias="requireApproval")
     secret_key: Optional[str] = Field(default=None, validation_alias="secretKey")
 
-    @field_validator("secret_key", mode="before")
-    @classmethod
-    def resolve_env_var(cls, v: Optional[str]) -> Optional[str]:
-        if v is None:
-            return None
-        if isinstance(v, str) and v.startswith("${") and v.endswith("}"):
-            var_name = v[2:-1]
-            return os.environ.get(var_name)
-        return v
 
 
 class JobsConfig(BaseModel):
     """Jobs (cron) configuration."""
+    model_config = ConfigDict(populate_by_name=True)
     enabled: bool = True
-    persist_file: str = Field("~/.pyclaw/jobs.json", validation_alias="persistFile")
+    agents_dir: str = Field(
+        "~/.pyclaw/agents",
+        validation_alias=AliasChoices("agents_dir", "agentsDir"),
+    )
+    default_timezone: Optional[str] = Field(
+        default=None,
+        validation_alias=AliasChoices("default_timezone", "defaultTimezone"),
+    )
 
 
 class TodosConfig(BaseModel):
@@ -324,16 +443,6 @@ class TodosConfig(BaseModel):
         "~/.pyclaw/todos.json",
         validation_alias=AliasChoices("persist_file", "persistFile"),
     )
-
-
-def _resolve_token(v: Optional[str]) -> Optional[str]:
-    """Resolve a bot token that may be an ${env:VAR} reference."""
-    if v is None:
-        return None
-    if isinstance(v, str) and v.startswith("${") and v.endswith("}"):
-        var_name = v[2:-1]
-        return os.environ.get(var_name)
-    return v
 
 
 class TelegramBotConfig(BaseModel):
@@ -349,12 +458,6 @@ class TelegramBotConfig(BaseModel):
     typing_indicator: Optional[bool] = Field(default=None, validation_alias="typingIndicator")
     streaming: Optional[bool] = None
 
-    @field_validator("bot_token", mode="before")
-    @classmethod
-    def resolve_env_var(cls, v: Optional[str]) -> Optional[str]:
-        return _resolve_token(v)
-
-
 class TelegramConfig(BaseModel):
     """Telegram channel configuration."""
     enabled: bool = True
@@ -369,11 +472,6 @@ class TelegramConfig(BaseModel):
     streaming: bool = Field(default=False)
     # Multi-bot: named bots, each routing to a specific agent
     bots: Dict[str, TelegramBotConfig] = Field(default_factory=dict)
-
-    @field_validator("bot_token", mode="before")
-    @classmethod
-    def resolve_env_var(cls, v: Optional[str]) -> Optional[str]:
-        return _resolve_token(v)
 
     def effective_config_for_bot(self, name: str) -> TelegramBotConfig:
         """Return a fully-resolved config for the named bot, inheriting parent defaults."""
@@ -394,17 +492,6 @@ class DiscordConfig(BaseModel):
     bot_token: Optional[str] = Field(default=None, validation_alias="botToken")
     guilds: List[Dict[str, str]] = Field(default_factory=list)
 
-    @field_validator("bot_token", mode="before")
-    @classmethod
-    def resolve_env_var(cls, v: Optional[str]) -> Optional[str]:
-        if v is None:
-            return None
-        if isinstance(v, str) and v.startswith("${") and v.endswith("}"):
-            var_name = v[2:-1]
-            return os.environ.get(var_name)
-        return v
-
-
 class SlackConfig(BaseModel):
     """Slack channel configuration."""
     enabled: bool = False
@@ -414,21 +501,6 @@ class SlackConfig(BaseModel):
     denied_users: List[str] = Field(default_factory=list, validation_alias="deniedUsers")
     # Reply in thread when message is part of a Slack thread
     threading: bool = True
-    # Slack channel ID to post pulse/heartbeat messages to (e.g. "C1234567890")
-    pulse_channel: Optional[str] = Field(
-        default=None, validation_alias=AliasChoices("pulse_channel", "pulseChannel")
-    )
-
-    @field_validator("bot_token", mode="before")
-    @classmethod
-    def resolve_env_var(cls, v: Optional[str]) -> Optional[str]:
-        if v is None:
-            return None
-        if isinstance(v, str) and v.startswith("${") and v.endswith("}"):
-            var_name = v[2:-1]
-            return os.environ.get(var_name)
-        return v
-
 
 class WhatsAppConfig(BaseModel):
     """WhatsApp channel configuration."""
@@ -437,17 +509,6 @@ class WhatsAppConfig(BaseModel):
     access_token: Optional[str] = Field(default=None, validation_alias="accessToken")
     allowed_users: List[str] = Field(default_factory=list, validation_alias="allowedUsers")
     denied_users: List[str] = Field(default_factory=list, validation_alias="deniedUsers")
-
-    @field_validator("access_token", mode="before")
-    @classmethod
-    def resolve_env_var(cls, v: Optional[str]) -> Optional[str]:
-        if v is None:
-            return None
-        if isinstance(v, str) and v.startswith("${") and v.endswith("}"):
-            var_name = v[2:-1]
-            return os.environ.get(var_name)
-        return v
-
 
 class ChannelsConfig(BaseModel):
     """Channels configuration."""
@@ -512,6 +573,67 @@ class TUIConfig(BaseModel):
     key_bindings: Dict[str, str] = Field(default_factory=dict, validation_alias="keyBindings")
 
 
+class ChromeDevtoolsMcpConfig(BaseModel):
+    """Chrome DevTools MCP server configuration.
+
+    Uses the official chrome-devtools-mcp package to expose Chrome browser
+    control tools (navigation, screenshots, console, network, performance)
+    to agents via the Model Context Protocol.
+
+    Requires Node.js. chrome-devtools-mcp is spawned as an MCP stdio server
+    by FastAgent when an agent lists "chrome-devtools" in its mcp_servers.
+
+    By default (autoConnect: true), chrome-devtools-mcp launches and manages
+    its own isolated Chrome session automatically — no manual Chrome setup needed.
+
+    Example (minimal)::
+
+        browser:
+          chromeDevtoolsMcp:
+            enabled: true
+
+    To connect to a manually launched Chrome instead::
+
+        browser:
+          chromeDevtoolsMcp:
+            enabled: true
+            autoConnect: false
+            browserUrl: "http://127.0.0.1:9222"
+
+    Then add "chrome-devtools" to your agent::
+
+        agents:
+          assistant:
+            mcpServers: [pyclaw, fetch, chrome-devtools]
+    """
+    enabled: bool = False
+    # Command to run — defaults to globally installed binary; set to "npx" to use npx
+    command: str = "chrome-devtools-mcp"
+    # Connect to a running Chrome instance with remote debugging enabled.
+    # Start Chrome with: --remote-debugging-port=9222
+    browser_url: Optional[str] = Field(
+        default=None,
+        validation_alias=AliasChoices("browser_url", "browserUrl"),
+    )
+    # Auto-connect: launch and manage an isolated Chrome session automatically.
+    # When True (default), chrome-devtools-mcp owns the browser lifecycle.
+    auto_connect: bool = Field(
+        default=True,
+        validation_alias=AliasChoices("auto_connect", "autoConnect"),
+    )
+    # Run Chrome headless (no visible window)
+    headless: bool = False
+    # Chrome channel: stable | canary | beta | dev
+    channel: Optional[str] = None
+    # Path to Chrome executable (overrides auto-detection)
+    executable_path: Optional[str] = Field(
+        default=None,
+        validation_alias=AliasChoices("executable_path", "executablePath"),
+    )
+    # Expose only 3 basic tools: navigate, evaluate, screenshot
+    slim: bool = False
+
+
 class BrowserAutomationConfig(BaseModel):
     """Browser automation configuration."""
     enabled: bool = False
@@ -520,6 +642,10 @@ class BrowserAutomationConfig(BaseModel):
     timeout: int = 30000
     viewport_width: int = 1280
     viewport_height: int = 720
+    chrome_devtools_mcp: ChromeDevtoolsMcpConfig = Field(
+        default_factory=ChromeDevtoolsMcpConfig,
+        validation_alias=AliasChoices("chrome_devtools_mcp", "chromeDevtoolsMcp"),
+    )
 
 
 class MemoryQmdPathConfig(BaseModel):
@@ -571,6 +697,11 @@ class ConcurrencyConfig(BaseModel):
     default: int = 3
 
 
+class AcpConfig(BaseModel):
+    """FastAgent ACP (Agent Client Protocol) integration settings."""
+    enabled: bool = True
+
+
 class GatewayConfig(BaseModel):
     """Gateway server configuration."""
     host: str = "0.0.0.0"
@@ -578,6 +709,7 @@ class GatewayConfig(BaseModel):
     mcp_port: int = Field(default=8081, validation_alias=AliasChoices("mcp_port", "mcpPort"))
     debug: bool = False
     log_level: str = "info"
+    log_retention_days: int = Field(default=7, validation_alias=AliasChoices("log_retention_days", "logRetentionDays"))
     webhook_url: Optional[str] = Field(default=None, validation_alias="webhookUrl")
     cors_origins: List[str] = Field(default_factory=lambda: ["*"], validation_alias="corsOrigins")
     # Additional skill search directories (on top of ~/.pyclaw/skills/)
@@ -593,6 +725,7 @@ class Config(BaseModel):
     # IANA timezone name (e.g. "America/New_York", "Europe/London").
     # All pyclaw timestamps use this zone.  Omit to use the system local timezone.
     timezone: Optional[str] = Field(default=None)
+    acp: AcpConfig = Field(default_factory=AcpConfig)
     secrets: SecretsConfig = Field(default_factory=SecretsConfig)
     concurrency: ConcurrencyConfig = Field(default_factory=ConcurrencyConfig)
     sessions: SessionsConfig = Field(default_factory=SessionsConfig)

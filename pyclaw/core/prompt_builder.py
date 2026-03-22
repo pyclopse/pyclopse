@@ -6,7 +6,6 @@ OpenClaw loads these bootstrap files (in order):
 - TOOLS.md: Tool-specific notes
 - IDENTITY.md: Agent identity
 - USER.md: User information
-- HEARTBEAT.md: Heartbeat configuration
 - BOOTSTRAP.md: Initial bootstrap instructions
 - MEMORY.md: Long-term memory
 
@@ -16,7 +15,7 @@ These are added to the system prompt under "# Project Context".
 import logging
 import os
 from pathlib import Path
-from typing import Optional
+from typing import Any, List, Optional
 from datetime import datetime
 
 logger = logging.getLogger(__name__)
@@ -30,10 +29,8 @@ BOOTSTRAP_FILES = [
     "IDENTITY.md",   # Agent identity
     "RULES.md",     # Operational rules (pyclaw addition)
     "USER.md",      # User information
-    "PULSE.md",    # Pulse config (formerly HEARTBEAT.md)
     # OpenClaw aliases (for migration compatibility)
     "SOUL.md",
-    "HEARTBEAT.md",
     "BOOTSTRAP.md", # Initial bootstrap (often deleted after first run)
     "MEMORY.md",    # Long-term memory
     "memory.md",    # Alternate memory filename
@@ -193,6 +190,116 @@ def build_system_prompt(
     return "\n".join(lines)
 
 
+def build_job_prompt(
+    agent_name: str,
+    config_dir: str = "~/.pyclaw",
+    agent_run: Any = None,
+    extra_dirs: Optional[list] = None,
+) -> str:
+    """Build a system prompt for a job run based on AgentRun include_* flags.
+
+    Reads bootstrap files according to the resolved flags on *agent_run*, then
+    appends ``agent_run.instruction`` if set.  Works with any prompt_preset
+    (full / minimal / task) plus any per-field overrides.
+    """
+    agent_dir = get_agent_dir(agent_name, config_dir)
+
+    # Map each flag to the ordered list of filenames to try (first match wins)
+    FLAG_FILES = [
+        ("include_personality", ["PERSONALITY.md", "SOUL.md"]),
+        ("include_identity",    ["IDENTITY.md"]),
+        ("include_rules",       ["RULES.md"]),
+        ("include_memory",      ["MEMORY.md", "memory.md"]),
+        ("include_user",        ["USER.md"]),
+        ("include_agents",      ["AGENTS.md"]),
+        ("include_tools",       ["TOOLS.md"]),
+    ]
+
+    context_files = []
+    if agent_run is not None and agent_dir.exists():
+        for flag, filenames in FLAG_FILES:
+            if not getattr(agent_run, flag, False):
+                continue
+            for filename in filenames:
+                content = read_bootstrap_file(agent_dir / filename)
+                if content:
+                    context_files.append({
+                        "path": str(agent_dir / filename),
+                        "name": filename,
+                        "content": content,
+                    })
+                    break  # first match per flag
+
+    lines: List[str] = []
+
+    if context_files:
+        lines += [
+            "You are a personal assistant running inside pyclaw.",
+            "",
+            "# Project Context",
+            "",
+        ]
+        for file_info in context_files:
+            if file_info["name"] == "RULES.md":
+                lines += [
+                    f"## {file_info['path']}",
+                    "",
+                    "**IMPORTANT: The following rules were set by the user."
+                    " They are mandatory and must be followed at all times.**",
+                    "",
+                    file_info["content"],
+                    "",
+                ]
+            else:
+                lines += [
+                    f"## {file_info['path']}",
+                    "",
+                    file_info["content"],
+                    "",
+                ]
+
+    # Skills block
+    if agent_run is not None and getattr(agent_run, "include_skills", False):
+        try:
+            from pyclaw.skills.registry import discover_skills, format_for_prompt
+            skills = discover_skills(agent_name=agent_name, config_dir=config_dir, extra_dirs=extra_dirs)
+            skill_filter = getattr(agent_run, "skills", None)
+            if skill_filter:
+                skill_filter_lower = {s.lower() for s in skill_filter}
+                skills = [s for s in skills if s.name.lower() in skill_filter_lower]
+            if skills:
+                lines.append(format_for_prompt(skills))
+                lines.append("")
+        except Exception as e:
+            logger.debug(f"Skill injection skipped in job prompt: {e}")
+
+    # Append instruction (always, even if everything else is empty)
+    instruction = getattr(agent_run, "instruction", None) if agent_run is not None else None
+    if instruction:
+        if lines:
+            lines += ["## Job Instruction", ""]
+        lines.append(instruction)
+
+    # Inject additional files into the system prompt (after instruction)
+    include_files = getattr(agent_run, "include_files", None) if agent_run is not None else None
+    if include_files:
+        for file_path in include_files:
+            path = Path(os.path.expanduser(file_path))
+            content = read_bootstrap_file(path)
+            if content:
+                lines += [
+                    "",
+                    f"## {path}",
+                    "",
+                    content,
+                    "",
+                ]
+            else:
+                logger.debug(f"include_files: skipping missing or empty file: {path}")
+
+    return "\n".join(lines) if lines else "You are a helpful AI assistant."
+
+
 def build_minimal_system_prompt(
     agent_name: str,
     config_dir: str = "~/.pyclaw",
@@ -244,7 +351,6 @@ def ensure_agent_files(agent_name: str, config_dir: str = "~/.pyclaw") -> dict[s
         "TOOLS.md",
         "IDENTITY.md",
         "USER.md",
-        "HEARTBEAT.md",
         "BOOTSTRAP.md",
     ]
 

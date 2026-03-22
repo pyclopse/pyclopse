@@ -1,157 +1,124 @@
 """Secrets system data models."""
 
-from enum import Enum
-from typing import Any, Dict, List, Optional, Union
-from pydantic import BaseModel, Field
+from typing import List, Literal, Optional
+from pydantic import BaseModel, ConfigDict, Field
 
 
-class SecretSource(str, Enum):
-    ENV = "env"
-    FILE = "file"
-    EXEC = "exec"
-    KEYCHAIN = "keychain"
+class EnvSecretDef(BaseModel):
+    """Read a secret from an environment variable.
 
-
-class SecretRef(BaseModel):
-    """
-    A SecretRef is an indirection pointer to a secret value.
-
-    Instead of storing a plaintext credential in config, a SecretRef says
-    "look this value up in provider X using id Y at resolution time."
+    The env var name defaults to the registry key (the secret name itself).
+    Set ``var`` to override when the env var name differs from the secret name.
 
     YAML example::
 
-        api_key:
-          source: env
-          provider: default
-          id: ANTHROPIC_API_KEY
-
-        bot_token:
-          source: file
-          provider: secrets_file
-          id: /channels/telegram/botToken
-
-        signing_secret:
-          source: exec
-          provider: onepassword
-          id: op://Personal/SlackBot/signing_secret
+        secrets:
+          MINIMAX_API_KEY:
+            source: env
+            # reads env var MINIMAX_API_KEY
+          OPENAI_KEY:
+            source: env
+            var: OPENAI_API_KEY   # reads env var OPENAI_API_KEY, registered as OPENAI_KEY
     """
-    source: SecretSource
-    provider: str = "default"
-    id: str
-
-    @classmethod
-    def from_dict(cls, d: dict) -> "SecretRef":
-        return cls(source=d["source"], provider=d.get("provider", "default"), id=d["id"])
-
-    @classmethod
-    def is_ref(cls, value: Any) -> bool:
-        """Return True if *value* looks like a SecretRef dict."""
-        return (
-            isinstance(value, dict)
-            and "source" in value
-            and "id" in value
-            and value.get("source") in ("env", "file", "exec", "keychain")
-        )
+    source: Literal["env"] = "env"
+    var: Optional[str] = None  # env var name; defaults to the registry key at resolution time
 
 
-class EnvProviderConfig(BaseModel):
-    """Resolves secrets from environment variables."""
-    source: str = "env"
-    # Optional allowlist of permitted variable names. Empty = allow all.
-    allowlist: List[str] = Field(default_factory=list)
+class FileSecretDef(BaseModel):
+    """Read a secret from a file.
 
+    Omit ``id`` (or leave empty) to read the whole file as a single string value.
+    Set ``id`` to a JSON pointer (starting with ``/``) to extract a key from a JSON file.
 
-class FileProviderConfig(BaseModel):
-    """Resolves secrets from a local JSON file."""
-    source: str = "file"
+    YAML example::
+
+        secrets:
+          DB_PASSWORD:
+            source: file
+            path: ~/.pyclaw/secrets/db.txt       # reads entire file
+          TG_BOT_TOKEN:
+            source: file
+            path: ~/.pyclaw/secrets/tokens.json
+            id: /channels/telegram/botToken      # JSON pointer
+    """
+    source: Literal["file"] = "file"
     path: str
-    # "json": id is a JSON pointer (/key/subkey); "singleValue": entire file content.
-    mode: str = "json"
+    # JSON pointer (e.g. /channels/telegram/botToken).
+    # Empty = read entire file as a single value.
+    id: str = ""
 
 
-class ExecProviderConfig(BaseModel):
+class ExecSecretDef(BaseModel):
+    """Read a secret by running an external command (1Password CLI, Vault, sops, etc.).
+
+    When ``json_only=True`` (default): sends a JSON payload on stdin and expects
+    a JSON response on stdout::
+
+        stdin:  {"protocolVersion": 1, "provider": "pyclaw", "ids": ["<id>"]}
+        stdout: {"protocolVersion": 1, "values": {"<id>": "<value>"}}
+
+    When ``json_only=False``: ``id`` is appended as the final CLI argument and
+    the entire stdout is used as the secret value (useful for simple CLIs).
+
+    YAML example::
+
+        secrets:
+          OP_SECRET:
+            source: exec
+            command: /opt/homebrew/bin/op
+            id: op://Personal/Bot/token
+            args: [read]
+            passEnv: [HOME]
+            jsonOnly: false
+            allowSymlinkCommand: true
     """
-    Resolves secrets by calling an external binary (1Password CLI, Vault, sops, etc.).
-
-    The binary receives a JSON payload on stdin::
-
-        {"protocolVersion": 1, "provider": "<name>", "ids": ["<id>"]}
-
-    And must write JSON to stdout::
-
-        {"protocolVersion": 1, "values": {"<id>": "<resolved-value>"}}
-
-    When jsonOnly=False the entire stdout is used as the resolved value
-    (useful for simple CLIs like ``vault kv get -field=...``).
-    """
-    source: str = "exec"
-    command: str                        # Absolute path to binary
+    source: Literal["exec"] = "exec"
+    command: str
+    id: str
     args: List[str] = Field(default_factory=list)
-    pass_env: List[str] = Field(
-        default_factory=list,
-        validation_alias="passEnv",
-    )
+    pass_env: List[str] = Field(default_factory=list, validation_alias="passEnv")
     json_only: bool = Field(True, validation_alias="jsonOnly")
     timeout_ms: int = Field(5000, validation_alias="timeoutMs")
     allow_symlink_command: bool = Field(False, validation_alias="allowSymlinkCommand")
 
 
-class KeychainProviderConfig(BaseModel):
-    """
-    Resolves secrets from the OS keychain.
+class KeychainSecretDef(BaseModel):
+    """Read a secret from the OS keychain.
 
-    On macOS uses the ``security`` CLI (always available, no extra deps).
-    On other platforms falls back to the ``keyring`` library (must be
-    installed: ``pip install keyring``).
-
-    The SecretRef ``id`` is the **account name** stored in the keychain
-    entry.  The provider's ``service`` field identifies which keychain
-    service the entry belongs to.
+    On macOS uses the ``security`` CLI (no extra dependencies).
+    On other platforms uses the ``keyring`` library (``pip install keyring``).
 
     YAML example::
 
         secrets:
-          providers:
-            keychain:
-              source: keychain
-              service: pyclaw          # keychain service name (default: "pyclaw")
-              backend: auto            # auto | security | keyring (default: auto)
+          SLACK_BOT_TOKEN:
+            source: keychain
+            account: pyclaw-slack-bot   # keychain account name
+            service: pyclaw             # optional; defaults to "pyclaw"
     """
-    source: str = "keychain"
-    # Keychain service name that groups related entries together.
+    source: Literal["keychain"] = "keychain"
+    account: str  # keychain account name
     service: str = "pyclaw"
-    # "auto": use `security` on macOS, `keyring` elsewhere.
-    # "security": force macOS `security` CLI.
-    # "keyring": force `keyring` library (cross-platform).
-    backend: str = "auto"
-
-
-ProviderConfig = Union[EnvProviderConfig, FileProviderConfig, ExecProviderConfig, KeychainProviderConfig]
+    backend: str = "auto"  # auto | security | keyring
 
 
 class SecretsConfig(BaseModel):
-    """
-    Top-level secrets configuration block.
+    """Flat registry of named secrets.
 
-    Example pyclaw.yaml::
+    Every key is a secret name; every value is a source definition.
+    Reference any registered secret anywhere in config with ``${NAME}``.
+
+    YAML example::
 
         secrets:
-          providers:
-            default:
-              source: env
-            secrets_file:
-              source: file
-              path: ~/.pyclaw/secrets.json
-            onepassword:
-              source: exec
-              command: /opt/homebrew/bin/op
-              allowSymlinkCommand: true
-              args: [read]
-              passEnv: [HOME]
-              jsonOnly: false
-            keychain:
-              source: keychain
-              service: pyclaw
+          MINIMAX_API_KEY:
+            source: env
+          TG_BOT_TOKEN:
+            source: keychain
+            account: pyclaw-telegram-bot
+          TRADING_KEY:
+            source: file
+            path: ~/.pyclaw/secrets/trading.json
+            id: /trading/api_key
     """
-    providers: Dict[str, Any] = Field(default_factory=dict)
+    model_config = ConfigDict(extra="allow")

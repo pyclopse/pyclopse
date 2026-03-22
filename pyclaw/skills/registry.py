@@ -37,6 +37,7 @@ class SkillInfo:
     license: str = ""
     compatibility: str = ""
     allowed_tools: list[str] = field(default_factory=list)
+    metadata: dict = field(default_factory=dict)
 
     def read_content(self) -> str:
         """Return the full SKILL.md content with {skill_dir} substituted."""
@@ -82,6 +83,8 @@ def _parse_skill_dir(skill_dir: Path) -> Optional[SkillInfo]:
         # Parse optional allowed-tools (space-delimited string per spec)
         raw_tools = meta.get("allowed-tools", "")
         allowed_tools = raw_tools.split() if isinstance(raw_tools, str) and raw_tools else []
+        raw_meta = meta.get("metadata", {})
+        metadata = raw_meta if isinstance(raw_meta, dict) else {}
         return SkillInfo(
             name=name,
             description=description,
@@ -92,6 +95,7 @@ def _parse_skill_dir(skill_dir: Path) -> Optional[SkillInfo]:
             license=str(meta.get("license", "")),
             compatibility=str(meta.get("compatibility", "")),
             allowed_tools=allowed_tools,
+            metadata=metadata,
         )
     except Exception as e:
         logger.warning(f"Failed to parse skill at {skill_dir}: {e}")
@@ -154,6 +158,8 @@ def format_for_prompt(
         lines = ["<skill>", f"  <name>{s.name}</name>"]
         if s.description:
             lines.append(f"  <description>{s.description}</description>")
+        if s.allowed_tools:
+            lines.append(f"  <allowed_tools>{' '.join(s.allowed_tools)}</allowed_tools>")
         lines.append(f"  <location>{s.skill_md}</location>")
         lines.append("</skill>")
         parts.append("\n".join(lines))

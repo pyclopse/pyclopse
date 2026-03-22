@@ -32,8 +32,9 @@ from pyclaw.core.session import Session, SessionManager
 class TestCronParsing:
 
     def _make_scheduler(self, tmp_path) -> JobScheduler:
-        cfg = JobsConfig(enabled=True, persist_file=str(tmp_path / "jobs.json"))
-        return JobScheduler(cfg)
+        cfg = JobsConfig(enabled=True, agents_dir=str(tmp_path / "agents"))
+        # Pin to UTC so tests are timezone-agnostic: naive datetimes == UTC
+        return JobScheduler(cfg, default_timezone="UTC")
 
     def test_every_minute_fires_within_60s(self, tmp_path):
         sched = self._make_scheduler(tmp_path)
@@ -77,6 +78,75 @@ class TestCronParsing:
 
 
 # ---------------------------------------------------------------------------
+# Continuous cron
+# ---------------------------------------------------------------------------
+
+class TestContinuousCron:
+
+    def _make_scheduler(self, tmp_path) -> JobScheduler:
+        cfg = JobsConfig(enabled=True, agents_dir=str(tmp_path / "agents"))
+        return JobScheduler(cfg, default_timezone="UTC")
+
+    def test_is_continuous_detects_keyword(self, tmp_path):
+        sched = self._make_scheduler(tmp_path)
+        assert sched._is_continuous("continuous 7-14 * * 1-5")
+        assert sched._is_continuous("CONTINUOUS 9-17 * * *")
+        assert not sched._is_continuous("0 9 * * 1-5")
+        assert not sched._is_continuous("* * * * *")
+
+    def test_inside_window_returns_now(self, tmp_path):
+        sched = self._make_scheduler(tmp_path)
+        # Wednesday 10:30 UTC — inside "7-14 * * 1-5"
+        t = datetime(2025, 1, 8, 10, 30, 0)
+        nxt = sched._continuous_next("continuous 7-14 * * 1-5", t, "UTC")
+        assert nxt == t  # restart immediately
+
+    def test_outside_window_hour_schedules_next_open(self, tmp_path):
+        sched = self._make_scheduler(tmp_path)
+        # Wednesday 16:00 UTC — outside hour window (7-14)
+        t = datetime(2025, 1, 8, 16, 0, 0)
+        nxt = sched._continuous_next("continuous 7-14 * * 1-5", t, "UTC")
+        assert nxt is not None
+        assert nxt > t
+        assert nxt.hour == 7  # next open is Thursday 07:00
+
+    def test_outside_window_weekend_schedules_monday(self, tmp_path):
+        sched = self._make_scheduler(tmp_path)
+        # Saturday 10:00 UTC — outside day window (1-5)
+        t = datetime(2025, 1, 11, 10, 0, 0)  # Saturday
+        nxt = sched._continuous_next("continuous 7-14 * * 1-5", t, "UTC")
+        assert nxt is not None
+        assert nxt.weekday() == 0  # Monday
+
+    def test_recalc_uses_continuous_path(self, tmp_path):
+        sched = self._make_scheduler(tmp_path)
+        job = Job(
+            id=str(uuid.uuid4()),
+            name="cont-job",
+            run=CommandRun(command="echo hi"),
+            schedule=CronSchedule(expr="continuous 7-14 * * 1-5"),
+        )
+        # Inside window: Wednesday 10:00
+        with patch("pyclaw.jobs.scheduler.now", return_value=datetime(2025, 1, 8, 10, 0, 0)):
+            sched._recalc_next_run(job)
+        assert job.next_run == datetime(2025, 1, 8, 10, 0, 0)
+
+    def test_recalc_outside_window_schedules_forward(self, tmp_path):
+        sched = self._make_scheduler(tmp_path)
+        job = Job(
+            id=str(uuid.uuid4()),
+            name="cont-job",
+            run=CommandRun(command="echo hi"),
+            schedule=CronSchedule(expr="continuous 7-14 * * 1-5"),
+        )
+        # Outside window: Wednesday 20:00
+        with patch("pyclaw.jobs.scheduler.now", return_value=datetime(2025, 1, 8, 20, 0, 0)):
+            sched._recalc_next_run(job)
+        assert job.next_run > datetime(2025, 1, 8, 20, 0, 0)
+        assert job.next_run.hour == 7
+
+
+# ---------------------------------------------------------------------------
 # Item 4: Job results → Telegram notification callback
 # ---------------------------------------------------------------------------
 
@@ -108,7 +178,7 @@ class TestJobNotifyCallback:
     async def test_callback_called_on_success(self, tmp_path):
         """notify_callback is fired after a successful job."""
         notify = AsyncMock()
-        cfg = JobsConfig(enabled=True, persist_file=str(tmp_path / "jobs.json"))
+        cfg = JobsConfig(enabled=True, agents_dir=str(tmp_path / "agents"))
         sched = JobScheduler(cfg, notify_callback=notify)
 
         job = self._make_job()
@@ -136,7 +206,7 @@ class TestJobNotifyCallback:
         async def capture(j, r):
             received.append((j, r))
 
-        cfg = JobsConfig(enabled=True, persist_file=str(tmp_path / "jobs.json"))
+        cfg = JobsConfig(enabled=True, agents_dir=str(tmp_path / "agents"))
         sched = JobScheduler(cfg, notify_callback=capture)
 
         job = self._make_job()
@@ -150,8 +220,9 @@ class TestJobNotifyCallback:
             await sched._run_job(job)
 
         await asyncio.sleep(0.05)
-        assert len(received) == 1
-        j, r = received[0]
+        # Callback fires twice: once at start (RUNNING) and once on completion
+        assert len(received) == 2
+        j, r = received[-1]
         assert j.name == "test-job"
         assert r.status == JobStatus.COMPLETED
 
@@ -163,7 +234,7 @@ class TestJobNotifyCallback:
         async def capture(j, r):
             received.append((j, r))
 
-        cfg = JobsConfig(enabled=True, persist_file=str(tmp_path / "jobs.json"))
+        cfg = JobsConfig(enabled=True, agents_dir=str(tmp_path / "agents"))
         sched = JobScheduler(cfg, notify_callback=capture)
 
         job = self._make_job()
@@ -177,14 +248,15 @@ class TestJobNotifyCallback:
             await sched._run_job(job)
 
         await asyncio.sleep(0.05)
-        assert len(received) == 1
-        _, r = received[0]
+        # Callback fires twice: once at start (RUNNING) and once on completion
+        assert len(received) == 2
+        _, r = received[-1]
         assert r.status == JobStatus.FAILED
 
     @pytest.mark.asyncio
     async def test_no_callback_does_not_crash(self, tmp_path):
         """Scheduler works normally without a notify_callback."""
-        cfg = JobsConfig(enabled=True, persist_file=str(tmp_path / "jobs.json"))
+        cfg = JobsConfig(enabled=True, agents_dir=str(tmp_path / "agents"))
         sched = JobScheduler(cfg)  # no callback
 
         job = self._make_job()

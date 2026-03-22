@@ -1,15 +1,18 @@
 """CLI entry point for pyclaw.
 
 Usage:
-    python -m pyclaw              # Run gateway + HTTP API
+    python -m pyclaw              # Run gateway + dashboard TUI
     python -m pyclaw --help      # Show help
     python -m pyclaw init        # Create default config
     python -m pyclaw validate     # Validate config
-    python -m pyclaw run --tui   # Run with TUI
+    python -m pyclaw run          # Run with dashboard TUI (default)
+    python -m pyclaw run --headless  # Run without TUI (stdout only)
 """
 
 import argparse
 import asyncio
+import logging
+import logging.handlers
 import sys
 from pathlib import Path
 
@@ -139,6 +142,16 @@ def create_parser() -> argparse.ArgumentParser:
         help="Path to pyclaw data directory (default: ~/.pyclaw)",
     )
 
+    # secret command
+    secret_parser = subparsers.add_parser(
+        "secret",
+        help="Manage secrets (retrieve values from configured providers)",
+    )
+    secret_sub = secret_parser.add_subparsers(dest="secret_command", help="Secret commands")
+
+    secret_get_parser = secret_sub.add_parser("get", help="Retrieve a secret value by name")
+    secret_get_parser.add_argument("name", help="Secret name as registered in secrets config (e.g. MINIMAX_API_KEY)")
+
     # run command
     run_parser = subparsers.add_parser(
         "run",
@@ -157,10 +170,16 @@ def create_parser() -> argparse.ArgumentParser:
         help="Port to bind to (overrides config)",
     )
     run_parser.add_argument(
+        "--headless",
+        action="store_true",
+        help="Run without TUI (headless mode, stdout only)",
+    )
+    # Legacy alias — kept for backward compat but ignored (dashboard is always on)
+    run_parser.add_argument(
         "--tui",
         "-t",
         action="store_true",
-        help="Launch the TUI instead of API server",
+        help=argparse.SUPPRESS,
     )
     run_parser.add_argument(
         "--debug",
@@ -169,6 +188,100 @@ def create_parser() -> argparse.ArgumentParser:
     )
 
     return parser
+
+
+class _ExcludeAgentDetailFilter(logging.Filter):
+    """Block pyclaw.agent.* INFO/DEBUG records from the main pyclaw.log.
+
+    Per-agent conversation turns and tool calls are noisy and belong in the
+    per-agent log, not in the broad gateway log.  WARNING+ still passes through
+    so errors and warnings surface in both places.
+    """
+
+    def filter(self, record: logging.LogRecord) -> bool:  # type: ignore[override]
+        if record.name.startswith("pyclaw.agent.") and record.levelno < logging.WARNING:
+            return False
+        return True
+
+
+def setup_logging(config, debug: bool = False) -> None:
+    """Configure root logger: console + daily-rotating file under ~/.pyclaw/logs/."""
+    level_name = "DEBUG" if debug else config.gateway.log_level.upper()
+    level = getattr(logging, level_name, logging.INFO)
+    fmt = logging.Formatter("%(asctime)s %(name)-30s %(levelname)-8s %(message)s")
+
+    root = logging.getLogger()
+    root.setLevel(level)
+
+    # Console handler
+    console = logging.StreamHandler()
+    console.setLevel(level)
+    console.setFormatter(fmt)
+    root.addHandler(console)
+
+    # Daily rotating file handler → ~/.pyclaw/logs/pyclaw.log
+    logs_dir = Path("~/.pyclaw/logs").expanduser()
+    logs_dir.mkdir(parents=True, exist_ok=True)
+    log_file = logs_dir / "pyclaw.log"
+
+    file_handler = logging.handlers.TimedRotatingFileHandler(
+        filename=log_file,
+        when="midnight",
+        backupCount=config.gateway.log_retention_days,
+        encoding="utf-8",
+    )
+    file_handler.setLevel(level)
+    file_handler.setFormatter(fmt)
+    # Suppress per-agent detail from the main gateway log
+    file_handler.addFilter(_ExcludeAgentDetailFilter())
+
+    # Rename rotated files from "pyclaw.log.YYYY-MM-DD" → "pyclaw-YYYY-MM-DD.log"
+    def _namer(default_name: str) -> str:
+        base, _, suffix = default_name.rpartition(".")
+        if suffix and len(suffix) == 10:  # YYYY-MM-DD
+            return str(logs_dir / f"pyclaw-{suffix}.log")
+        return default_name
+
+    file_handler.namer = _namer
+    root.addHandler(file_handler)
+
+
+def setup_agent_logging(agent_id: str, logs_dir: Path, retention_days: int) -> None:
+    """Set up a daily-rotating per-agent log under ~/.pyclaw/agents/{agent_id}/logs/.
+
+    All records emitted to logger ``pyclaw.agent.{agent_id}`` (and its children)
+    are written to ``agent.log`` in addition to normal propagation.  The file is
+    created on first write; the parent directory is created here.
+    """
+    agent_log_dir = logs_dir / agent_id / "logs"
+    agent_log_dir.mkdir(parents=True, exist_ok=True)
+
+    agent_logger = logging.getLogger(f"pyclaw.agent.{agent_id}")
+    # Avoid duplicate handlers if called more than once (e.g. gateway restart)
+    for h in agent_logger.handlers:
+        if isinstance(h, logging.handlers.TimedRotatingFileHandler):
+            return
+
+    fmt = logging.Formatter("%(asctime)s %(levelname)-8s %(message)s")
+    fh = logging.handlers.TimedRotatingFileHandler(
+        filename=agent_log_dir / "agent.log",
+        when="midnight",
+        backupCount=retention_days,
+        encoding="utf-8",
+    )
+
+    def _namer(default_name: str) -> str:
+        base, _, suffix = default_name.rpartition(".")
+        if suffix and len(suffix) == 10:  # YYYY-MM-DD
+            return str(agent_log_dir / f"agent-{suffix}.log")
+        return default_name
+
+    fh.namer = _namer
+    fh.setFormatter(fmt)
+    agent_logger.addHandler(fh)
+    # Do NOT set propagate=False so records also flow to root (console + pyclaw.log at WARNING+)
+    agent_logger.setLevel(logging.DEBUG)
+
 
 
 def _register_skill_providers(mcp_server, config) -> None:
@@ -204,6 +317,7 @@ async def run_gateway(
 
     loader = ConfigLoader(config_path)
     config = loader.load()
+    setup_logging(config, debug=debug)
 
     gw_host = host or config.gateway.host
     gw_port = port or config.gateway.port
@@ -223,9 +337,13 @@ async def run_gateway(
 
     await gateway.initialize()
 
-    # Start pulse runner
-    if gateway.pulse_runner:
-        await gateway.pulse_runner.start()
+    # Set up per-agent log files now that agents are initialized
+    _agents_logs_dir = Path("~/.pyclaw/agents").expanduser()
+    _retention = config.gateway.log_retention_days
+    if gateway._agent_manager:
+        for _aid in gateway._agent_manager.agents:
+            setup_agent_logging(_aid, _agents_logs_dir, _retention)
+
     gateway._is_running = True
 
     # Start Telegram polling — one task per configured bot
@@ -254,19 +372,20 @@ async def run_gateway(
 async def run_gateway_with_tui(
     config_path: str = None, host: str = None, port: int = None, debug: bool = False
 ):
-    """Run the gateway with TUI."""
+    """Run the gateway with the dashboard TUI."""
     from .config import ConfigLoader
     from .core.gateway import Gateway
 
     loader = ConfigLoader(config_path)
     config = loader.load()
+    setup_logging(config, debug=debug)
 
     gw_host = config.gateway.host
     gw_port = port or config.gateway.port
     mcp_port = config.gateway.mcp_port
 
     print(f"pyclaw v{__version__}")
-    print("Starting gateway + TUI...")
+    print("Starting gateway + dashboard...")
 
     # MCP and API servers must be up BEFORE gateway.initialize() so that
     # FastAgent can connect to the MCP server during agent startup.
@@ -279,10 +398,13 @@ async def run_gateway_with_tui(
 
     await gateway.initialize()
 
-    # Start pulse runner without entering the blocking run-loop;
-    # the TUI event-loop drives execution instead.
-    if gateway.pulse_runner:
-        await gateway.pulse_runner.start()
+    # Set up per-agent log files now that agents are initialized
+    _agents_logs_dir = Path("~/.pyclaw/agents").expanduser()
+    _retention = config.gateway.log_retention_days
+    if gateway._agent_manager:
+        for _aid in gateway._agent_manager.agents:
+            setup_agent_logging(_aid, _agents_logs_dir, _retention)
+
     gateway._is_running = True
 
     # Start Telegram polling — one task per configured bot
@@ -294,10 +416,10 @@ async def run_gateway_with_tui(
     if gateway._tg_bots:
         print(f"Telegram polling: {list(gateway._tg_bots)}")
 
-    # Run TUI with graceful shutdown handling
+    # Run the dashboard TUI (replaces the old multi-screen TUI)
     try:
-        from .tui.app import run_tui
-        await run_tui(gateway)
+        from .tui.dashboard import run_dashboard
+        await run_dashboard(gateway)
     except KeyboardInterrupt:
         print("\nCtrl+C received, shutting down...")
 
@@ -335,6 +457,25 @@ def cmd_validate(args):
         sys.exit(1)
     except Exception as e:
         print(f"✗ Configuration error: {e}")
+        sys.exit(1)
+
+
+def cmd_secret(args):
+    """Handle secret command."""
+    if args.secret_command != "get":
+        print("Usage: pyclaw secret get <name>")
+        sys.exit(1)
+
+    from pyclaw.secrets.manager import SecretsManager, ResolutionError
+    from pyclaw.config.loader import load_secrets_registry, find_config_file, expand_path
+
+    config_path = getattr(args, "config", None)
+    cfg_path = expand_path(config_path) if config_path else find_config_file()
+    manager = SecretsManager(load_secrets_registry(cfg_path))
+    try:
+        print(manager.resolve_name(args.name))
+    except ResolutionError as exc:
+        print(f"Error: {exc}", file=sys.stderr)
         sys.exit(1)
 
 
@@ -441,6 +582,10 @@ def main():
         cmd_uninstall(args)
         return
 
+    if args.command == "secret":
+        cmd_secret(args)
+        return
+
     if args.command == "import-openclaw":
         from .tools.openclaw_import import cmd_import_openclaw
         cmd_import_openclaw(args)
@@ -448,18 +593,18 @@ def main():
 
     if args.command == "run":
         try:
-            if args.tui:
-                asyncio.run(run_gateway_with_tui(args.config, args.host, args.port, args.debug))
-            else:
+            if args.headless:
                 asyncio.run(run_gateway(args.config, args.host, args.port, args.debug))
+            else:
+                asyncio.run(run_gateway_with_tui(args.config, args.host, args.port, args.debug))
         except KeyboardInterrupt:
             print("\nShutting down...")
         return
 
-    # Default: run gateway + HTTP API
+    # Default: run gateway + dashboard TUI
     if args.command is None:
         try:
-            asyncio.run(run_gateway(args.config, debug=args.debug))
+            asyncio.run(run_gateway_with_tui(args.config, debug=args.debug))
         except KeyboardInterrupt:
             print("\nShutting down...")
         return

@@ -16,6 +16,7 @@ class CommandContext:
     session: Optional[Any]  # Session (may be None for stateless commands)
     sender_id: str
     channel: str
+    thread_id: Optional[str] = None  # Telegram topic ID or Slack thread_ts
 
 
 @dataclass
@@ -100,6 +101,30 @@ class CommandRegistry:
 # ---------------------------------------------------------------------------
 
 
+# FA ACP model subcommands — routed through AgentRunner.acp_execute()
+_FA_MODEL_SUBCOMMANDS = frozenset({
+    "reasoning", "fast", "verbosity", "web_search", "web_fetch",
+    "doctor", "aliases", "catalog",
+})
+
+
+def _get_runner(ctx: CommandContext) -> Optional[Any]:
+    """Return the already-initialized AgentRunner for this session, or None.
+
+    Only returns a runner if one already exists (i.e. the session has had at
+    least one message processed).  Does NOT create a new runner.
+    """
+    if ctx.session is None:
+        return None
+    gw = ctx.gateway
+    if not getattr(gw, "_agent_manager", None):
+        return None
+    agent = gw._agent_manager.get_agent(ctx.session.agent_id)
+    if agent is None:
+        return None
+    return agent._session_runners.get(ctx.session.id)
+
+
 def register_builtin_commands(registry: CommandRegistry, gateway: Any) -> None:
     """Register the standard gateway commands into *registry*."""
 
@@ -116,7 +141,8 @@ def register_builtin_commands(registry: CommandRegistry, gateway: Any) -> None:
             import shutil as _shutil
             archive_dir = ctx.session.history_dir / "archived"
             archive_dir.mkdir(parents=True, exist_ok=True)
-            stamp = _dt.utcnow().strftime("%Y%m%d_%H%M%S")
+            from pyclaw.utils.time import now as _now
+            stamp = _now().strftime("%Y%m%d_%H%M%S")
             for hist_file in ["history.json", "history_previous.json"]:
                 p = ctx.session.history_dir / hist_file
                 if p.exists():
@@ -127,9 +153,33 @@ def register_builtin_commands(registry: CommandRegistry, gateway: Any) -> None:
         # Evict the per-session runner so the next message gets a fresh FastAgent context
         if agent:
             await agent.evict_session_runner(ctx.session.id)
+        # Create a fresh session and make it the active one
+        sm = ctx.gateway._session_manager
+        if sm:
+            channel = ctx.session.last_channel or ctx.session.channel
+            user_id = ctx.session.last_user_id or ctx.session.user_id
+            thread_ts = ctx.session.last_thread_ts
+            new_session = await sm.create_session(
+                agent_id=ctx.session.agent_id,
+                channel=channel,
+                user_id=user_id,
+            )
+            new_session.last_channel = channel
+            new_session.last_user_id = user_id
+            new_session.last_thread_ts = thread_ts
+            new_session.save_metadata()
+            sm.set_active_session(ctx.session.agent_id, new_session.id)
         return "✅ Session history cleared."
 
     async def cmd_status(args: str, ctx: CommandContext) -> str:
+        # FA ACP subcommands: /status system, /status auth
+        sub = args.strip().lower()
+        if sub in ("system", "auth"):
+            runner = _get_runner(ctx)
+            if runner is None:
+                return "No active agent session — send a message first, then retry."
+            return await runner.acp_execute("status", args.strip())
+
         status = ctx.gateway.get_status()
         agents = status.get("agents", {})
         sessions = status.get("sessions", {})
@@ -145,6 +195,62 @@ def register_builtin_commands(registry: CommandRegistry, gateway: Any) -> None:
             f"Jobs: {jobs.get('total', 0)} total "
             f"/ {jobs.get('running', 0)} running",
         ]
+
+        # Context usage — read from live FA agent history (always current)
+        if ctx.session is not None:
+            agent = (
+                ctx.gateway._agent_manager.get_agent(ctx.session.agent_id)
+                if getattr(ctx.gateway, "_agent_manager", None) else None
+            )
+            context_window: Optional[int] = getattr(
+                getattr(agent, "config", None), "context_window", None
+            )
+            # Primary: session.context["_ctx_tokens"] — snapshotted after every agent
+            # response by gateway._snapshot_ctx_tokens(); survives runner lifecycle.
+            ctx_tokens: int = ctx.session.context.get("_ctx_tokens", 0)
+            # Secondary: live runner accumulator (more up-to-date mid-conversation)
+            runner = _get_runner(ctx)
+            if runner is not None and getattr(runner, "_app", None) is not None:
+                try:
+                    agent_name = getattr(runner, "agent_name", None)
+                    fa_agent = runner._app._agent(agent_name)
+
+                    accumulator = getattr(fa_agent, "usage_accumulator", None)
+                    history = getattr(fa_agent, "message_history", None) or []
+                    live_tokens = 0
+                    if accumulator is not None:
+                        live_tokens = accumulator.current_context_tokens or 0
+                        if context_window is None:
+                            context_window = getattr(accumulator, "context_window_size", None)
+                    if live_tokens == 0:
+                        total_chars = 0
+                        for msg in history:
+                            content = getattr(msg, "content", None)
+                            if content is None:
+                                continue
+                            if isinstance(content, str):
+                                total_chars += len(content)
+                            elif isinstance(content, list):
+                                for part in content:
+                                    total_chars += len(str(getattr(part, "text", part) or ""))
+                        live_tokens = total_chars // 4
+                    if live_tokens:
+                        ctx_tokens = live_tokens
+                except Exception:
+                    logger.warning("Failed to read live context tokens from FA", exc_info=True)
+
+            if ctx_tokens:
+                if context_window:
+                    pct = min(100, int(ctx_tokens * 100 / context_window))
+                    bar_filled = pct // 10
+                    bar = "█" * bar_filled + "░" * (10 - bar_filled)
+                    lines.append(
+                        f"Context: {ctx_tokens:,} / {context_window:,} tokens "
+                        f"({pct}%) [{bar}]"
+                    )
+                else:
+                    lines.append(f"Context: {ctx_tokens:,} tokens (no limit set)")
+
         return "\n".join(lines)
 
     async def cmd_model(args: str, ctx: CommandContext) -> str:
@@ -161,6 +267,14 @@ def register_builtin_commands(registry: CommandRegistry, gateway: Any) -> None:
         base_model = agent.config.model
         current_model = ctx.session.context.get("model_override") or base_model
 
+        # Route FA ACP model subcommands to the live runner
+        first_word = args.strip().split()[0].lower() if args.strip() else ""
+        if first_word in _FA_MODEL_SUBCOMMANDS:
+            runner = _get_runner(ctx)
+            if runner is None:
+                return "No active agent session — send a message first, then retry."
+            return await runner.acp_execute("model", args.strip())
+
         if not args.strip():
             lines = [f"Current model: {current_model}"]
             if current_model != base_model:
@@ -175,6 +289,7 @@ def register_builtin_commands(registry: CommandRegistry, gateway: Any) -> None:
                 lines.append(f"API endpoint: {base_url}")
             api_key_set = bool(os.environ.get("GENERIC_API_KEY") or (runner and getattr(runner, "api_key", None)))
             lines.append(f"API key: {'set ✅' if api_key_set else 'missing ❌'}")
+            lines.append(f"\nFA subcommands: /model reasoning|fast|verbosity|web_search|web_fetch|doctor|aliases|catalog")
             return "\n".join(lines)
 
         new_model = args.strip()
@@ -273,7 +388,67 @@ def register_builtin_commands(registry: CommandRegistry, gateway: Any) -> None:
         return "\n".join(lines)
 
     async def cmd_models(args: str, ctx: CommandContext) -> str:
-        """List configured model providers and available models."""
+        """List configured model providers, or manage fallback chain.
+
+        Usage:
+          /models                      — list providers and active model
+          /models fallbacks            — show fallback chain for this agent
+          /models fallbacks add <m>    — append model to fallback chain
+          /models fallbacks remove <m> — remove model from fallback chain
+          /models fallbacks clear      — clear entire fallback chain
+        """
+        first = args.strip().split()[0].lower() if args.strip() else ""
+
+        if first == "fallbacks":
+            if ctx.session is None:
+                return "No active session."
+            agent = (
+                ctx.gateway._agent_manager.get_agent(ctx.session.agent_id)
+                if ctx.gateway._agent_manager else None
+            )
+            if agent is None:
+                return "No agent found for this session."
+            fallbacks: list = list(getattr(agent.config, "fallbacks", None) or [])
+            rest = args.strip()[len("fallbacks"):].strip()
+            parts = rest.split(maxsplit=1)
+            sub = parts[0].lower() if parts else "list"
+            val = parts[1].strip() if len(parts) > 1 else ""
+
+            if sub in ("list", "") or not rest:
+                if not fallbacks:
+                    return f"No fallbacks configured for agent {agent.config.name!r}."
+                lines = [f"Fallback chain for {agent.config.name!r}:"]
+                for i, m in enumerate(fallbacks, 1):
+                    lines.append(f"  {i}. {m}")
+                idx = ctx.session.context.get("_fallback_index", 0)
+                if idx:
+                    lines.append(f"Current position: {idx} ({fallbacks[idx] if idx < len(fallbacks) else 'exhausted'})")
+                return "\n".join(lines)
+
+            if sub == "add":
+                if not val:
+                    return "Usage: /models fallbacks add <model>"
+                fallbacks.append(val)
+                agent.config.fallbacks = fallbacks
+                return f"✅ Added {val!r} to fallback chain (position {len(fallbacks)})."
+
+            if sub in ("remove", "rm", "del"):
+                if not val:
+                    return "Usage: /models fallbacks remove <model>"
+                if val not in fallbacks:
+                    return f"{val!r} not in fallback chain."
+                fallbacks.remove(val)
+                agent.config.fallbacks = fallbacks
+                ctx.session.context.pop("_fallback_index", None)
+                return f"✅ Removed {val!r} from fallback chain."
+
+            if sub == "clear":
+                agent.config.fallbacks = []
+                ctx.session.context.pop("_fallback_index", None)
+                return "✅ Fallback chain cleared."
+
+            return "Usage: /models fallbacks [list|add <model>|remove <model>|clear]"
+
         try:
             cfg = ctx.gateway.config
             providers = cfg.providers
@@ -293,6 +468,9 @@ def register_builtin_commands(registry: CommandRegistry, gateway: Any) -> None:
                 if agent:
                     current = ctx.session.context.get("model_override") or agent.config.model
                     lines.append(f"\nActive model: {current}")
+                    fallbacks = getattr(agent.config, "fallbacks", None) or []
+                    if fallbacks:
+                        lines.append(f"Fallbacks: {', '.join(fallbacks)}")
             return "\n".join(lines) if len(lines) > 1 else "No providers configured."
         except Exception as e:
             return f"[ERROR] {e}"
@@ -568,10 +746,227 @@ def register_builtin_commands(registry: CommandRegistry, gateway: Any) -> None:
 
         async def _do_reboot():
             await asyncio.sleep(0.5)
-            os.execv(sys.executable, [sys.executable] + sys.argv)
+            # Flush state (scheduler merge-save, session saves, etc.) before
+            # replacing the process so nothing is lost across the restart.
+            try:
+                await ctx.gateway.stop()
+            except Exception:
+                pass
+            # When run via `python -m pyclaw`, sys.argv[0] is __main__.py.
+            # Re-executing that path directly breaks relative imports, so we
+            # rebuild the argv using -m instead.
+            if sys.argv[0].endswith("__main__.py"):
+                argv = [sys.executable, "-m", "pyclaw"] + sys.argv[1:]
+            else:
+                argv = [sys.executable] + sys.argv
+            os.execv(sys.executable, argv)
 
         asyncio.create_task(_do_reboot())
         return "🔄 Rebooting pyclaw… (back in a few seconds)"
+
+    async def cmd_subagents(args: str, ctx: CommandContext) -> str:
+        """Manage background subagents. Usage: /subagents [list|status|kill|interrupt|send]"""
+        import httpx
+
+        gw = ctx.gateway
+        scheduler = getattr(gw, "_job_scheduler", None)
+        if not scheduler:
+            return "Job scheduler not available."
+
+        parts = args.strip().split(maxsplit=2) if args.strip() else []
+        sub = parts[0].lower() if parts else "list"
+
+        # Determine caller's agent and session
+        agent_id = ctx.session.agent_id if ctx.session else None
+        session_id = ctx.session.id if ctx.session else None
+
+        if sub in ("list", ""):
+            entries = scheduler.list_subagents(spawned_by_agent=agent_id)
+            if not entries:
+                return "No active subagents."
+            lines = [f"Active subagents ({len(entries)}):"]
+            for job, sess in entries:
+                lines.append(
+                    f"  [{job.status.value}] {job.name}  "
+                    f"id={job.id[:8]}…  session={sess[:8] if sess else '—'}…"
+                )
+                lines.append(f"    task: {str(getattr(job.run, 'message', ''))[:100]}")
+            return "\n".join(lines)
+
+        if sub == "status":
+            if len(parts) < 2:
+                return "Usage: /subagents status <job_id>"
+            job_id = parts[1]
+            job = scheduler.jobs.get(job_id) or next(
+                (j for j in scheduler.jobs.values()
+                 if j.name == job_id and j.spawned_by_session is not None), None
+            )
+            if not job or not job.spawned_by_session is not None:
+                return f"Subagent '{job_id}' not found."
+            sess = scheduler._subagent_sessions.get(job.id, "—")
+            queued = len(scheduler._subagent_message_queue.get(job.id, []))
+            lines = [
+                f"Subagent: {job.name}",
+                f"Status:   {job.status.value}",
+                f"Agent:    {getattr(job.run, 'agent', '?')}",
+                f"Session:  {sess[:16]}…" if sess != "—" else "Session:  —",
+                f"Queued messages: {queued}",
+                f"Task:     {str(getattr(job.run, 'message', ''))[:200]}",
+            ]
+            return "\n".join(lines)
+
+        if sub == "kill":
+            if len(parts) < 2:
+                return "Usage: /subagents kill <job_id>"
+            job_id = parts[1]
+            killed = await scheduler.kill_subagent(job_id)
+            return f"✅ Subagent {job_id[:8]}… killed." if killed else f"Subagent '{job_id}' not found or not running."
+
+        if sub == "interrupt":
+            if len(parts) < 3:
+                return "Usage: /subagents interrupt <job_id> <new task>"
+            job_id = parts[1]
+            new_task = parts[2]
+            job = scheduler.jobs.get(job_id)
+            if not job or not job.spawned_by_session is not None:
+                return f"Subagent '{job_id}' not found."
+            old_run = job.run
+            spawned_by = job.spawned_by_session or session_id or ""
+            agent = getattr(old_run, "agent", agent_id or "")
+            await scheduler.kill_subagent(job_id)
+            new_id = await scheduler.spawn_subagent(
+                task=new_task,
+                agent=agent,
+                spawned_by_session=spawned_by,
+                model=getattr(old_run, "model", None),
+                timeout_seconds=job.timeout_seconds,
+                prompt_preset=getattr(old_run, "prompt_preset", "minimal"),
+                instruction=getattr(old_run, "instruction", None),
+            )
+            return f"✅ Subagent interrupted. New subagent: {new_id[:8]}…"
+
+        if sub == "send":
+            if len(parts) < 3:
+                return "Usage: /subagents send <job_id> <message>"
+            job_id = parts[1]
+            message = parts[2]
+            queued = scheduler.queue_message(job_id, message)
+            return (
+                f"✅ Message queued for subagent {job_id[:8]}…"
+                if queued else
+                f"Subagent '{job_id}' not found — may have already completed."
+            )
+
+        return (
+            "Usage: /subagents <subcommand>\n"
+            "  list                        — list active subagents\n"
+            "  status <id>                 — show subagent details\n"
+            "  kill <id>                   — cancel a running subagent\n"
+            "  interrupt <id> <new task>   — kill and respawn with new task\n"
+            "  send <id> <message>         — queue a follow-up message"
+        )
+
+    async def cmd_queue(args: str, ctx: CommandContext) -> str:
+        """Show or set the message queue mode for this session.
+
+        Usage:
+          /queue                       — show current queue config
+          /queue mode=<mode>           — set mode (followup|collect|interrupt|steer|steer-backlog)
+          /queue debounce=<ms>         — set debounce window in milliseconds
+          /queue cap=<n>               — set max queue depth
+          /queue drop=<old|new|summarize> — set overflow drop policy
+          /queue reset                 — restore agent default config
+        """
+        from pyclaw.config.schema import QueueConfig, QueueMode, DropPolicy
+
+        if ctx.session is None:
+            return "No active session."
+
+        session_key = f"{ctx.channel}:{ctx.sender_id}"
+        agent = (
+            ctx.gateway._agent_manager.get_agent(ctx.session.agent_id)
+            if getattr(ctx.gateway, "_agent_manager", None) else None
+        )
+        base_cfg: QueueConfig = (
+            agent.config.queue
+            if agent and hasattr(agent.config, "queue")
+            else QueueConfig()
+        )
+        qm = getattr(ctx.gateway, "_queue_manager", None)
+
+        stripped = args.strip().lower()
+
+        if not stripped or stripped == "status":
+            overrides = qm.get_config_override(session_key) if qm else {}
+            effective_mode = overrides.get("mode") or base_cfg.mode.value
+            effective_debounce = overrides.get("debounce_ms", base_cfg.debounce_ms)
+            effective_cap = overrides.get("cap", base_cfg.cap)
+            effective_drop = overrides.get("drop") or base_cfg.drop.value
+            lines = [
+                "Queue config (this session):",
+                f"  mode:     {effective_mode}",
+                f"  debounce: {effective_debounce} ms",
+                f"  cap:      {effective_cap}",
+                f"  drop:     {effective_drop}",
+            ]
+            if overrides:
+                lines.append("  (session override active — /queue reset to restore agent default)")
+            return "\n".join(lines)
+
+        if stripped == "reset":
+            if qm:
+                qm.update_config(
+                    session_key,
+                    mode=base_cfg.mode.value,
+                    debounce_ms=base_cfg.debounce_ms,
+                    cap=base_cfg.cap,
+                    drop=base_cfg.drop.value,
+                )
+                # Clear the stored override
+                qm._config_overrides.pop(session_key, None)
+            return "Queue config reset to agent default."
+
+        new_updates: dict = {}
+        errors = []
+        for part in args.strip().split():
+            if "=" not in part:
+                errors.append(f"Invalid argument: {part!r} (expected key=value)")
+                continue
+            k, v = part.split("=", 1)
+            k = k.lower()
+            if k == "mode":
+                try:
+                    QueueMode(v)
+                    new_updates["mode"] = v
+                except ValueError:
+                    errors.append(f"Invalid mode {v!r}. Valid: {[m.value for m in QueueMode]}")
+            elif k == "debounce":
+                try:
+                    new_updates["debounce_ms"] = int(v)
+                except ValueError:
+                    errors.append(f"Invalid debounce value: {v!r} (expected integer ms)")
+            elif k == "cap":
+                try:
+                    new_updates["cap"] = int(v)
+                except ValueError:
+                    errors.append(f"Invalid cap value: {v!r} (expected integer)")
+            elif k == "drop":
+                try:
+                    DropPolicy(v)
+                    new_updates["drop"] = v
+                except ValueError:
+                    errors.append(f"Invalid drop policy {v!r}. Valid: {[d.value for d in DropPolicy]}")
+            else:
+                errors.append(f"Unknown key: {k!r}")
+
+        if errors:
+            return "\n".join(errors)
+
+        if qm and new_updates:
+            qm.update_config(session_key, **new_updates)
+
+        parts_set = [f"{k}={v}" for k, v in new_updates.items()]
+        return f"Queue updated: {', '.join(parts_set)}"
 
     async def cmd_tts(args: str, ctx: CommandContext) -> str:
         """Toggle TTS output for this session. Usage: /tts [on|off|status]"""
@@ -588,6 +983,562 @@ def register_builtin_commands(registry: CommandRegistry, gateway: Any) -> None:
             ctx.session.context["tts_enabled"] = False
             return "🔇 TTS disabled."
         return "Usage: /tts [on|off|status]"
+
+    async def cmd_history(args: str, ctx: CommandContext) -> str:
+        """Show, save, or load session history via FastAgent ACP.
+
+        Usage: /history [show|save [name]|load [name]]
+        """
+        runner = _get_runner(ctx)
+        if runner is None:
+            return "No active agent session — send a message first, then retry."
+        return await runner.acp_execute("history", args.strip())
+
+    async def cmd_clear(args: str, ctx: CommandContext) -> str:
+        """Clear conversation history (or just the last turn) via FastAgent ACP.
+
+        Usage: /clear [last]
+          /clear       — clear entire conversation history
+          /clear last  — remove only the most recent exchange (undo last turn)
+        """
+        runner = _get_runner(ctx)
+        if runner is None:
+            return "No active agent session — send a message first, then retry."
+        return await runner.acp_execute("clear", args.strip())
+
+    # ── FA ACP pass-through handlers ──────────────────────────────────────────
+
+    async def cmd_mcp(args: str, ctx: CommandContext) -> str:
+        """Manage MCP servers at runtime via FastAgent ACP."""
+        runner = _get_runner(ctx)
+        if runner is None:
+            return "No active agent session — send a message first, then retry."
+        return await runner.acp_execute("mcp", args.strip())
+
+    async def cmd_cards(args: str, ctx: CommandContext) -> str:
+        """List or inspect agent cards via FastAgent ACP."""
+        runner = _get_runner(ctx)
+        if runner is None:
+            return "No active agent session — send a message first, then retry."
+        return await runner.acp_execute("cards", args.strip())
+
+    async def cmd_card(args: str, ctx: CommandContext) -> str:
+        """Inspect a specific agent card via FastAgent ACP."""
+        runner = _get_runner(ctx)
+        if runner is None:
+            return "No active agent session — send a message first, then retry."
+        return await runner.acp_execute("card", args.strip())
+
+    async def cmd_agent(args: str, ctx: CommandContext) -> str:
+        """Agent introspection and attachment via FastAgent ACP."""
+        runner = _get_runner(ctx)
+        if runner is None:
+            return "No active agent session — send a message first, then retry."
+        return await runner.acp_execute("agent", args.strip())
+
+    # ── New commands ──────────────────────────────────────────────────────────
+
+    async def cmd_bash(args: str, ctx: CommandContext) -> str:
+        """Run a shell command and send the output to the agent as context.
+
+        Usage: /bash <command>
+        The command runs in a subprocess; stdout+stderr are captured and forwarded
+        to the agent as a user message so it can act on the results.
+        """
+        if not args.strip():
+            return "Usage: /bash <command>"
+        import asyncio as _asyncio
+        try:
+            proc = await _asyncio.create_subprocess_shell(
+                args,
+                stdout=_asyncio.subprocess.PIPE,
+                stderr=_asyncio.subprocess.STDOUT,
+            )
+            stdout, _ = await _asyncio.wait_for(proc.communicate(), timeout=30)
+            output = stdout.decode("utf-8", errors="replace").strip() or "(no output)"
+        except _asyncio.TimeoutError:
+            return "[ERROR] Command timed out after 30s"
+        except Exception as e:
+            return f"[ERROR] {e}"
+
+        # Forward to the agent as context if a session exists
+        agent = (
+            ctx.gateway._agent_manager.get_agent(ctx.session.agent_id)
+            if ctx.gateway._agent_manager and ctx.session else None
+        )
+        if agent and ctx.session:
+            import uuid as _uuid
+            from pyclaw.core.router import IncomingMessage
+            msg = IncomingMessage(
+                id=str(_uuid.uuid4()),
+                content=f"[Shell: $ {args}]\n{output[:8000]}",
+                sender=ctx.sender_id,
+                sender_id=ctx.sender_id,
+                channel=ctx.channel,
+            )
+            result = await agent.handle_message(msg, ctx.session)
+            return result.content if result else f"```\n{output[:3000]}\n```"
+        return f"```\n{output[:3000]}\n```"
+
+    async def cmd_allowlist(args: str, ctx: CommandContext) -> str:
+        """Manage the channel allowlist at runtime.
+
+        Usage: /allowlist [list | add <id> | remove <id>]
+        Changes take effect immediately and persist until gateway restart.
+        To make permanent, edit config and /reload.
+        """
+        parts = args.strip().split(maxsplit=1)
+        sub = parts[0].lower() if parts else "list"
+        rest = parts[1].strip() if len(parts) > 1 else ""
+
+        cfg = ctx.gateway.config
+        channel = ctx.channel
+
+        try:
+            if channel == "telegram":
+                allowlist = cfg.channels.telegram.allowed_users  # List[int]
+                def _parse(s: str): return int(s)
+            elif channel == "slack":
+                allowlist = cfg.channels.slack.allowed_users  # List[str]
+                def _parse(s: str): return s.strip()
+            else:
+                return f"Allowlist management not supported for channel: {channel}"
+        except AttributeError:
+            return "Channel config not available."
+
+        if sub == "list":
+            if not allowlist:
+                return "Allowlist is empty — all users are allowed."
+            return "Allowlist:\n" + "\n".join(f"  • {uid}" for uid in allowlist)
+
+        if sub == "add":
+            if not rest:
+                return "Usage: /allowlist add <id>"
+            try:
+                uid = _parse(rest)
+                if uid not in allowlist:
+                    allowlist.append(uid)
+                return f"✅ Added {uid} to allowlist."
+            except ValueError:
+                return f"Invalid ID: {rest!r}"
+
+        if sub in ("remove", "del"):
+            if not rest:
+                return "Usage: /allowlist remove <id>"
+            try:
+                uid = _parse(rest)
+                if uid in allowlist:
+                    allowlist.remove(uid)
+                    return f"✅ Removed {uid} from allowlist."
+                return f"{uid} not in allowlist."
+            except ValueError:
+                return f"Invalid ID: {rest!r}"
+
+        return "Usage: /allowlist [list | add <id> | remove <id>]"
+
+    async def cmd_reasoning(args: str, ctx: CommandContext) -> str:
+        """Toggle reasoning output visibility for this session.
+
+        Usage: /reasoning [on|stream|off|status]
+          on / stream  — show <thinking> blocks in responses
+          off          — strip thinking blocks (default)
+          status       — show current setting
+        Note: /think controls the thinking *budget*; /reasoning controls
+        whether thinking output is *shown* to you.
+        """
+        if ctx.session is None:
+            return "No active session."
+        sub = args.strip().lower() or "status"
+
+        if sub == "status":
+            current = ctx.session.context.get("show_thinking", False)
+            return f"Reasoning output: {'ON' if current else 'OFF'}"
+
+        if sub in ("on", "stream"):
+            new_val = True
+        elif sub == "off":
+            new_val = False
+        else:
+            return "Usage: /reasoning [on|stream|off|status]"
+
+        ctx.session.context["show_thinking"] = new_val
+
+        # Apply to the live runner immediately if it exists
+        runner = _get_runner(ctx)
+        if runner is not None:
+            runner.show_thinking = new_val
+
+        return f"Reasoning output: {'ON 🧠' if new_val else 'OFF'}"
+
+    async def cmd_session(args: str, ctx: CommandContext) -> str:
+        """Show or configure the current session.
+
+        Usage:
+          /session            — show session details
+          /session timeout <minutes>  — set idle timeout for this session
+          /session window <n>         — set rolling message window size
+        """
+        if ctx.session is None:
+            return "No active session."
+
+        parts = args.strip().split(maxsplit=1)
+        sub = parts[0].lower() if parts else ""
+        val = parts[1].strip() if len(parts) > 1 else ""
+
+        if not sub:
+            from pyclaw.utils.time import now as _now
+            s = ctx.session
+            agent = (
+                ctx.gateway._agent_manager.get_agent(s.agent_id)
+                if ctx.gateway._agent_manager else None
+            )
+            current_model = s.context.get("model_override") or (
+                agent.config.model if agent else "?"
+            )
+            idle_s = int((_now() - s.updated_at).total_seconds())
+            lines = [
+                f"Session: {s.id}",
+                f"Agent:   {s.agent_id}",
+                f"Channel: {s.last_channel or s.channel}",
+                f"User:    {s.last_user_id or s.user_id}",
+                f"Model:   {current_model}",
+                f"Messages: {s.message_count}",
+                f"Idle:    {idle_s}s",
+                f"Created: {s.created_at.strftime('%Y-%m-%d %H:%M:%S')}",
+            ]
+            overrides = {k: v for k, v in s.context.items()
+                         if k in ("model_override", "show_thinking", "thinking_budget",
+                                  "idle_timeout_minutes", "window_size")}
+            if overrides:
+                lines.append(f"Overrides: {overrides}")
+            return "\n".join(lines)
+
+        if sub == "timeout":
+            try:
+                minutes = int(val)
+                ctx.session.context["idle_timeout_minutes"] = minutes
+                return f"✅ Idle timeout set to {minutes} minutes for this session."
+            except ValueError:
+                return "Usage: /session timeout <minutes>"
+
+        if sub == "window":
+            try:
+                n = int(val)
+                ctx.session.context["window_size"] = n
+                return f"✅ Message window set to {n} for this session."
+            except ValueError:
+                return "Usage: /session window <n>"
+
+        return "Usage: /session [timeout <minutes> | window <n>]"
+
+    async def cmd_acp(args: str, ctx: CommandContext) -> str:
+        """ACP session management via FastAgent ACP.
+
+        Usage: /acp [spawn|cancel|steer|close|sessions|status|set-mode|
+                     set|cwd|permissions|timeout|model|reset-options|doctor|install|help]
+        """
+        runner = _get_runner(ctx)
+        if runner is None:
+            return "No active agent session — send a message first, then retry."
+        return await runner.acp_execute("acp", args.strip())
+
+    async def cmd_exec(args: str, ctx: CommandContext) -> str:
+        """Set per-session exec defaults.
+
+        Usage:
+          /exec                          — show current exec settings
+          /exec host <sandbox|gateway|node>   — set execution host
+          /exec level <strict|normal|permissive> — set security level
+          /exec ask <always|never|inherit>    — set approval ask policy
+          /exec reset                    — restore defaults
+        """
+        if ctx.session is None:
+            return "No active session."
+        parts = args.strip().split(maxsplit=1)
+        sub = parts[0].lower() if parts else ""
+        val = parts[1].strip() if len(parts) > 1 else ""
+
+        if not sub or sub == "show":
+            host = ctx.session.context.get("exec_host", "gateway")
+            level = ctx.session.context.get("exec_level", "normal")
+            ask = ctx.session.context.get("exec_ask", "inherit")
+            return (
+                "Exec settings (this session):\n"
+                f"  host:  {host}\n"
+                f"  level: {level}\n"
+                f"  ask:   {ask}"
+            )
+
+        if sub == "reset":
+            for k in ("exec_host", "exec_level", "exec_ask"):
+                ctx.session.context.pop(k, None)
+            return "✅ Exec settings reset to defaults."
+
+        if sub == "host":
+            valid = {"sandbox", "gateway", "node"}
+            if val not in valid:
+                return f"Usage: /exec host <{'|'.join(sorted(valid))}>"
+            ctx.session.context["exec_host"] = val
+            return f"✅ Exec host: {val}"
+
+        if sub == "level":
+            valid = {"strict", "normal", "permissive"}
+            if val not in valid:
+                return f"Usage: /exec level <{'|'.join(sorted(valid))}>"
+            ctx.session.context["exec_level"] = val
+            return f"✅ Exec level: {val}"
+
+        if sub == "ask":
+            valid = {"always", "never", "inherit"}
+            if val not in valid:
+                return f"Usage: /exec ask <{'|'.join(sorted(valid))}>"
+            ctx.session.context["exec_ask"] = val
+            return f"✅ Exec ask: {val}"
+
+        return "Usage: /exec [host|level|ask|reset]"
+
+    async def cmd_send(args: str, ctx: CommandContext) -> str:
+        """Set outbound send policy for this session.
+
+        Usage:
+          /send              — show current policy
+          /send on           — send replies to the channel (default)
+          /send off          — process messages silently (no outbound reply)
+          /send inherit      — use the agent's default policy
+        """
+        if ctx.session is None:
+            return "No active session."
+        sub = args.strip().lower() or "status"
+
+        if sub == "status":
+            policy = ctx.session.context.get("send_policy", "on")
+            return f"Send policy: {policy}"
+
+        if sub not in ("on", "off", "inherit"):
+            return "Usage: /send [on|off|inherit]"
+
+        ctx.session.context["send_policy"] = sub
+        descs = {
+            "on": "Replies will be sent to the channel.",
+            "off": "Messages processed silently — no replies sent.",
+            "inherit": "Using agent default policy.",
+        }
+        return f"✅ Send policy: {sub} — {descs[sub]}"
+
+    async def cmd_focus(args: str, ctx: CommandContext) -> str:
+        """Bind the current thread/topic to an agent session.
+
+        Usage:
+          /focus              — bind to current session's agent
+          /focus <agent_id>   — bind to a specific agent
+
+        Once bound, all messages in this thread always route to the bound agent,
+        regardless of which user sends them.  Use /unfocus to remove.
+        """
+        if ctx.session is None:
+            return "No active session."
+        if ctx.thread_id is None:
+            return (
+                "No thread ID detected. /focus works in Telegram topics and "
+                "Slack threads, not in direct messages."
+            )
+        target_agent = args.strip() or ctx.session.agent_id
+        # Validate agent exists
+        am = getattr(ctx.gateway, "_agent_manager", None)
+        if am and am.get_agent(target_agent) is None:
+            agent_ids = list(getattr(am, "agents", {}).keys())
+            return (
+                f"Agent {target_agent!r} not found.\n"
+                f"Available: {', '.join(agent_ids)}"
+            )
+        binding_key = f"{ctx.channel}:{ctx.thread_id}"
+        if not hasattr(ctx.gateway, "_thread_bindings"):
+            ctx.gateway._thread_bindings = {}
+        ctx.gateway._thread_bindings[binding_key] = target_agent
+        return f"✅ Thread bound to agent {target_agent!r}. Use /unfocus to remove."
+
+    async def cmd_unfocus(args: str, ctx: CommandContext) -> str:
+        """Remove the thread/topic binding for the current thread.
+
+        Usage: /unfocus
+        """
+        if ctx.thread_id is None:
+            return "No thread ID detected — not in a thread/topic."
+        binding_key = f"{ctx.channel}:{ctx.thread_id}"
+        bindings = getattr(ctx.gateway, "_thread_bindings", {})
+        if binding_key in bindings:
+            agent_id = bindings.pop(binding_key)
+            return f"✅ Thread unbound (was: {agent_id!r})."
+        return "This thread has no binding."
+
+    async def cmd_agents(args: str, ctx: CommandContext) -> str:
+        """List thread/topic bindings for the current channel.
+
+        Usage: /agents
+        """
+        bindings = getattr(ctx.gateway, "_thread_bindings", {})
+        channel_bindings = {
+            k: v for k, v in bindings.items()
+            if k.startswith(f"{ctx.channel}:")
+        }
+        if not channel_bindings:
+            return f"No thread bindings for channel {ctx.channel!r}."
+        lines = [f"Thread bindings ({ctx.channel}):"]
+        for key, agent_id in sorted(channel_bindings.items()):
+            thread = key.split(":", 1)[1]
+            marker = " ← current" if thread == ctx.thread_id else ""
+            lines.append(f"  {thread}: → {agent_id}{marker}")
+        return "\n".join(lines)
+
+    async def cmd_commands(args: str, ctx: CommandContext) -> str:
+        """Show all commands in a compact single-line format."""
+        if not registry._commands:
+            return "No commands registered."
+        # Two-column compact table
+        cmds = sorted(registry._commands.values(), key=lambda c: c.name)
+        col_w = max(len(c.name) for c in cmds) + 1
+        lines = []
+        for c in cmds:
+            lines.append(f"  /{c.name:<{col_w}} {c.description}")
+        return "Commands:\n" + "\n".join(lines)
+
+    async def cmd_debug(args: str, ctx: CommandContext) -> str:
+        """Runtime debug overrides for this session.
+
+        Usage:
+          /debug              — show current debug flags
+          /debug set <k> <v>  — set a debug flag
+          /debug unset <k>    — remove a debug flag
+          /debug reset        — clear all debug flags
+        """
+        if ctx.session is None:
+            return "No active session."
+        dbg: dict = ctx.session.context.setdefault("_debug", {})
+        parts = args.strip().split(maxsplit=2)
+        sub = parts[0].lower() if parts else "show"
+
+        if sub in ("show", ""):
+            if not dbg:
+                return "No debug flags set."
+            lines = ["Debug flags:"]
+            for k, v in sorted(dbg.items()):
+                lines.append(f"  {k} = {v!r}")
+            return "\n".join(lines)
+
+        if sub == "set":
+            if len(parts) < 3:
+                return "Usage: /debug set <key> <value>"
+            k, v = parts[1], parts[2]
+            # Try to coerce to int/bool/float before storing as string
+            if v.lower() in ("true", "yes", "1"):
+                dbg[k] = True
+            elif v.lower() in ("false", "no", "0"):
+                dbg[k] = False
+            else:
+                try:
+                    dbg[k] = int(v)
+                except ValueError:
+                    try:
+                        dbg[k] = float(v)
+                    except ValueError:
+                        dbg[k] = v
+            return f"✅ debug.{k} = {dbg[k]!r}"
+
+        if sub == "unset":
+            if len(parts) < 2:
+                return "Usage: /debug unset <key>"
+            k = parts[1]
+            if k in dbg:
+                del dbg[k]
+                return f"✅ Unset debug.{k}"
+            return f"Flag {k!r} not set."
+
+        if sub == "reset":
+            ctx.session.context.pop("_debug", None)
+            return "✅ Debug flags cleared."
+
+        return "Usage: /debug [show | set <k> <v> | unset <k> | reset]"
+
+    async def cmd_activation(args: str, ctx: CommandContext) -> str:
+        """Set group activation mode for this session.
+
+        Usage:
+          /activation             — show current mode
+          /activation always      — respond to every message (default)
+          /activation mention     — respond only when the bot is mentioned by name
+        """
+        if ctx.session is None:
+            return "No active session."
+        sub = args.strip().lower() or "status"
+
+        if sub == "status":
+            mode = ctx.session.context.get("activation_mode", "always")
+            return f"Activation mode: {mode}"
+
+        if sub in ("always", "mention"):
+            ctx.session.context["activation_mode"] = sub
+            desc = (
+                "Responds to every message."
+                if sub == "always"
+                else "Responds only when mentioned by name."
+            )
+            return f"✅ Activation mode: {sub} — {desc}"
+
+        return "Usage: /activation [always|mention]"
+
+    async def cmd_elevated(args: str, ctx: CommandContext) -> str:
+        """Toggle elevated exec approval mode for this session.
+
+        Usage:
+          /elevated              — show current mode
+          /elevated on           — pre-approve all exec commands this session
+          /elevated off          — restore normal approval (default)
+          /elevated ask          — prompt for approval on every command
+          /elevated full         — unrestricted, no approval checks
+
+        Note: Changes persist only for the current session.
+        """
+        if ctx.session is None:
+            return "No active session."
+        sub = args.strip().lower() or "status"
+
+        valid_modes = {"on", "off", "ask", "full"}
+
+        if sub == "status":
+            mode = ctx.session.context.get("elevated_mode", "off")
+            return f"Elevated mode: {mode}"
+
+        if sub not in valid_modes:
+            return f"Usage: /elevated [on|off|ask|full]\nCurrent: {ctx.session.context.get('elevated_mode', 'off')}"
+
+        ctx.session.context["elevated_mode"] = sub
+
+        # Apply to live approval system if available
+        approval_sys = getattr(ctx.gateway, "_approval_system", None)
+        if approval_sys:
+            import re as _re
+            if sub == "on":
+                # Pre-approve everything by adding a catch-all pattern
+                catch_all = _re.compile(r".*")
+                already = any(p.pattern == ".*" for p in getattr(approval_sys, "always_approve", []))
+                if not already:
+                    approval_sys.always_approve.append(catch_all)
+                    ctx.session.context["_elevated_catch_all"] = True
+            elif sub in ("off", "ask"):
+                # Remove any session-added catch-all
+                if ctx.session.context.pop("_elevated_catch_all", False):
+                    approval_sys.always_approve = [
+                        p for p in getattr(approval_sys, "always_approve", [])
+                        if p.pattern != ".*"
+                    ]
+
+        descriptions = {
+            "on":   "All exec commands pre-approved for this session.",
+            "off":  "Normal approval mode restored.",
+            "ask":  "Approval required for every exec command.",
+            "full": "Unrestricted — all approval checks bypassed.",
+        }
+        return f"✅ Elevated mode: {sub} — {descriptions[sub]}"
 
     # ---------------------------------------------------------------- register
     registry.register("start",   cmd_start,   "Start / show welcome message",               usage="/start")
@@ -612,5 +1563,27 @@ def register_builtin_commands(registry: CommandRegistry, gateway: Any) -> None:
     registry.register("reboot",  cmd_reboot,  "Hard-restart the process (picks up code changes)", usage="/reboot")
     registry.register("tts",     cmd_tts,     "Toggle TTS output",                           usage="/tts [on|off|status]")
     registry.register("job",     cmd_job,     "Manage scheduled jobs",                       usage="/job [list|add|del|run|help]")
-    registry.register("skills",  cmd_skills,  "List available skills",                        usage="/skills")
-    registry.register("skill",   cmd_skill,   "Invoke a skill by name",                       usage="/skill <name> [args]")
+    registry.register("skills",    cmd_skills,    "List available skills",                        usage="/skills")
+    registry.register("skill",    cmd_skill,     "Invoke a skill by name",                       usage="/skill <name> [args]")
+    registry.register("subagents", cmd_subagents, "Manage background subagents",                 usage="/subagents [list|status|kill|interrupt|send]")
+    registry.register("queue",    cmd_queue,    "Show or set message queue mode",               usage="/queue [mode=<mode>] [reset]")
+    registry.register("history",   cmd_history,   "Show, save or load session history (FA ACP)",   usage="/history [show|save [name]|load [name]]")
+    registry.register("clear",     cmd_clear,     "Clear history or undo last turn (FA ACP)",      usage="/clear [last]")
+    registry.register("mcp",       cmd_mcp,       "Manage MCP servers at runtime (FA ACP)",        usage="/mcp [list|add|remove]")
+    registry.register("cards",     cmd_cards,     "List agent cards (FA ACP)",                     usage="/cards")
+    registry.register("card",      cmd_card,      "Inspect an agent card (FA ACP)",                usage="/card <name>")
+    registry.register("agent",     cmd_agent,     "Agent introspection (FA ACP)",                  usage="/agent [name]")
+    registry.register("bash",      cmd_bash,      "Run a shell command and send output to agent",  usage="/bash <command>")
+    registry.register("allowlist", cmd_allowlist, "Manage channel allowlist at runtime",           usage="/allowlist [list|add <id>|remove <id>]")
+    registry.register("reasoning",  cmd_reasoning,  "Toggle reasoning output visibility",              usage="/reasoning [on|off|status]")
+    registry.register("session",    cmd_session,    "Show or configure the current session",           usage="/session [timeout <min>|window <n>]")
+    registry.register("commands",   cmd_commands,   "Show all commands in compact format",             usage="/commands")
+    registry.register("debug",      cmd_debug,      "Set or inspect runtime debug flags",              usage="/debug [set <k> <v>|unset <k>|reset]")
+    registry.register("activation", cmd_activation, "Set group activation mode (always/mention)",      usage="/activation [always|mention]")
+    registry.register("elevated",   cmd_elevated,   "Toggle elevated exec approval for this session",  usage="/elevated [on|off|ask|full]")
+    registry.register("acp",        cmd_acp,        "ACP session management (FA ACP pass-through)",    usage="/acp [spawn|cancel|steer|close|sessions|...]")
+    registry.register("exec",       cmd_exec,       "Set per-session exec host/level/ask defaults",    usage="/exec [host|level|ask|reset]")
+    registry.register("send",       cmd_send,       "Set outbound send policy for this session",       usage="/send [on|off|inherit]")
+    registry.register("focus",      cmd_focus,      "Bind current thread/topic to an agent",           usage="/focus [agent_id]")
+    registry.register("unfocus",    cmd_unfocus,    "Remove thread/topic binding",                     usage="/unfocus")
+    registry.register("agents",     cmd_agents,     "List thread/topic bindings for this channel",     usage="/agents")

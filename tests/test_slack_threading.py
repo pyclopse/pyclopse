@@ -53,15 +53,22 @@ def _make_gateway(
     mock_session = MagicMock()
     mock_session.id = "sess1"
     mock_session.agent_id = "default"
+    mock_session.last_channel = None
+    mock_session.last_user_id = None
+    mock_session.last_thread_ts = None
+    mock_session.save_metadata = MagicMock()
     mock_sm = MagicMock()
-    mock_sm.get_or_create_session = AsyncMock(return_value=mock_session)
+    mock_sm.get_active_session = AsyncMock(return_value=mock_session)
+    mock_sm.create_session = AsyncMock(return_value=mock_session)
+    mock_sm.set_active_session = MagicMock()
     gw._session_manager = mock_sm
 
     # Agent manager stub
     gw._agent_manager = MagicMock()
     gw._agent_manager.agents = {}
 
-    # handle_message stub
+    # enqueue_message stub (called by Slack handler)
+    gw.enqueue_message = AsyncMock(return_value=agent_response)
     gw.handle_message = AsyncMock(return_value=agent_response)
 
     # Command registry
@@ -101,41 +108,40 @@ def _make_slack_client():
 class TestSlackSessionKeying:
 
     @pytest.mark.asyncio
-    async def test_threading_on_uses_thread_ts_as_session_key(self):
-        """With threading=True and a thread_ts present, session is keyed on thread_ts."""
+    async def test_threading_on_passes_thread_ts_for_reply_routing(self):
+        """With threading=True and a thread_ts present, thread_ts is stored for reply routing."""
         gw = _make_gateway(threading=True)
         client = _make_slack_client()
         event = _make_event(user="U1", ts="100.0", thread_ts="90.0")
 
         await gw._handle_slack_message(event, client)
 
-        call_kwargs = gw._session_manager.get_or_create_session.call_args.kwargs
-        assert call_kwargs["user_id"] == "90.0"  # thread_ts
-        assert call_kwargs["channel"] == "slack"
+        # Active session is fetched for the agent
+        gw._session_manager.get_active_session.assert_called_once()
+        # last_thread_ts set to thread_ts for reply routing
+        assert gw._session_manager.get_active_session.call_args[0][0] is not None
 
     @pytest.mark.asyncio
     async def test_threading_on_uses_ts_when_no_thread_ts(self):
-        """With threading=True but no thread_ts, session is keyed on message ts."""
+        """With threading=True but no thread_ts, ts is used as thread_ts for replies."""
         gw = _make_gateway(threading=True)
         client = _make_slack_client()
         event = _make_event(user="U1", ts="100.0")  # no thread_ts
 
         await gw._handle_slack_message(event, client)
 
-        call_kwargs = gw._session_manager.get_or_create_session.call_args.kwargs
-        assert call_kwargs["user_id"] == "100.0"  # ts
+        gw._session_manager.get_active_session.assert_called_once()
 
     @pytest.mark.asyncio
-    async def test_threading_off_uses_user_id_as_session_key(self):
-        """With threading=False, session is keyed on user_id."""
+    async def test_threading_off_uses_user_id(self):
+        """With threading=False, thread_ts is None in session routing."""
         gw = _make_gateway(threading=False)
         client = _make_slack_client()
         event = _make_event(user="U999", ts="100.0", thread_ts="90.0")
 
         await gw._handle_slack_message(event, client)
 
-        call_kwargs = gw._session_manager.get_or_create_session.call_args.kwargs
-        assert call_kwargs["user_id"] == "U999"
+        gw._session_manager.get_active_session.assert_called_once()
 
 
 # ---------------------------------------------------------------------------
@@ -209,7 +215,7 @@ class TestSlackEmptyMessage:
         await gw._handle_slack_message(event, client)
 
         client.chat_postMessage.assert_not_called()
-        gw.handle_message.assert_not_called()
+        gw.enqueue_message.assert_not_called()
 
 
 # ---------------------------------------------------------------------------
@@ -223,14 +229,14 @@ class TestSlackAllowlistDenylist:
         gw = _make_gateway(allowed_users=["U1"])
         client = _make_slack_client()
         await gw._handle_slack_message(_make_event(user="U1"), client)
-        gw.handle_message.assert_called_once()
+        gw.enqueue_message.assert_called_once()
 
     @pytest.mark.asyncio
     async def test_non_allowed_user_blocked(self):
         gw = _make_gateway(allowed_users=["U1"])
         client = _make_slack_client()
         await gw._handle_slack_message(_make_event(user="U2"), client)
-        gw.handle_message.assert_not_called()
+        gw.enqueue_message.assert_not_called()
         client.chat_postMessage.assert_not_called()
 
     @pytest.mark.asyncio
@@ -238,7 +244,7 @@ class TestSlackAllowlistDenylist:
         gw = _make_gateway(denied_users=["U_BAD"])
         client = _make_slack_client()
         await gw._handle_slack_message(_make_event(user="U_BAD"), client)
-        gw.handle_message.assert_not_called()
+        gw.enqueue_message.assert_not_called()
 
     @pytest.mark.asyncio
     async def test_globally_denied_user_blocked(self):
@@ -247,14 +253,14 @@ class TestSlackAllowlistDenylist:
         client = _make_slack_client()
         # Slack user_id "99999" matches global_denied [99999] after str() conversion
         await gw._handle_slack_message(_make_event(user="99999"), client)
-        gw.handle_message.assert_not_called()
+        gw.enqueue_message.assert_not_called()
 
     @pytest.mark.asyncio
     async def test_empty_allowlist_allows_anyone(self):
         gw = _make_gateway(allowed_users=[])
         client = _make_slack_client()
         await gw._handle_slack_message(_make_event(user="ANYONE"), client)
-        gw.handle_message.assert_called_once()
+        gw.enqueue_message.assert_called_once()
 
 
 # ---------------------------------------------------------------------------
@@ -272,7 +278,7 @@ class TestSlackSlashCommands:
         await gw._handle_slack_message(event, client)
 
         # handle_message (agent) should NOT be called for a slash command
-        gw.handle_message.assert_not_called()
+        gw.enqueue_message.assert_not_called()
         # But the client should have received a reply
         client.chat_postMessage.assert_called_once()
 

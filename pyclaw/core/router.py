@@ -26,7 +26,7 @@ class IncomingMessage:
     sender: str
     sender_id: str
     content: str
-    timestamp: datetime = field(default_factory=datetime.utcnow)
+    timestamp: datetime = field(default_factory=now)
     metadata: Dict[str, Any] = field(default_factory=dict)
     reply_to: Optional[str] = None
     thread_id: Optional[str] = None

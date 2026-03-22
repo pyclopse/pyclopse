@@ -57,8 +57,8 @@ class Todo(BaseModel):
     due_date: Optional[datetime] = None
     blocked_by: Optional[str] = None     # ID of another Todo this depends on
     notes: str = ""                       # progress / completion notes
-    created_at: datetime = Field(default_factory=datetime.utcnow)
-    updated_at: datetime = Field(default_factory=datetime.utcnow)
+    created_at: datetime = Field(default_factory=now)
+    updated_at: datetime = Field(default_factory=now)
     completed_at: Optional[datetime] = None
 
     def touch(self) -> None:

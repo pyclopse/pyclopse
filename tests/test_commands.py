@@ -38,6 +38,20 @@ def _make_gateway_stub():
         "jobs": {"total": 4, "running": 1},
     }
     gw._agent_manager = MagicMock()
+    # _session_manager needs async create_session for cmd_reset
+    sm = MagicMock()
+    sm.create_session = AsyncMock(return_value=MagicMock(
+        id="new-sess",
+        agent_id="agent1",
+        channel="test",
+        user_id="u1",
+        last_channel=None,
+        last_user_id=None,
+        last_thread_ts=None,
+        save_metadata=MagicMock(),
+    ))
+    sm.set_active_session = MagicMock()
+    gw._session_manager = sm
     return gw
 
 
@@ -46,6 +60,11 @@ def _make_session(session_id="sess-abc", agent_id="agent1"):
     session.id = session_id
     session.agent_id = agent_id
     session.context = {}
+    session.channel = "test"
+    session.user_id = "u1"
+    session.last_channel = None
+    session.last_user_id = None
+    session.last_thread_ts = None
     return session
 
 

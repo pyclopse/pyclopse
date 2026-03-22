@@ -65,7 +65,7 @@ def _parse_schedule(schedule_str: str):
     parts = s.split()
     if len(parts) >= 5:
         expr = " ".join(parts[:5])
-        tz = parts[5] if len(parts) > 5 else "UTC"
+        tz = parts[5] if len(parts) > 5 else None
         return CronSchedule(expr=expr, timezone=tz)
 
     raise ValueError(f"Cannot parse schedule: {s!r}")
@@ -87,6 +87,7 @@ class CreateCommandJobRequest(BaseModel):
     name: str
     schedule: str               # human-friendly: "0 9 * * *", "30m", ISO datetime
     command: str
+    agent: Optional[str] = None  # agent that owns this job (determines which jobs.yaml to write)
     description: Optional[str] = None
     enabled: bool = True
     timeout_seconds: int = 300
@@ -96,7 +97,6 @@ class CreateCommandJobRequest(BaseModel):
     deliver_chat_id: Optional[str] = None
     deliver_webhook_url: Optional[str] = None
     alert_after: Optional[int] = None
-    owner: Optional[str] = None
 
 
 class CreateAgentJobRequest(BaseModel):
@@ -113,7 +113,7 @@ class CreateAgentJobRequest(BaseModel):
     deliver_chat_id: Optional[str] = None
     deliver_webhook_url: Optional[str] = None
     alert_after: Optional[int] = None
-    owner: Optional[str] = None
+    report_to_agent: Optional[str] = None
 
 
 class UpdateJobRequest(BaseModel):
@@ -125,6 +125,20 @@ class UpdateJobRequest(BaseModel):
     deliver_channel: Optional[str] = None
     deliver_chat_id: Optional[str] = None
     deliver_webhook_url: Optional[str] = None
+    # AgentRun prompt/session fields (only applied when job.run.kind == "agent")
+    session_mode: Optional[str] = None
+    prompt_preset: Optional[str] = None
+    include_personality: Optional[bool] = None
+    include_identity: Optional[bool] = None
+    include_rules: Optional[bool] = None
+    include_memory: Optional[bool] = None
+    include_user: Optional[bool] = None
+    include_agents: Optional[bool] = None
+    include_tools: Optional[bool] = None
+    include_skills: Optional[bool] = None
+    instruction: Optional[str] = None
+    report_to_agent: Optional[str] = None
+    deliver_none: bool = False
 
 
 # ---------------------------------------------------------------------------
@@ -176,9 +190,8 @@ async def create_command_job(req: CreateCommandJobRequest) -> Dict[str, Any]:
         timeout_seconds=req.timeout_seconds,
         max_retries=req.max_retries,
         delete_after_run=req.delete_after_run,
-        owner=req.owner,
     )
-    await _scheduler().add_job(job)
+    await _scheduler().add_job(job, agent_id=req.agent)
     return {"ok": True, "job": job.model_dump(mode="json")}
 
 
@@ -195,13 +208,13 @@ async def create_agent_job(req: CreateAgentJobRequest) -> Dict[str, Any]:
         name=req.name,
         description=req.description,
         enabled=req.enabled,
-        run=AgentRun(agent=req.agent, message=req.message, model=req.model),
+        run=AgentRun(agent=req.agent, message=req.message, model=req.model,
+                     report_to_agent=req.report_to_agent),
         schedule=schedule,
         deliver=_parse_deliver(req.deliver_channel, req.deliver_chat_id, req.deliver_webhook_url),
         on_failure=FailureAlert(alert_after=req.alert_after) if req.alert_after else None,
         timeout_seconds=req.timeout_seconds,
         delete_after_run=req.delete_after_run,
-        owner=req.owner,
     )
     await _scheduler().add_job(job)
     return {"ok": True, "job": job.model_dump(mode="json")}
@@ -226,8 +239,30 @@ async def update_job(name_or_id: str, req: UpdateJobRequest) -> Dict[str, Any]:
             job.schedule = _parse_schedule(req.schedule)
         except ValueError as e:
             raise HTTPException(status_code=422, detail=str(e))
-    if any(v is not None for v in [req.deliver_channel, req.deliver_chat_id, req.deliver_webhook_url]):
+    if req.deliver_none:
+        job.deliver = DeliverNone()
+    elif any(v is not None for v in [req.deliver_channel, req.deliver_chat_id, req.deliver_webhook_url]):
         job.deliver = _parse_deliver(req.deliver_channel, req.deliver_chat_id, req.deliver_webhook_url)
+
+    # Apply AgentRun prompt/session fields if this is an agent job
+    _agent_run_fields = {
+        "session_mode": req.session_mode,
+        "prompt_preset": req.prompt_preset,
+        "include_personality": req.include_personality,
+        "include_identity": req.include_identity,
+        "include_rules": req.include_rules,
+        "include_memory": req.include_memory,
+        "include_user": req.include_user,
+        "include_agents": req.include_agents,
+        "include_tools": req.include_tools,
+        "include_skills": req.include_skills,
+        "instruction": req.instruction,
+        "report_to_agent": req.report_to_agent,
+    }
+    if any(v is not None for v in _agent_run_fields.values()) and getattr(job.run, "kind", None) == "agent":
+        current = job.run.model_dump()
+        current.update({k: v for k, v in _agent_run_fields.items() if v is not None})
+        job.run = AgentRun.model_validate(current)
 
     await sched.update_job(job)
     return {"ok": True, "job": job.model_dump(mode="json")}
@@ -238,6 +273,8 @@ async def delete_job(name_or_id: str) -> Dict[str, Any]:
     """Delete a job."""
     sched = _scheduler()
     job = _resolve(sched, name_or_id)
+    if job.name.startswith("__") and job.name.endswith("__"):
+        raise HTTPException(status_code=403, detail=f"System job '{job.name}' cannot be deleted. Use enable/disable to control it.")
     await sched.remove_job(job.id)
     return {"ok": True, "deleted": job.name}
 
@@ -278,5 +315,5 @@ async def get_job_history(name_or_id: str, limit: int = 20) -> Dict[str, Any]:
     return {
         "job_id": job.id,
         "job_name": job.name,
-        "runs": [r.model_dump(mode="json") for r in runs],
+        "runs": [{**r.model_dump(mode="json"), "duration_ms": r.duration_ms()} for r in runs],
     }

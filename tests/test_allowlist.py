@@ -60,7 +60,8 @@ def _make_gateway(
     channels_cfg = ChannelsConfig(telegram=telegram_cfg)
     gw._config = Config(channels=channels_cfg, agents=AgentsConfig(), security=security_cfg)
 
-    # Mock handle_message to return a response
+    # Mock enqueue_message (now called by Telegram handler) and handle_message
+    gw.enqueue_message = AsyncMock(return_value="ok")
     gw.handle_message = AsyncMock(return_value="ok")
     mock_sm = MagicMock()
     mock_sm.get_or_create_session = AsyncMock(return_value=MagicMock())
@@ -79,25 +80,25 @@ class TestChannelAllowlist:
     async def test_allowed_user_passes(self):
         gw = _make_gateway(allowed_users=[111])
         await gw._handle_telegram_message(_make_message(user_id=111))
-        gw.handle_message.assert_called_once()
+        gw.enqueue_message.assert_called_once()
 
     @pytest.mark.asyncio
     async def test_non_allowed_user_blocked(self):
         gw = _make_gateway(allowed_users=[111])
         await gw._handle_telegram_message(_make_message(user_id=999))
-        gw.handle_message.assert_not_called()
+        gw.enqueue_message.assert_not_called()
 
     @pytest.mark.asyncio
     async def test_empty_allowlist_allows_anyone(self):
         gw = _make_gateway(allowed_users=[])
         await gw._handle_telegram_message(_make_message(user_id=42))
-        gw.handle_message.assert_called_once()
+        gw.enqueue_message.assert_called_once()
 
     @pytest.mark.asyncio
     async def test_multiple_allowed_users(self):
         gw = _make_gateway(allowed_users=[10, 20, 30])
         await gw._handle_telegram_message(_make_message(user_id=20))
-        gw.handle_message.assert_called_once()
+        gw.enqueue_message.assert_called_once()
 
 
 # ---------------------------------------------------------------------------
@@ -110,20 +111,20 @@ class TestChannelDenylist:
     async def test_denied_user_blocked(self):
         gw = _make_gateway(denied_users=[777])
         await gw._handle_telegram_message(_make_message(user_id=777))
-        gw.handle_message.assert_not_called()
+        gw.enqueue_message.assert_not_called()
 
     @pytest.mark.asyncio
     async def test_non_denied_user_passes(self):
         gw = _make_gateway(denied_users=[777])
         await gw._handle_telegram_message(_make_message(user_id=888))
-        gw.handle_message.assert_called_once()
+        gw.enqueue_message.assert_called_once()
 
     @pytest.mark.asyncio
     async def test_denied_overrides_allowed(self):
         """A user in both allowed and denied is blocked (denied wins)."""
         gw = _make_gateway(allowed_users=[555], denied_users=[555])
         await gw._handle_telegram_message(_make_message(user_id=555))
-        gw.handle_message.assert_not_called()
+        gw.enqueue_message.assert_not_called()
 
 
 # ---------------------------------------------------------------------------
@@ -136,20 +137,20 @@ class TestGlobalDenylist:
     async def test_globally_denied_user_blocked(self):
         gw = _make_gateway(global_denied=[321])
         await gw._handle_telegram_message(_make_message(user_id=321))
-        gw.handle_message.assert_not_called()
+        gw.enqueue_message.assert_not_called()
 
     @pytest.mark.asyncio
     async def test_global_denied_overrides_channel_allowed(self):
         """Even if in channel allowed_users, global denied wins."""
         gw = _make_gateway(allowed_users=[321], global_denied=[321])
         await gw._handle_telegram_message(_make_message(user_id=321))
-        gw.handle_message.assert_not_called()
+        gw.enqueue_message.assert_not_called()
 
     @pytest.mark.asyncio
     async def test_non_globally_denied_passes(self):
         gw = _make_gateway(global_denied=[321])
         await gw._handle_telegram_message(_make_message(user_id=999))
-        gw.handle_message.assert_called_once()
+        gw.enqueue_message.assert_called_once()
 
 
 # ---------------------------------------------------------------------------
@@ -164,10 +165,10 @@ class TestAllowlistPrecedence:
         gw = _make_gateway(allowed_users=[100])
         # user 200 is not in channel allowed_users
         await gw._handle_telegram_message(_make_message(user_id=200))
-        gw.handle_message.assert_not_called()
+        gw.enqueue_message.assert_not_called()
 
     @pytest.mark.asyncio
     async def test_no_restrictions_allows_all(self):
         gw = _make_gateway()  # no allowed or denied lists
         await gw._handle_telegram_message(_make_message(user_id=12345))
-        gw.handle_message.assert_called_once()
+        gw.enqueue_message.assert_called_once()

@@ -271,14 +271,14 @@ async def test_config_set_creates_nested_path():
             async with ClientSession(r, w) as session:
                 await session.initialize()
                 out = await _call(session, "config_set", {
-                    "path": "agents.assistant.heartbeat.enabled",
-                    "value": "true",
+                    "path": "agents.assistant.tools.profile",
+                    "value": "coding",
                 })
                 assert "[OK]" in out
 
                 import yaml
                 saved = yaml.safe_load(cfg.read_text())
-                assert saved["agents"]["assistant"]["heartbeat"]["enabled"] is True
+                assert saved["agents"]["assistant"]["tools"]["profile"] == "coding"
 
 
 @pytest.mark.asyncio

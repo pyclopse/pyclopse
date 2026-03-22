@@ -19,7 +19,7 @@ from pyclaw.config.schema import JobsConfig
 
 def _make_scheduler(tmp_path):
     from pyclaw.jobs.scheduler import JobScheduler
-    cfg = JobsConfig(enabled=True, persist_file=str(tmp_path / "jobs.json"))
+    cfg = JobsConfig(enabled=True, agents_dir=str(tmp_path / "agents"))
     return JobScheduler(cfg)
 
 

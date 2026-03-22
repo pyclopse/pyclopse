@@ -26,8 +26,10 @@ class HookEvent:
     # ------------------------------------------------------------------ #
     # Message flow
     # ------------------------------------------------------------------ #
-    MESSAGE_RECEIVED = "message:received"   # inbound, before agent
-    MESSAGE_SENT = "message:sent"           # outbound, after agent reply
+    MESSAGE_RECEIVED = "message:received"       # inbound, before any preprocessing
+    MESSAGE_TRANSCRIBED = "message:transcribed" # after voice/audio transcription (voice input only)
+    MESSAGE_PREPROCESSED = "message:preprocessed"  # after preprocessing, before agent dispatch
+    MESSAGE_SENT = "message:sent"               # outbound, after agent reply
 
     # ------------------------------------------------------------------ #
     # Slash commands
@@ -45,6 +47,7 @@ class HookEvent:
     # ------------------------------------------------------------------ #
     # Agent
     # ------------------------------------------------------------------ #
+    AGENT_BOOTSTRAP = "agent:bootstrap"         # new session runner created; bootstrap files loaded
     AGENT_RESPONSE = "agent:after_response"
 
     # ------------------------------------------------------------------ #
@@ -52,11 +55,6 @@ class HookEvent:
     # ------------------------------------------------------------------ #
     TOOL_BEFORE = "tool:before_exec"
     TOOL_AFTER = "tool:after_exec"
-
-    # ------------------------------------------------------------------ #
-    # Heartbeat / cron
-    # ------------------------------------------------------------------ #
-    HEARTBEAT_TICK = "heartbeat:tick"
 
     # ------------------------------------------------------------------ #
     # Memory (interceptable)

@@ -6,31 +6,34 @@ pyclaw uses a two-layer session model. The **routing layer** (pyclaw's `Session`
 
 ## Design Principles
 
+- **One active session per agent.** Each agent has exactly one live session at any time, pointed to by an `active_session` pointer file. Channels (Telegram, Slack, TUI, HTTP) are just transport — they all converge on the same agent session. There is no "session per channel" or "session per user".
+- **Channels are routing metadata, not session keys.** When a message arrives via Telegram, pyclaw looks up the agent's active session and updates `last_channel`/`last_user_id`/`last_thread_ts` on it so replies know where to go. The session itself is not tied to any particular channel.
 - **Session = routing metadata only.** `Session` carries no message content. It knows who, where, and when — not what was said.
 - **FastAgent owns the history.** Conversation messages are stored in FastAgent's `PromptMessageExtended` JSON format. The `AgentRunner` reads and writes those files directly using FA's serialisation helpers.
-- **Files are never deleted.** The reaper and delete APIs remove sessions from the in-memory index; the session directory and its history files remain on disk indefinitely. This is intentional — history is kept for future indexing and search.
+- **Files are never deleted.** The reaper and delete APIs remove sessions from the in-memory index; the session directory and its history files remain on disk indefinitely.
 - **Crash safety.** History is only written on successful turn completion (the `_completed` flag). A ctrl+c or async cancellation mid-turn leaves the previous complete state intact.
 
 ---
 
 ## Directory Layout
 
-Every agent has its own sessions directory:
-
 ```
 ~/.pyclaw/agents/
 └── {agent_id}/
+    ├── active_session              ← pointer: contains the active session ID (plain text)
     └── sessions/
-        └── {YYYY-MM-DD}-{6chars}/      ← session directory
-            ├── session.json            ← routing metadata
-            ├── history.json            ← current conversation (FA-native JSON)
-            ├── history_previous.json   ← previous rotation backup
-            └── archived/               ← history files moved here by /reset
+        └── {YYYY-MM-DD}-{6chars}/ ← session directory
+            ├── session.json        ← routing metadata
+            ├── history.json        ← current conversation (FA-native JSON)
+            ├── history_previous.json ← previous rotation backup
+            └── archived/           ← history files moved here by /reset
                 ├── history.json.20260311_142300
                 └── history_previous.json.20260311_142300
 ```
 
 The session ID encodes the creation date: `2026-03-11-aB3xYz`. The 6-character suffix is generated with `secrets.choice` over `[A-Za-z0-9]`.
+
+The `active_session` file is written atomically (via a `.tmp` rename) by `SessionManager.set_active_session()`.
 
 ---
 
@@ -44,6 +47,9 @@ This file holds all routing and state information. It contains no message conten
   "agent_id": "assistant",
   "channel": "telegram",
   "user_id": "123456789",
+  "last_channel": "slack",
+  "last_user_id": "U123456",
+  "last_thread_ts": "1710000000.123456",
   "created_at": "2026-03-11T14:00:00",
   "updated_at": "2026-03-11T14:23:00",
   "message_count": 8,
@@ -61,13 +67,18 @@ Key fields:
 |---|---|
 | `id` | Date-prefixed unique identifier |
 | `agent_id` | Which agent handles this session |
-| `channel` | Source channel (`telegram`, `slack`, `http`, `tui`) |
-| `user_id` | Channel-specific user identifier |
+| `channel` | Channel at session creation time (historical; see `last_channel`) |
+| `user_id` | User at session creation time (historical; see `last_user_id`) |
+| `last_channel` | Channel of the most recent inbound message — used for reply routing |
+| `last_user_id` | User of the most recent inbound message — used for reply routing |
+| `last_thread_ts` | Slack thread timestamp for the most recent message (Slack threading only) |
 | `message_count` | Incrementing count of user+assistant turns (2 per exchange) |
 | `context` | Runtime overrides — e.g. `model_override` set by `/model` |
 | `metadata` | Arbitrary bag for channel plugins and hooks |
 
-The `context` dict is persisted so overrides like `/model gpt-4o` survive gateway restarts. Keys starting with `_` are excluded from serialisation (they hold non-serialisable runtime objects like runner references).
+`last_channel` / `last_user_id` / `last_thread_ts` are updated on every inbound message across all channels. The gateway's `_deliver_to_session()` reads these to route replies back correctly.
+
+The `context` dict is persisted so overrides like `/model gpt-4o` survive gateway restarts. Keys starting with `_` are excluded from serialisation.
 
 ---
 
@@ -93,7 +104,11 @@ This is a FastAgent `PromptMessageExtended` JSON file — the same format FA use
 
 `content` is a list of content blocks. For plain text conversations this will always be a single `TextContent`. Tool calls, tool results, images, and embedded resources are represented as additional block types — the format preserves all FA fields (`stop_reason`, `tool_calls`, `is_template`, etc.).
 
-The file is written using `fast_agent.mcp.prompt_serialization.save_messages()` and read back with `load_messages()`. Both functions auto-select JSON format based on the `.json` extension.
+The file is written using `fast_agent.mcp.prompt_serialization.save_messages()` and read back with `load_messages()`.
+
+### Error message stripping
+
+Before saving, `AgentRunner._save_history()` strips any trailing FastAgent internal error messages (strings starting with `"I hit an internal error"`) from `agent.message_history`, both on disk and in-memory. This prevents a model API failure during one turn from poisoning all future turns. If an error response is detected during `run()`, a `RuntimeError` is raised immediately (preventing the save entirely). On any exception, `agent.handle_message()` evicts the session runner so the next message gets a fresh FA context.
 
 ### Rotation
 
@@ -105,7 +120,7 @@ history.json                 → history_previous.json   ← atomically renamed
 .history.tmp.json            → history.json            ← atomically renamed
 ```
 
-Using `os.replace()` (POSIX `rename`) makes each step atomic. On any crash during writing, the reader always has either the complete current file, the complete previous file, or both. A partial write stays in `.history.tmp.*` and is cleaned up on the next successful write.
+Using `os.replace()` (POSIX `rename`) makes each step atomic. On any crash during writing, the reader always has either the complete current file or the complete previous file. A partial write stays in `.history.tmp.*` and is cleaned up on the next successful write.
 
 ---
 
@@ -125,11 +140,11 @@ runner = AgentRunner(
 )
 ```
 
-`history_path` is set from `session.history_path` (a `@property` on `Session` that returns `history_dir / "history.json"`). If the session has no `history_dir` (e.g. in-memory-only sessions during testing), `history_path` is `None` and no I/O occurs.
+`history_path` is set from `session.history_path` (a `@property` on `Session` that returns `history_dir / "history.json"`). If `None`, no I/O occurs (used for isolated job sessions where `context["no_history"] = True`).
 
 ### First turn — loading history
 
-On the first `run()` or `run_stream()` call, `_load_history()` is invoked:
+On the first `run()` or `run_stream()` call, `_load_history()` is invoked once:
 
 ```python
 async def _load_history(self) -> None:
@@ -143,7 +158,7 @@ async def _load_history(self) -> None:
     agent.load_message_history(messages)
 ```
 
-This injects the persisted `PromptMessageExtended` list directly into FA's internal message history. From FA's perspective the agent has always had this history — it appears as natural prior context, not injected prompts.
+This injects the persisted `PromptMessageExtended` list directly into FA's internal message history. From FA's perspective the agent has always had this history.
 
 ### Every successful turn — saving history
 
@@ -155,6 +170,8 @@ try:
     async with get_manager().acquire(self.model):
         result = await self._app.send(prompt)
     response = str(result)
+    if response.startswith("I hit an internal error"):
+        raise RuntimeError(response)   # don't save; evict runner
     ...
     _completed = True
     return response
@@ -163,64 +180,79 @@ finally:
         await self._save_history()
 ```
 
-The `_completed` flag is the crash-safety mechanism. `finally` always runs, but `_save_history()` only executes if the turn completed without error or cancellation. A ctrl+c or `asyncio.CancelledError` mid-generation sets `_completed = False`, skipping the save. The previous good state in `history.json` is left untouched.
-
-Streaming turns follow the same pattern:
-
-```python
-_completed = False
-try:
-    async with get_manager().acquire(self.model):
-        async for item in self._run_stream_inner(prompt):
-            yield item
-    _completed = True
-finally:
-    if _completed:
-        await self._save_history()
-```
-
-Both `run()` and `run_stream()` save the full FA message history (including tool calls and results, not just the visible text). The saved messages come directly from `agent.message_history` — whatever FA has accumulated, including intermediate tool exchange turns.
+The `_completed` flag is the crash-safety mechanism. `_save_history()` only executes if the turn completed without error. A ctrl+c, `asyncio.CancelledError`, or FA error leaves the previous good state intact.
 
 ---
 
 ## Session Lifecycle
 
-### Creation
+### Active session pointer
+
+Each agent has one active session at a time, tracked by a pointer file:
 
 ```
-inbound message arrives
-    → gateway calls session_manager.get_or_create_session(agent_id, channel, user_id)
-    → SessionManager generates ID: "2026-03-11-aB3xYz"
-    → creates Session(history_dir=~/.pyclaw/agents/assistant/sessions/2026-03-11-aB3xYz/)
-    → writes session.json immediately (atomic)
-    → returns session to gateway
+~/.pyclaw/agents/{agent_id}/active_session   ← contains session ID, e.g. "2026-03-11-aB3xYz"
 ```
 
-Session directories are created lazily on first write: `session.save_metadata()` calls `history_dir.mkdir(parents=True, exist_ok=True)`.
+`SessionManager` provides two operations:
 
-### Active use
+```python
+# Read the active session (returns None if no pointer exists or session not found)
+session = await session_manager.get_active_session(agent_id)
 
-On each message turn:
+# Write the pointer (atomic rename via .tmp)
+session_manager.set_active_session(agent_id, session_id)
+```
+
+### Message arrival (all channels)
 
 ```
-message arrives
-    → gateway gets/creates session
-    → gateway calls agent._get_session_runner(session.id, history_path=session.history_path)
+inbound message arrives (Telegram / Slack / TUI / HTTP)
+    → gateway calls _get_active_session(agent_id, channel, user_id)
+        → session_manager.get_active_session(agent_id)
+            → if no pointer or session not found: create new session + set pointer
+        → session.last_channel  = channel
+        → session.last_user_id  = user_id
+        → session.last_thread_ts = thread_ts  (Slack only)
+        → session.save_metadata()
+    → gateway calls agent.handle_message(message, session)
     → runner created (first time) or retrieved from cache
     → runner._load_history() injects FA history (first call only)
-    → runner.run(prompt) or runner.run_stream(prompt)
+    → runner.run() or run_stream()
     → on completion: runner._save_history() writes FA history to disk
-    → session.touch(count_delta=2) updates metadata + writes session.json
+    → session.touch(count_delta=2) updates message_count + writes session.json
 ```
+
+### Reply routing
+
+After the agent responds, the gateway delivers the reply back via `_deliver_to_session(session, text)`:
+
+```python
+channel   = session.last_channel or session.channel
+user_id   = session.last_user_id or session.user_id
+thread_ts = session.last_thread_ts   # Slack only
+```
+
+This means:
+- A Telegram message → switches `last_channel` to `"telegram"` → next reply goes to Telegram
+- A Slack message → switches `last_channel` to `"slack"` → next reply goes to Slack
+- A job result delivered with `report_to_agent` → delivered via whatever channel is currently active
+
+### Daily rollover
+
+At midnight, `get_active_session()` detects that the current session's date doesn't match today and triggers `_archive_and_rollover()`:
+
+```
+current session → archived (history files moved to archived/)
+new session created for today → set as active_session
+last_channel / last_user_id / last_thread_ts preserved on new session
+```
+
+The rollover fires the `SESSION_CREATED` hook for the new session.
 
 ### In-memory index
 
-`SessionManager.sessions` is a dict of all live sessions. On gateway startup, `_load_sessions_from_disk()` scans all `session.json` files under `agents_dir` and rebuilds this index. The index also maintains two lookup maps:
-
-- `user_sessions[user_id]` → list of session IDs
-- `channel_sessions[channel]` → list of session IDs
-
-`get_or_create_session()` uses `channel_sessions` to find the most recent active session for a `(channel, user_id)` pair. If none exists, a new session is created.
+`SessionManager.sessions` is a dict of all live sessions. On gateway startup, `_load_sessions_from_disk()` scans all `session.json` files under `agents_dir` and rebuilds this index.
 
 ### Reaper
 
@@ -231,34 +263,55 @@ Two background tasks run while the gateway is up:
 | `_cleanup_loop` | Every 60 s | Marks sessions as `is_active=False` if idle > `session_timeout` (default 1 h); removes from index |
 | `_reaper_loop` | Every `reaper_interval_minutes` (default 60) | Removes sessions from index if `updated_at < now - ttl_hours`; fires optional `on_expire` callback |
 
-**Neither task deletes files.** They only remove entries from the in-memory dicts. Session directories and history files remain on disk permanently, making them available for future indexing or search.
+**Neither task deletes files or the `active_session` pointer.** They only remove entries from the in-memory dicts. Session directories and history files remain on disk permanently.
 
 ### /reset command
 
-`/reset` archives history without deleting it, then forces a fresh FastAgent context:
+`/reset` creates a fresh session and updates the active pointer:
 
 ```
 /reset received
-    → history.json         → archived/history.json.YYYYMMDD_HHMMSS
+    → history.json          → archived/history.json.YYYYMMDD_HHMMSS
     → history_previous.json → archived/history_previous.json.YYYYMMDD_HHMMSS
-    → session.message_count = 0
-    → session.save_metadata()
-    → agent.evict_session_runner(session.id)
+    → new session created (same agent_id, channel, user_id)
+    → new session.last_channel/last_user_id/last_thread_ts populated
+    → set_active_session(agent_id, new_session.id)
+    → agent.evict_session_runner(old_session.id)
         → runner.cleanup() closes FA MCP connections
         → removes runner from _session_runners cache
 ```
 
-The next message creates a fresh `AgentRunner` with no history loaded (the `history.json` is gone). The archived files preserve the conversation permanently.
+The next message gets a fresh `AgentRunner` with no history loaded. The archived files preserve the old conversation permanently.
 
 ### Runner eviction on error
 
-If an FA turn throws (e.g. a task group expiry during startup races), gateway calls `agent.evict_session_runner(session.id)`. A new runner is created for the retry, which will reload history from disk — giving a clean reconnect while preserving context.
+If `agent.handle_message()` throws (e.g. a FA model error, task group expiry), it calls `agent.evict_session_runner(session.id)` before returning the error `OutgoingMessage`. A new runner is created for the next message, which will reload history from disk — giving a clean reconnect while preserving context.
+
+---
+
+## Job Sessions (special case)
+
+Jobs use a separate path that bypasses the active session system:
+
+```python
+if channel == "job":
+    session = await _get_or_create_session(agent_id, "job", session_user_id)
+```
+
+Job sessions never become the agent's `active_session`. They use `context["no_history"] = True` for isolated runs (the default), so no history is loaded or saved. After the job completes, the runner is evicted immediately.
+
+If a job has `report_to_agent` set, the result is delivered via the named agent's current active session and channel:
+
+```python
+target_session = await session_manager.get_active_session(report_to_agent)
+await _deliver_to_session(target_session, f"📋 Job *{job.name}*:\n{response}")
+```
 
 ---
 
 ## FastAgent Integration Points
 
-pyclaw uses FastAgent strictly as an LLM execution engine. It does **not** use FA's own `SessionManager` for session lifecycle — that would impose FA's 20-session window pruning and its own directory layout. Instead, pyclaw takes the minimal necessary surface from FA:
+pyclaw uses FastAgent strictly as an LLM execution engine. It does **not** use FA's own session management.
 
 | FA component | How pyclaw uses it |
 |---|---|
@@ -270,13 +323,11 @@ pyclaw uses FastAgent strictly as an LLM execution engine. It does **not** use F
 | `load_messages(path)` | Deserialises `PromptMessageExtended` from `history.json` |
 | `save_messages(messages, path)` | Serialises `PromptMessageExtended` to `history.json` |
 
-The `PromptMessageExtended` format is used throughout because it is lossless: tool calls, tool results, stop reasons, and multi-part content are all preserved. This is what makes history meaningful beyond simple text — a reloaded session truly resumes the full prior state including any tool exchange turns.
-
 ---
 
 ## Config
 
-`SessionsConfig` in `pyclaw/config/schema.py` exposes:
+`SessionsConfig` in `pyclaw/config/schema.py`:
 
 ```yaml
 sessions:
@@ -284,9 +335,10 @@ sessions:
   reaperIntervalMinutes: 60 # how often the reaper runs
   maxSessions: 1000         # max sessions in the in-memory index
   sessionTimeout: 3600      # seconds idle before is_active → false
+  dailyRollover: true       # create a new session at midnight and archive the old one
 ```
 
-The session directory is always `~/.pyclaw/agents/{agent_id}/sessions/` — it is not configurable. This keeps the layout consistent with agent memory, skills, and other per-agent data.
+The session directory is always `~/.pyclaw/agents/{agent_id}/sessions/` — not configurable.
 
 ---
 
@@ -317,7 +369,7 @@ The importer (`pyclaw/tools/openclaw_import.py`):
 5. Writes to `~/.pyclaw/agents/{agent}/sessions/{YYYY-MM-DD}-{6chars}/history.json`.
 6. Writes `session.json` with `metadata.imported_from = "openclaw"` and `channel = "openclaw"`.
 
-Imported sessions appear in the TUI session list on the next gateway start (they are loaded from disk by `_load_sessions_from_disk()`). Their history is fully searchable and resumable.
+Imported sessions appear in the TUI session list on the next gateway start. Their history is fully searchable and resumable. They do **not** become the active session automatically.
 
 ---
 
@@ -330,6 +382,8 @@ Imported sessions appear in the TUI session list on the next gateway start (they
   "id": "2026-03-11-aB3xYz",
   "agent_id": "assistant",
   "channel": "telegram",
+  "last_channel": "slack",
+  "last_user_id": "U123456",
   "message_count": 8,
   "messages": [
     {"id": "2026-03-11-aB3xYz-0", "role": "user",      "content": "...", "timestamp": "..."},
@@ -337,8 +391,6 @@ Imported sessions appear in the TUI session list on the next gateway start (they
   ]
 }
 ```
-
-Message content is extracted via `PromptMessageExtended.all_text()` — multi-part content blocks are joined into a single string. Tool-call turns are included as assistant messages with their text representation.
 
 `GET /api/v1/sessions/` supports filtering by `agent_id`, `channel`, `user_id`, and `active_only` (default `true`).
 
@@ -348,20 +400,25 @@ Message content is extracted via `PromptMessageExtended.all_text()` — multi-pa
 
 ## Testing
 
-Session tests use `agents_dir=str(tmp_path)` — never `persist_dir=`. Constructing a `Session` directly requires `history_dir` to be set if you want persistence:
+Session tests use `agents_dir=str(tmp_path)` — never `persist_dir=`.
 
 ```python
-# Real Session with persistence
-hist_dir = tmp_path / "sessions" / "test-session"
-session = Session(id="test-session", agent_id="a", channel="tg",
-                  user_id="u", history_dir=hist_dir)
-session.touch(count_delta=2)  # writes session.json
-
 # SessionManager in tests
 mgr = SessionManager(agents_dir=str(tmp_path), ttl_hours=1)
 await mgr.start()
 session = await mgr.create_session("agent1", "telegram", "user1")
-assert session.history_dir.parent.name == "sessions"
+mgr.set_active_session("agent1", session.id)
+
+# Retrieve active session
+active = await mgr.get_active_session("agent1")
+assert active.id == session.id
+
+# Gateway stubs need the active session mock
+mock_sm = MagicMock()
+mock_sm.get_active_session = AsyncMock(return_value=mock_session)
+mock_sm.create_session     = AsyncMock(return_value=mock_session)
+mock_sm.set_active_session = MagicMock()
+gw._session_manager = mock_sm
 ```
 
-For runner tests that involve history I/O, patch `fast_agent.mcp.prompt_serialization.load_messages` and `save_messages`. The `_completed` flag means save is only called after a full successful `run()` — cancelled or errored calls never write.
+For runner tests that involve history I/O, patch `fast_agent.mcp.prompt_serialization.load_messages` and `save_messages`. The `_completed` flag means `_save_history()` is only called after a full successful `run()`.

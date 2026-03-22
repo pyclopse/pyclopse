@@ -47,6 +47,50 @@ async def get_config():
     return {"config": _redact(raw)}
 
 
+@router.get("/secrets", response_model=Dict[str, Any])
+async def list_secrets():
+    """
+    List all registered secret names and their source types.
+
+    Never returns actual secret values — use GET /secrets/{name} for that.
+    """
+    from pyclaw.config.loader import load_secrets_registry
+    from pyclaw.secrets.manager import SecretsManager
+
+    manager = SecretsManager(load_secrets_registry())
+    entries = []
+    for name in manager.registered_names():
+        defn = manager._parsed.get(name)
+        entry: Dict[str, Any] = {"name": name, "source": getattr(defn, "source", "unknown")}
+        if hasattr(defn, "var") and defn.var:
+            entry["var"] = defn.var
+        if hasattr(defn, "path"):
+            entry["path"] = defn.path
+        if hasattr(defn, "account"):
+            entry["account"] = defn.account
+        entries.append(entry)
+
+    return {"secrets": entries, "count": len(entries)}
+
+
+@router.get("/secrets/{name}", response_model=Dict[str, Any])
+async def get_secret(name: str):
+    """
+    Resolve a named secret via the pyclaw secrets manager.
+
+    The secret must be registered in ~/.pyclaw/secrets/secrets.yaml.
+    """
+    from pyclaw.config.loader import load_secrets_registry
+    from pyclaw.secrets.manager import SecretsManager, ResolutionError
+
+    manager = SecretsManager(load_secrets_registry())
+    try:
+        value = manager.resolve_name(name)
+        return {"name": name, "value": value}
+    except ResolutionError as exc:
+        raise HTTPException(status_code=404, detail=str(exc))
+
+
 @router.post("/reload", response_model=Dict[str, Any])
 async def reload_config():
     """Reload configuration from disk and apply non-destructive changes."""

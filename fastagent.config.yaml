@@ -1,50 +1,29 @@
-# fastagent.config.yaml - MCP server registry for pyclaw
-# FastAgent reads this from the working directory (project root or ~/.pyclaw/)
-
 default_model: passthrough
-
-# Generic OpenAI-compatible provider (used for MiniMax)
 generic:
-  api_key: "${GENERIC_API_KEY}"
-  base_url: "${GENERIC_BASE_URL}"
-
+  api_key: ${GENERIC_API_KEY}
+  base_url: ${GENERIC_BASE_URL}
 mcp:
   servers:
-
-    # -------------------------------------------------------------------------
-    # Web tools
-    # -------------------------------------------------------------------------
     fetch:
-      command: uvx
-      args: ["mcp-server-fetch"]
-
-    # -------------------------------------------------------------------------
-    # Time tools
-    # -------------------------------------------------------------------------
-    time:
-      command: uvx
-      args: ["mcp-server-time", "--local-timezone", "America/New_York"]
-
-    # -------------------------------------------------------------------------
-    # Filesystem tools (read, write, list, create)
-    # Allowed paths must be explicitly specified for security.
-    # Override PYCLAW_FS_ROOT env var or edit args below.
-    # -------------------------------------------------------------------------
-    filesystem:
-      command: node
       args:
-        - "/Users/localai/.npm/_npx/a3241bba59c344f5/node_modules/@modelcontextprotocol/server-filesystem/dist/index.js"
-        - "${HOME}"           # home dir
-        - "/tmp"              # temp dir (macOS resolves to /private/tmp)
-
-    # -------------------------------------------------------------------------
-    # pyclaw native tools — HTTP MCP server (started by the gateway on port 8081)
-    #   bash / exec, web_search, send_message, sessions_*, memory_*, jobs_*, session_status
-    # -------------------------------------------------------------------------
+      - mcp-server-fetch
+      command: uvx
+    filesystem:
+      args:
+      - /Users/localai/.npm/_npx/a3241bba59c344f5/node_modules/@modelcontextprotocol/server-filesystem/dist/index.js
+      - ${HOME}
+      - /tmp
+      command: node
     pyclaw:
-      url: "http://localhost:8081/mcp"
-
-# How many seconds between MCP timeline buckets in the TUI
+      url: http://localhost:8081/mcp
+    time:
+      args:
+      - mcp-server-time
+      - --local-timezone
+      - America/New_York
+      command: uvx
+    chrome-devtools:
+      command: chrome-devtools-mcp
 mcp_timeline:
-  steps: 20
   step_seconds: 15
+  steps: 20

@@ -52,6 +52,7 @@ def _make_gateway(typing_indicator=True, handle_message_response="ok"):
     security_cfg = SecurityConfig()
     gw._config = Config(channels=channels_cfg, agents=AgentsConfig(), security=security_cfg)
 
+    gw.enqueue_message = AsyncMock(return_value=handle_message_response)
     gw.handle_message = AsyncMock(return_value=handle_message_response)
     mock_sm = MagicMock()
     mock_sm.get_or_create_session = AsyncMock(return_value=MagicMock())
@@ -114,7 +115,7 @@ class TestTypingIndicator:
     async def test_typing_cancelled_even_on_error(self):
         """Typing task is cancelled even when handle_message raises."""
         gw = _make_gateway(typing_indicator=True)
-        gw.handle_message = AsyncMock(side_effect=RuntimeError("boom"))
+        gw.enqueue_message = AsyncMock(side_effect=RuntimeError("boom"))
         # Should not hang — typing task cleaned up in finally block
         await asyncio.wait_for(
             gw._handle_telegram_message(_make_message()),

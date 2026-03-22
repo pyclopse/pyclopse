@@ -120,6 +120,9 @@ def _make_gateway(response_text):
     gw._config = Config(channels=channels_cfg, agents=AgentsConfig(), security=SecurityConfig())
 
     gw.handle_message = AsyncMock(return_value=response_text)
+    # enqueue_message is the new queue-aware wrapper around handle_message;
+    # mock it here so the stub doesn't need a real QueueManager.
+    gw.enqueue_message = AsyncMock(return_value=response_text)
     mock_sm = MagicMock()
     mock_sm.get_or_create_session = AsyncMock(return_value=MagicMock())
     gw._session_manager = mock_sm

@@ -171,10 +171,10 @@ class TestPerSessionRunners:
             agent._get_session_runner("session-12345678-extra")
 
         kwargs = MockRunner.call_args.kwargs
-        # agent_name should be "{agent_name}-{first 8 chars of session_id}"
-        # session id "session-12345678-extra"[:8] == "session-"
+        # agent_name should be "{agent_name}-{last 6 chars of session_id}"
+        # session id "session-12345678-extra"[-6:] == "-extra"
         assert kwargs["agent_name"].startswith("test-agent-")
-        assert kwargs["agent_name"] == "test-agent-session-"
+        assert kwargs["agent_name"] == "test-agent--extra"
         assert kwargs["model"] == "gpt-4"
         assert kwargs["servers"] == ["mcp-server-1"]
         assert kwargs["tools_config"] == {"profile": "coding"}
@@ -372,18 +372,19 @@ class TestTelegramIncoming:
 
     @pytest.mark.asyncio
     async def test_routes_to_handle_message(self):
-        """_handle_telegram_message calls handle_message with correct args."""
+        """_handle_telegram_message calls enqueue_message with correct args."""
         gw = _make_gateway_for_telegram(allowed_users=[42])
-        gw.handle_message = AsyncMock(return_value="bot reply")
+        gw.enqueue_message = AsyncMock(return_value="bot reply")
 
         msg = _make_telegram_message(user_id=42, chat_id=42, text="Hi!")
         await gw._handle_telegram_message(msg)
 
-        gw.handle_message.assert_called_once_with(
+        gw.enqueue_message.assert_called_once_with(
+            session_key="telegram:42",
+            content="Hi!",
             channel="telegram",
             sender="Alice",
             sender_id="42",
-            content="Hi!",
             message_id="101",
             agent_id="default",
         )
@@ -392,7 +393,7 @@ class TestTelegramIncoming:
     async def test_sends_response_to_correct_chat(self):
         """_handle_telegram_message sends the response back to the right chat_id."""
         gw = _make_gateway_for_telegram(allowed_users=[42])
-        gw.handle_message = AsyncMock(return_value="response text")
+        gw.enqueue_message = AsyncMock(return_value="response text")
 
         msg = _make_telegram_message(user_id=42, chat_id=99, text="ping")
         await gw._handle_telegram_message(msg)
@@ -406,30 +407,30 @@ class TestTelegramIncoming:
     async def test_unauthorized_user_ignored(self):
         """_handle_telegram_message ignores messages from users not in allowed_users."""
         gw = _make_gateway_for_telegram(allowed_users=[100, 200])
-        gw.handle_message = AsyncMock(return_value="should not be called")
+        gw.enqueue_message = AsyncMock(return_value="should not be called")
 
         msg = _make_telegram_message(user_id=42, chat_id=42, text="intruder")
         await gw._handle_telegram_message(msg)
 
-        gw.handle_message.assert_not_called()
+        gw.enqueue_message.assert_not_called()
         gw._telegram_bot.send_message.assert_not_called()
 
     @pytest.mark.asyncio
     async def test_no_allowed_users_restriction_allows_anyone(self):
         """When allowed_users is empty, all users are accepted."""
         gw = _make_gateway_for_telegram(allowed_users=[])
-        gw.handle_message = AsyncMock(return_value="welcome")
+        gw.enqueue_message = AsyncMock(return_value="welcome")
 
         msg = _make_telegram_message(user_id=9999, chat_id=9999, text="hey")
         await gw._handle_telegram_message(msg)
 
-        gw.handle_message.assert_called_once()
+        gw.enqueue_message.assert_called_once()
 
     @pytest.mark.asyncio
     async def test_error_in_handle_message_sends_error_reply(self):
-        """When handle_message raises, an error message is sent to the user."""
+        """When enqueue_message raises, an error message is sent to the user."""
         gw = _make_gateway_for_telegram(allowed_users=[42])
-        gw.handle_message = AsyncMock(side_effect=RuntimeError("boom"))
+        gw.enqueue_message = AsyncMock(side_effect=RuntimeError("boom"))
 
         msg = _make_telegram_message(user_id=42, chat_id=55, text="crash me")
         await gw._handle_telegram_message(msg)
@@ -444,7 +445,7 @@ class TestTelegramIncoming:
     async def test_no_reply_when_handle_message_returns_none(self):
         """_handle_telegram_message does not call send_message if response is None."""
         gw = _make_gateway_for_telegram(allowed_users=[42])
-        gw.handle_message = AsyncMock(return_value=None)
+        gw.enqueue_message = AsyncMock(return_value=None)
 
         msg = _make_telegram_message(user_id=42, chat_id=42, text="silence")
         await gw._handle_telegram_message(msg)
@@ -577,7 +578,9 @@ class TestHandleMessageAgentLookup:
         mock_session.id = "sess-123"
         mock_session.agent_id = "myagent"
         mock_session_manager = MagicMock()
-        mock_session_manager.get_or_create_session = AsyncMock(return_value=mock_session)
+        mock_session_manager.get_active_session = AsyncMock(return_value=mock_session)
+        mock_session_manager.create_session = AsyncMock(return_value=mock_session)
+        mock_session_manager.set_active_session = MagicMock()
         gw._session_manager = mock_session_manager
 
         # Usage counters
@@ -603,10 +606,8 @@ class TestHandleMessageAgentLookup:
             content="test",
         )
 
-        # Verify get_or_create_session was called with "myagent", not "default"
-        mock_session_manager.get_or_create_session.assert_called_once()
-        call_kwargs = mock_session_manager.get_or_create_session.call_args.kwargs
-        assert call_kwargs["agent_id"] == "myagent"
+        # Verify get_active_session was called with "myagent", not "default"
+        mock_session_manager.get_active_session.assert_called_once_with("myagent")
 
         assert result == "reply from myagent"
 
@@ -635,7 +636,9 @@ class TestHandleMessageAgentLookup:
         gw._agent_manager = mock_agent_manager
 
         mock_session_manager = MagicMock()
-        mock_session_manager.get_or_create_session = AsyncMock(return_value=None)
+        mock_session_manager.get_active_session = AsyncMock(return_value=None)
+        mock_session_manager.create_session = AsyncMock(return_value=None)
+        mock_session_manager.set_active_session = MagicMock()
         gw._session_manager = mock_session_manager
 
         result = await gw.handle_message(
@@ -645,9 +648,7 @@ class TestHandleMessageAgentLookup:
             content="test",
         )
 
-        mock_session_manager.get_or_create_session.assert_called_once()
-        call_kwargs = mock_session_manager.get_or_create_session.call_args.kwargs
-        assert call_kwargs["agent_id"] == "default"
+        mock_session_manager.get_active_session.assert_called_once_with("default")
 
         # Session was None → returns a "Could not create session" message
         assert result == "Could not create session"

@@ -12,7 +12,7 @@ import asyncio
 import json
 import os
 import sys
-from datetime import datetime, timezone
+from datetime import datetime
 from pathlib import Path
 
 
@@ -43,7 +43,7 @@ def main():
         "agent": agent,
         "session_id": session_id,
         "message_count": message_count,
-        "saved_at": datetime.now(timezone.utc).isoformat(),
+        "saved_at": datetime.now().isoformat(),
         "recent": history[-5:] if len(history) >= 5 else history,
     }
 

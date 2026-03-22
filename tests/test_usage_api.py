@@ -106,7 +106,9 @@ class TestUsageCounterWiring:
         mock_session.id = "s1"
         mock_session.agent_id = "myagent"
         mock_sm = MagicMock()
-        mock_sm.get_or_create_session = AsyncMock(return_value=mock_session)
+        mock_sm.get_active_session = AsyncMock(return_value=mock_session)
+        mock_sm.create_session = AsyncMock(return_value=mock_session)
+        mock_sm.set_active_session = MagicMock()
         gw._session_manager = mock_sm
 
         # Stub agent manager
@@ -148,7 +150,9 @@ class TestUsageCounterWiring:
         mock_session.id = "s1"
         mock_session.agent_id = "myagent"
         mock_sm = MagicMock()
-        mock_sm.get_or_create_session = AsyncMock(return_value=mock_session)
+        mock_sm.get_active_session = AsyncMock(return_value=mock_session)
+        mock_sm.create_session = AsyncMock(return_value=mock_session)
+        mock_sm.set_active_session = MagicMock()
         gw._session_manager = mock_sm
 
         mock_agent = MagicMock()

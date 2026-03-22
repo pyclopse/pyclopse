@@ -2,12 +2,12 @@
 
 import json
 from datetime import datetime
-from pyclaw.utils.time import now
+from pyclaw.utils.time import now as _now
 from enum import Enum
 from pathlib import Path
 from typing import Annotated, Any, Dict, List, Literal, Optional, Union
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 
 
 # ---------------------------------------------------------------------------
@@ -20,12 +20,77 @@ class CommandRun(BaseModel):
     command: str
 
 
+# ---------------------------------------------------------------------------
+# Prompt presets — define the default include_* values for each preset
+# ---------------------------------------------------------------------------
+
+PRESET_DEFAULTS: Dict[str, Dict[str, bool]] = {
+    "full": dict(
+        personality=True, identity=True, rules=True, memory=True,
+        user=True, agents=True, tools=True, skills=True,
+    ),
+    "minimal": dict(
+        personality=True, identity=True, rules=True, memory=False,
+        user=False, agents=False, tools=False, skills=True,
+    ),
+    "task": dict(
+        personality=False, identity=False, rules=False, memory=False,
+        user=False, agents=False, tools=False, skills=False,
+    ),
+}
+
+
 class AgentRun(BaseModel):
     """Send a message to a named agent and deliver its response."""
     kind: Literal["agent"] = "agent"
     agent: str
     message: str
     model: Optional[str] = None   # overrides agent's default model if set
+
+    # Session continuity
+    session_mode: Literal["isolated", "persistent"] = "isolated"
+
+    # Prompt preset — sets default values for all include_* flags below
+    prompt_preset: Literal["full", "minimal", "task"] = "full"
+
+    # Prompt composition — None means "use preset default", resolved at validation time
+    include_personality: Optional[bool] = None
+    include_identity:    Optional[bool] = None
+    include_rules:       Optional[bool] = None
+    include_memory:      Optional[bool] = None
+    include_user:        Optional[bool] = None
+    include_agents:      Optional[bool] = None
+    include_tools:       Optional[bool] = None
+    include_skills:      Optional[bool] = None
+
+    # Optional skill filter — if set, only these named skills are injected (requires include_skills=True)
+    # If None (default), all discovered skills are injected when include_skills=True.
+    skills: Optional[List[str]] = None
+
+    # Optional list of file paths whose contents are injected into the system prompt,
+    # after the instruction. Paths are expanded (~ supported). Missing files are skipped.
+    include_files: Optional[List[str]] = None
+
+    # Optional instruction appended to the system prompt (after all include_* content)
+    instruction: Optional[str] = None
+
+    # When set, deliver the job result into this agent's active session channel
+    report_to_agent: Optional[str] = None
+
+    # When set, deliver the job result into this specific session (by session ID).
+    # Takes precedence over report_to_agent. Used by the subagent system to pin
+    # result delivery to the exact session that spawned the subagent.
+    report_to_session: Optional[str] = None
+
+    @model_validator(mode="after")
+    def _resolve_preset(self) -> "AgentRun":
+        """Resolve None include_* flags using the preset defaults."""
+        defaults = PRESET_DEFAULTS[self.prompt_preset]
+        for flag, default_val in defaults.items():
+            field_name = f"include_{flag}"
+            if getattr(self, field_name) is None:
+                object.__setattr__(self, field_name, default_val)
+        return self
 
 
 JobRunType = Annotated[Union[CommandRun, AgentRun], Field(discriminator="kind")]
@@ -39,7 +104,7 @@ class CronSchedule(BaseModel):
     """Standard 5-field cron expression."""
     kind: Literal["cron"] = "cron"
     expr: str
-    timezone: str = "UTC"
+    timezone: Optional[str] = None  # None = use scheduler default (system local or config)
     stagger_seconds: int = 0      # random jitter up to N seconds
 
 
@@ -148,12 +213,15 @@ class Job(BaseModel):
     failure_count: int = 0
     consecutive_errors: int = 0
 
-    # Ownership — set at creation time by the agent/caller, never changed
-    owner: Optional[str] = None
+    # When False, this job is ephemeral — never written to jobs.yaml.
+    # Used by the subagent system; may be useful for other transient jobs too.
+    persistent: bool = True
+    # Session ID of the agent session that spawned this subagent (None for regular jobs)
+    spawned_by_session: Optional[str] = None
 
     # Metadata
-    created_at: datetime = Field(default_factory=datetime.utcnow)
-    updated_at: datetime = Field(default_factory=datetime.utcnow)
+    created_at: datetime = Field(default_factory=_now)
+    updated_at: datetime = Field(default_factory=_now)
 
 
 # ---------------------------------------------------------------------------
@@ -282,3 +350,86 @@ def read_run_log(job_id: str, runs_dir: Path, limit: int = 20) -> List[JobRun]:
             except Exception:
                 pass
     return runs
+
+
+# ---------------------------------------------------------------------------
+# Per-agent YAML persistence (v2 format)
+# ---------------------------------------------------------------------------
+
+def save_agent_jobs(jobs: Dict[str, Job], agent_dir: Path) -> None:
+    """Write jobs to ~/.pyclaw/agents/{id}/jobs.yaml (keyed by job name)."""
+    try:
+        from ruamel.yaml import YAML
+        yaml = YAML()
+        yaml.default_flow_style = False
+        yaml.width = 120
+    except ImportError:
+        import logging
+        logging.getLogger("pyclaw.jobs").error("ruamel.yaml not installed; cannot save agent jobs")
+        return
+
+    agent_dir.mkdir(parents=True, exist_ok=True)
+    path = agent_dir / "jobs.yaml"
+
+    job_dict: Dict[str, Any] = {}
+    for job in jobs.values():
+        raw = job.model_dump(mode="json")
+        # Name is the YAML key; remove it from the inner dict to avoid redundancy
+        raw.pop("name", None)
+        job_dict[job.name] = raw
+
+    data: Dict[str, Any] = {"version": 2, "jobs": job_dict}
+    tmp = path.with_suffix(".tmp")
+    import io
+    buf = io.StringIO()
+    yaml.dump(data, buf)
+    tmp.write_text(buf.getvalue())
+    tmp.replace(path)
+
+
+def load_agent_jobs(agent_dir: Path) -> Dict[str, Job]:
+    """Load jobs from ~/.pyclaw/agents/{id}/jobs.yaml, returns {job_id: Job}."""
+    path = agent_dir / "jobs.yaml"
+    if not path.exists():
+        return {}
+    try:
+        from ruamel.yaml import YAML
+        yaml = YAML()
+        raw_data = yaml.load(path.read_text())
+    except ImportError:
+        import logging
+        logging.getLogger("pyclaw.jobs").error("ruamel.yaml not installed; cannot load agent jobs")
+        return {}
+    except Exception as e:
+        import logging
+        logging.getLogger("pyclaw.jobs").error(f"Error loading {path}: {e}")
+        return {}
+
+    if not raw_data or not isinstance(raw_data, dict):
+        return {}
+
+    jobs: Dict[str, Job] = {}
+    for job_name, job_raw in raw_data.get("jobs", {}).items():
+        if not isinstance(job_raw, dict):
+            continue
+        try:
+            # Name is always derived from the YAML key (the authoritative source)
+            job_raw = dict(job_raw)
+            job_raw["name"] = job_name
+            # ruamel may return CommentedMap — convert to plain dict recursively
+            job_raw = _to_plain(job_raw)
+            job = Job.model_validate(job_raw)
+            jobs[job.id] = job
+        except Exception as e:
+            import logging
+            logging.getLogger("pyclaw.jobs").warning(f"Skipping invalid job {job_name!r}: {e}")
+    return jobs
+
+
+def _to_plain(obj: Any) -> Any:
+    """Recursively convert ruamel CommentedMap/Seq to plain dict/list."""
+    if isinstance(obj, dict):
+        return {k: _to_plain(v) for k, v in obj.items()}
+    if isinstance(obj, list):
+        return [_to_plain(v) for v in obj]
+    return obj
