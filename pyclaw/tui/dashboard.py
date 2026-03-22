@@ -824,6 +824,10 @@ class SkillsView(Vertical):
                 config_dir="~/.pyclaw",
                 extra_dirs=extra or None,
             )
+            logger.info(
+                f"SkillsView [{self._agent_id}]: found {len(skills)} skills: "
+                f"{[s.name for s in skills]}"
+            )
         except Exception as e:
             logger.warning(f"SkillsView load error: {e}", exc_info=True)
         self.app.call_from_thread(self._populate, skills)
