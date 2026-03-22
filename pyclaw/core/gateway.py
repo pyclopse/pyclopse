@@ -423,6 +423,11 @@ class Gateway:
         # Initialize concurrency limits
         await self._init_concurrency()
 
+        # Bootstrap OTel span store before agents init so FastAgent's lazy
+        # trace.get_tracer() calls are backed by our in-process provider.
+        from pyclaw.core import otel_store as _otel_store_mod
+        self._otel_store = _otel_store_mod.bootstrap()
+
         # Initialize core
         await self._init_core()
 

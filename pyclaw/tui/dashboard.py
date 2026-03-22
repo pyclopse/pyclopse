@@ -13,8 +13,9 @@ Three-pane layout:
   └────────────────────────────────────────────────────────┘
 
 Key bindings:
-  1  Sessions   2  History   3  Jobs   4  Sys Prompt
-  5  Config     6  Files     7  Skills  8  Run Hist   9  Agent Log
+  0  Agent Card  1  Sessions   2  History   3  Jobs   4  Sys Prompt
+  5  Config      6  Files      7  Skills    8  Run Hist   9  Agent Log
+  t  OTel Traces
   h  Load history for selected session
   r  Run selected job now
   v  View run history for selected job
@@ -1113,6 +1114,267 @@ class AgentLogView(Vertical):
             log.write(line)
 
 
+# ─────────────────────────────── View: Agent Card ────────────────────────────
+
+
+class AgentCardView(Vertical):
+    """Summary card for the active agent."""
+
+    DEFAULT_CSS = """
+    AgentCardView {
+        height: 1fr;
+        overflow-y: auto;
+    }
+    #ac-header {
+        height: 1;
+        background: $panel;
+        padding: 0 1;
+        color: $text-muted;
+    }
+    #ac-content {
+        height: 1fr;
+        overflow-y: auto;
+        padding: 1 2;
+    }
+    """
+
+    def __init__(self, gateway: Any, **kwargs: Any) -> None:
+        super().__init__(**kwargs)
+        self.gateway = gateway
+        self._agent_id: str = ""
+
+    def compose(self) -> ComposeResult:
+        yield Static("Agent Card", id="ac-header")
+        yield RichLog(id="ac-content", markup=True, highlight=False, auto_scroll=False)
+
+    def refresh_for_agent(self, agent_id: str) -> None:
+        self._agent_id = agent_id
+        self._load(agent_id)
+
+    @work(thread=True)
+    def _load(self, agent_id: str) -> None:
+        lines: List[str] = []
+        try:
+            am = getattr(self.gateway, "_agent_manager", None)
+            agent = am.agents.get(agent_id) if am else None
+            if not agent:
+                lines.append(f"[dim]No agent: {agent_id}[/dim]")
+            else:
+                cfg = agent.config
+
+                lines.append(f"[bold cyan]{agent_id}[/bold cyan]")
+                lines.append("")
+
+                # Model
+                model = getattr(cfg, "model", None) or "(default)"
+                lines.append(f"  [bold]Model:[/bold]       {model}")
+
+                # Context window
+                ctx = getattr(cfg, "context_window", None)
+                if ctx:
+                    lines.append(f"  [bold]Context:[/bold]     {ctx:,} tokens")
+
+                # Status
+                runner = agent._session_runners.get("__base__")
+                status = "ready" if runner else "idle"
+                lines.append(f"  [bold]Status:[/bold]      {status}")
+
+                lines.append("")
+
+                # Sessions
+                sm = getattr(self.gateway, "_session_manager", None)
+                session_count = 0
+                msg_count = 0
+                if sm:
+                    sessions = sm.list_sessions_sync(agent_id=agent_id)
+                    session_count = len(sessions)
+                    msg_count = sum(
+                        getattr(s, "message_count", 0) or 0 for s in sessions
+                    )
+                lines.append(f"  [bold]Sessions:[/bold]    {session_count}  ({msg_count} messages total)")
+
+                # Jobs
+                js = getattr(self.gateway, "_job_scheduler", None)
+                job_count = 0
+                if js:
+                    job_count = sum(
+                        1 for j in js.jobs.values()
+                        if getattr(j, "run", None) and
+                           getattr(j.run, "agent", None) == agent_id
+                    )
+                lines.append(f"  [bold]Jobs:[/bold]        {job_count} assigned")
+
+                # Skills
+                try:
+                    from pyclaw.skills.registry import discover_skills
+                    extra_dirs = list(getattr(cfg, "skills_dirs", None) or [])
+                    gw_cfg = getattr(self.gateway, "_config", None)
+                    if gw_cfg and gw_cfg.gateway:
+                        for d in (getattr(gw_cfg.gateway, "skills_dirs", None) or []):
+                            if d not in extra_dirs:
+                                extra_dirs.append(d)
+                    skills = discover_skills(
+                        agent_name=agent_id,
+                        config_dir="~/.pyclaw",
+                        extra_dirs=extra_dirs or None,
+                    )
+                    lines.append(f"  [bold]Skills:[/bold]      {len(skills)}")
+                    if skills:
+                        for s in sorted(skills, key=lambda x: x.name.lower())[:10]:
+                            lines.append(f"    • {s.name}  [dim]v{s.version}[/dim]")
+                        if len(skills) > 10:
+                            lines.append(f"    … and {len(skills) - 10} more")
+                except Exception as e:
+                    lines.append(f"  [bold]Skills:[/bold]      (error: {e})")
+
+                lines.append("")
+
+                # Config summary
+                lines.append("  [bold]Config:[/bold]")
+                for attr in (
+                    "description", "prompt_preset", "show_thinking",
+                    "typing_mode", "memory_backend",
+                ):
+                    val = getattr(cfg, attr, None)
+                    if val is not None:
+                        lines.append(f"    {attr}: {val}")
+
+                # OTel span count
+                from pyclaw.core import otel_store
+                store = otel_store.get_store()
+                if store is not None:
+                    lines.append("")
+                    lines.append(f"  [bold]OTel spans:[/bold]  {len(store)} buffered")
+
+        except Exception as e:
+            lines.append(f"[red]Error loading agent card: {e}[/red]")
+
+        self.app.call_from_thread(self._populate, lines)
+
+    def _populate(self, lines: List[str]) -> None:
+        log = self.query_one("#ac-content", RichLog)
+        log.clear()
+        for line in lines:
+            log.write(line)
+
+
+# ─────────────────────────────── View: Traces ────────────────────────────────
+
+
+class TracesView(Vertical):
+    """Live OpenTelemetry span table from the in-process OTel store."""
+
+    DEFAULT_CSS = """
+    TracesView {
+        height: 1fr;
+        overflow: hidden hidden;
+    }
+    #tr-bar {
+        height: 1;
+        background: $panel;
+        padding: 0 1;
+        color: $text-muted;
+    }
+    #tr-table {
+        height: auto;
+        max-height: 50%;
+    }
+    #tr-detail {
+        height: 1fr;
+        overflow-y: auto;
+        padding: 0 1;
+    }
+    """
+
+    def __init__(self, gateway: Any, **kwargs: Any) -> None:
+        super().__init__(**kwargs)
+        self.gateway = gateway
+        self._spans: List[dict] = []
+
+    def compose(self) -> ComposeResult:
+        yield Static(
+            "OTel Traces  — \\[Enter] detail  \\[r] refresh",
+            id="tr-bar",
+        )
+        t = DataTable(id="tr-table", cursor_type="row")
+        t.add_columns("Time", "Span", "Model", "In", "Out", "Dur", "Status")
+        yield t
+        yield RichLog(id="tr-detail", markup=True, highlight=False, auto_scroll=False)
+
+    def on_mount(self) -> None:
+        self._load_spans()
+
+    def refresh_for_agent(self, agent_id: str) -> None:
+        self._load_spans()
+
+    @work(thread=True)
+    def _load_spans(self) -> None:
+        from pyclaw.core import otel_store
+        store = otel_store.get_store()
+        if store is None:
+            self.app.call_from_thread(self._populate, [])
+            return
+        raw = store.recent(200)
+        summaries = [otel_store.span_summary(s) for s in reversed(raw)]
+        self.app.call_from_thread(self._populate, summaries)
+
+    def _populate(self, summaries: List[dict]) -> None:
+        self._spans = summaries
+        t = self.query_one("#tr-table", DataTable)
+        t.clear()
+        for i, s in enumerate(summaries):
+            name = s.get("name", "?")
+            if len(name) > 40:
+                name = name[:37] + "…"
+            t.add_row(
+                s.get("ts", "?"),
+                name,
+                s.get("model", "") or "—",
+                s.get("in_toks", "—"),
+                s.get("out_toks", "—"),
+                s.get("dur", "?"),
+                s.get("status", "?"),
+                key=str(i),
+            )
+        detail = self.query_one("#tr-detail", RichLog)
+        detail.clear()
+        count = len(summaries)
+        from pyclaw.core import otel_store
+        store = otel_store.get_store()
+        buffered = len(store) if store is not None else 0
+        detail.write(f"[dim]{count} spans shown  ({buffered} buffered total) — select a row to inspect[/dim]")
+
+    @on(DataTable.RowSelected, "#tr-table")
+    def on_row_selected(self, event: DataTable.RowSelected) -> None:
+        try:
+            idx = int(str(event.row_key.value))
+            span = self._spans[idx]
+        except (ValueError, IndexError):
+            return
+        detail = self.query_one("#tr-detail", RichLog)
+        detail.clear()
+        detail.write(f"[bold]{span.get('name', '?')}[/bold]  [{span.get('status', '?')}]")
+        detail.write(f"  Time:     {span.get('ts', '?')}   Duration: {span.get('dur', '?')}")
+        detail.write(f"  Trace ID: {span.get('trace_id', '')}")
+        detail.write(f"  Span ID:  {span.get('span_id', '')}")
+        model = span.get("model", "")
+        if model:
+            detail.write(f"  Model:    {model}")
+        in_t = span.get("in_toks", "—")
+        out_t = span.get("out_toks", "—")
+        if in_t != "—" or out_t != "—":
+            detail.write(f"  Tokens:   in={in_t}  out={out_t}")
+        attrs = span.get("attrs", {})
+        if attrs:
+            detail.write("")
+            detail.write("[bold]Attributes:[/bold]")
+            for k, v in sorted(attrs.items()):
+                val_str = str(v)
+                if len(val_str) > 120:
+                    val_str = val_str[:117] + "…"
+                detail.write(f"  {k}: {val_str}")
+
+
 # ─────────────────────────────── Main Dashboard ──────────────────────────────
 
 
@@ -1180,6 +1442,7 @@ class GatewayDashboard(App):
     """
 
     BINDINGS = [
+        Binding("0", "view_agentcard", "0:Card", show=True),
         Binding("1", "view_sessions", "1:Sessions", show=True),
         Binding("2", "view_history", "2:History", show=True),
         Binding("3", "view_jobs", "3:Jobs", show=True),
@@ -1189,6 +1452,7 @@ class GatewayDashboard(App):
         Binding("7", "view_skills", "7:Skills", show=True),
         Binding("8", "view_runhistory", "8:RunHist", show=True),
         Binding("9", "view_agentlog", "9:AgentLog", show=True),
+        Binding("t", "view_traces", "t:Traces", show=True),
         Binding("h", "load_history", "h:Hist", show=True),
         Binding("r", "run_job", "r:Run", show=True),
         Binding("v", "view_job_runs", "v:Runs", show=True),
@@ -1205,7 +1469,7 @@ class GatewayDashboard(App):
 
     _log_pct: reactive[int] = reactive(30)
     _active_agent: reactive[str] = reactive("")
-    _active_view: reactive[str] = reactive("sessions")
+    _active_view: reactive[str] = reactive("agentcard")
 
     def __init__(self, gateway: Any = None) -> None:
         super().__init__()
@@ -1219,6 +1483,7 @@ class GatewayDashboard(App):
         yield Header(show_clock=True)
         yield Tabs(id="agent-tabs")
         yield Tabs(
+            Tab("Card", id="tab-agentcard"),
             Tab("Sessions", id="tab-sessions"),
             Tab("History", id="tab-history"),
             Tab("Jobs", id="tab-jobs"),
@@ -1228,12 +1493,14 @@ class GatewayDashboard(App):
             Tab("Skills", id="tab-skills"),
             Tab("Run Hist", id="tab-runhistory"),
             Tab("Agent Log", id="tab-agentlog"),
+            Tab("Traces", id="tab-traces"),
             id="view-tabs",
         )
         yield Static("", id="status-bar")
 
         with Vertical(id="split-area"):
-            with ContentSwitcher(id="detail-pane", initial="view-sessions"):
+            with ContentSwitcher(id="detail-pane", initial="view-agentcard"):
+                yield AgentCardView(self.gateway, id="view-agentcard")
                 yield SessionsView(self.gateway, id="view-sessions")
                 yield HistoryView(self.gateway, id="view-history")
                 yield JobsView(self.gateway, id="view-jobs")
@@ -1243,6 +1510,7 @@ class GatewayDashboard(App):
                 yield SkillsView(self.gateway, id="view-skills")
                 yield RunHistoryView(self.gateway, id="view-runhistory")
                 yield AgentLogView(self.gateway, id="view-agentlog")
+                yield TracesView(self.gateway, id="view-traces")
 
             with Vertical(id="log-pane"):
                 yield Static(
@@ -1332,6 +1600,7 @@ class GatewayDashboard(App):
     @on(Tabs.TabActivated, "#view-tabs")
     def on_view_tab_activated(self, event: Tabs.TabActivated) -> None:
         tab_map = {
+            "tab-agentcard": "agentcard",
             "tab-sessions": "sessions",
             "tab-history": "history",
             "tab-jobs": "jobs",
@@ -1341,6 +1610,7 @@ class GatewayDashboard(App):
             "tab-skills": "skills",
             "tab-runhistory": "runhistory",
             "tab-agentlog": "agentlog",
+            "tab-traces": "traces",
         }
         view = tab_map.get(event.tab.id or "")
         if view:
@@ -1361,7 +1631,9 @@ class GatewayDashboard(App):
         if not agent_id or agent_id == "(no agents)":
             return
         view = self._active_view
-        if view == "sessions":
+        if view == "agentcard":
+            self.query_one(AgentCardView).refresh_for_agent(agent_id)
+        elif view == "sessions":
             self.query_one(SessionsView).refresh_for_agent(agent_id)
         elif view == "jobs":
             self.query_one(JobsView).refresh_for_agent(agent_id)
@@ -1375,10 +1647,12 @@ class GatewayDashboard(App):
             self.query_one(SkillsView).refresh_for_agent(agent_id)
         elif view == "agentlog":
             self.query_one(AgentLogView).refresh_for_agent(agent_id)
+        elif view == "traces":
+            self.query_one(TracesView).refresh_for_agent(agent_id)
         # history and runhistory are loaded on demand
 
     def _auto_refresh(self) -> None:
-        if self._active_view in ("sessions", "jobs"):
+        if self._active_view in ("sessions", "jobs", "agentcard", "traces"):
             self._refresh_view_for_agent(self._active_agent)
         self._update_status_bar()
 
@@ -1432,6 +1706,10 @@ class GatewayDashboard(App):
 
     # ── Actions ───────────────────────────────────────────────────────────────
 
+    def action_view_agentcard(self) -> None:
+        self._switch_view("agentcard")
+        self._set_view_tab("tab-agentcard")
+
     def action_view_sessions(self) -> None:
         self._switch_view("sessions")
         self._set_view_tab("tab-sessions")
@@ -1467,6 +1745,10 @@ class GatewayDashboard(App):
     def action_view_agentlog(self) -> None:
         self._switch_view("agentlog")
         self._set_view_tab("tab-agentlog")
+
+    def action_view_traces(self) -> None:
+        self._switch_view("traces")
+        self._set_view_tab("tab-traces")
 
     def action_load_history(self) -> None:
         session_id = self.query_one(SessionsView).get_selected_session_id()
