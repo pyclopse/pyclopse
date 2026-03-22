@@ -567,7 +567,8 @@ class FileBrowserView(Vertical):
         color: $text-muted;
     }
     FileBrowserView #fb-table {
-        height: 35%;
+        height: auto;
+        max-height: 50%;
     }
     FileBrowserView #fb-content-bar {
         height: 1;
@@ -759,7 +760,8 @@ class SkillsView(Vertical):
         color: $text-muted;
     }
     SkillsView #sk-table {
-        height: 40%;
+        height: auto;
+        max-height: 50%;
     }
     SkillsView #sk-body-bar {
         height: 1;
@@ -890,7 +892,8 @@ class RunHistoryView(Vertical):
         color: $text-muted;
     }
     RunHistoryView #rh-table {
-        height: 40%;
+        height: auto;
+        max-height: 50%;
     }
     RunHistoryView #rh-detail-bar {
         height: 1;
@@ -1194,6 +1197,7 @@ class GatewayDashboard(App):
         Binding("escape", "cancel_edit", "Esc:Cancel", show=False, priority=True),
         Binding("[", "shrink_log", "[:Shrink", show=True),
         Binding("]", "grow_log", "]:Grow", show=True),
+        Binding("y", "yank", "y:Copy", show=True),
         Binding("f5", "refresh_view", "F5:Refresh", show=False),
         Binding("q", "quit", "q:Quit", show=True),
         Binding("ctrl+q", "quit", "Quit", show=False),
@@ -1544,6 +1548,105 @@ class GatewayDashboard(App):
         detail_fr = 100 - pct
         self.query_one("#detail-pane").styles.height = f"{detail_fr}fr"
         self.query_one("#log-pane").styles.height = f"{pct}fr"
+
+    def action_yank(self) -> None:
+        """Copy current view content to system clipboard via pbcopy/xclip."""
+        import subprocess
+        import sys
+
+        text = self._get_yank_text()
+        if not text:
+            self.query_one("#log-richlog", RichLog).write(
+                "[dashboard] Nothing to copy in current view"
+            )
+            return
+
+        try:
+            if sys.platform == "darwin":
+                subprocess.run(["pbcopy"], input=text.encode(), check=True)
+            else:
+                # Try xclip, fall back to xsel
+                try:
+                    subprocess.run(
+                        ["xclip", "-selection", "clipboard"],
+                        input=text.encode(), check=True,
+                    )
+                except FileNotFoundError:
+                    subprocess.run(
+                        ["xsel", "--clipboard", "--input"],
+                        input=text.encode(), check=True,
+                    )
+            lines = text.count("\n") + 1
+            self.query_one("#log-richlog", RichLog).write(
+                f"[dashboard] Copied {lines} lines to clipboard"
+            )
+        except Exception as e:
+            self.query_one("#log-richlog", RichLog).write(
+                f"[dashboard] Copy failed: {e}"
+            )
+
+    def _get_yank_text(self) -> str:
+        """Return text content for the current view to copy to clipboard."""
+        view = self._active_view
+        agent = self._active_agent
+        try:
+            if view == "history":
+                hv = self.query_one(HistoryView)
+                sm = getattr(self.gateway, "_session_manager", None)
+                if sm and hv._session_id:
+                    sessions = sm.list_sessions_sync(agent_id=hv._agent_id)
+                    s = next((x for x in sessions if x.id == hv._session_id), None)
+                    if s and s.history_path and s.history_path.exists():
+                        return s.history_path.read_text()
+            elif view == "sysprompt":
+                from pyclaw.core.prompt_builder import build_system_prompt
+                return build_system_prompt(agent_name=agent, config_dir="~/.pyclaw")
+            elif view == "files":
+                fb = self.query_one(FileBrowserView)
+                if fb._current_file and fb._current_file.exists():
+                    return fb._current_file.read_text(encoding="utf-8", errors="replace")
+            elif view == "skills":
+                sv = self.query_one(SkillsView)
+                t = sv.query_one("#sk-table", DataTable)
+                try:
+                    skill_name = str(t.coordinate_to_cell_key(t.cursor_coordinate).row_key.value)
+                    from pyclaw.skills.registry import find_skill
+                    skill = find_skill(skill_name, agent_name=agent, config_dir="~/.pyclaw")
+                    if skill:
+                        return skill.read_content()
+                except Exception:
+                    pass
+            elif view == "agentlog":
+                log_path = (
+                    Path("~/.pyclaw/agents").expanduser() / agent / "logs" / "agent.log"
+                )
+                if log_path.exists():
+                    lines = log_path.read_text(encoding="utf-8", errors="replace").splitlines()
+                    return "\n".join(lines[-500:])
+            elif view == "runhistory":
+                rh = self.query_one(RunHistoryView)
+                t = rh.query_one("#rh-table", DataTable)
+                try:
+                    idx = int(str(t.coordinate_to_cell_key(t.cursor_coordinate).row_key.value))
+                    if 0 <= idx < len(rh._runs):
+                        run = rh._runs[idx]
+                        parts = [
+                            f"Run: {run.get('id', '?')}",
+                            f"Status: {run.get('status', '?')}",
+                            f"Started: {run.get('started_at', '?')}",
+                            f"Ended: {run.get('ended_at', '?')}",
+                            "",
+                            "=== STDOUT ===",
+                            run.get("stdout", "") or "",
+                        ]
+                        if run.get("stderr"):
+                            parts += ["", "=== STDERR ===", run["stderr"]]
+                        return "\n".join(parts)
+                except Exception:
+                    pass
+        except Exception as e:
+            logger.debug(f"yank error: {e}")
+        return ""
 
     def action_quit(self) -> None:
         self.exit()
