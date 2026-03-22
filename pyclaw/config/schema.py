@@ -344,6 +344,11 @@ class AgentConfig(BaseModel):
         default_factory=list,
         validation_alias=AliasChoices("skills_dirs", "skillsDirs"),
     )
+    # A2A (Agent-to-Agent) protocol configuration for this agent.
+    a2a: Optional[A2AAgentConfig] = Field(
+        default=None,
+        validation_alias=AliasChoices("a2a"),
+    )
 
     # ── Workflow: orchestrator / iterative_planner ────────────────────────────
     # workflow: orchestrator
@@ -702,6 +707,28 @@ class AcpConfig(BaseModel):
     enabled: bool = True
 
 
+class A2AAgentConfig(BaseModel):
+    """Per-agent A2A (Agent-to-Agent) protocol configuration."""
+    model_config = ConfigDict(populate_by_name=True)
+    enabled: bool = True
+    allow_inbound: bool = Field(
+        default=True,
+        validation_alias=AliasChoices("allow_inbound", "allowInbound"),
+        description="Accept inbound A2A tasks from external callers.",
+    )
+    allow_outbound: bool = Field(
+        default=False,
+        validation_alias=AliasChoices("allow_outbound", "allowOutbound"),
+        description="Allow this agent to call other agents via A2A client tools.",
+    )
+
+
+class GatewayA2AConfig(BaseModel):
+    """Gateway-level A2A configuration."""
+    model_config = ConfigDict(populate_by_name=True)
+    enabled: bool = False  # opt-in; set to true to expose A2A endpoints
+
+
 class GatewayConfig(BaseModel):
     """Gateway server configuration."""
     host: str = "0.0.0.0"
@@ -716,6 +743,11 @@ class GatewayConfig(BaseModel):
     skills_dirs: List[str] = Field(
         default_factory=list,
         validation_alias=AliasChoices("skills_dirs", "skillsDirs"),
+    )
+    # A2A (Agent-to-Agent) protocol global settings.
+    a2a: Optional[GatewayA2AConfig] = Field(
+        default=None,
+        validation_alias=AliasChoices("a2a"),
     )
 
 

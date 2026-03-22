@@ -21,6 +21,9 @@ logger = logging.getLogger("pyclaw.api")
 # Global gateway reference (set by create_app)
 _gateway: Optional[Any] = None
 
+# Global app reference (set by create_app)
+_app: Optional[Any] = None
+
 
 def set_gateway(gateway: Any) -> None:
     """Set the global gateway instance for API access."""
@@ -71,7 +74,10 @@ def create_app(gateway: Optional[Any] = None) -> FastAPI:
     # Set gateway
     if gateway:
         set_gateway(gateway)
-    
+
+    global _app
+    _app = app
+
     # Include routers
     app.include_router(agents.router, prefix="/api/v1/agents", tags=["agents"])
     app.include_router(channels.router, prefix="/api/v1/channels", tags=["channels"])

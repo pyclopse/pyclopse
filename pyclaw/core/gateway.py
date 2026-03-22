@@ -431,6 +431,9 @@ class Gateway:
         # Initialize core
         await self._init_core()
 
+        # Mount A2A endpoints (after core so agents are ready, before channels)
+        await self._init_a2a()
+
         # Initialize channels
         await self._init_channels()
 
@@ -1203,6 +1206,27 @@ class Gateway:
         )
         await self._job_scheduler.start()
         self._logger.info("Job scheduler started")
+
+    async def _init_a2a(self) -> None:
+        """Mount A2A (Agent-to-Agent) protocol endpoints for enabled agents."""
+        try:
+            from pyclaw.a2a.setup import mount_a2a_routes
+            from pyclaw.api.app import _app as _fastapi_app  # noqa: F401 — may be None
+        except ImportError:
+            return
+
+        from pyclaw.api import app as _api_module
+        fastapi_app = getattr(_api_module, "_app", None)
+        if fastapi_app is None:
+            self._logger.debug("A2A: FastAPI app not available yet, skipping")
+            return
+
+        try:
+            n = mount_a2a_routes(self, fastapi_app)
+            if n:
+                self._logger.info(f"A2A: {n} agent(s) exposed")
+        except Exception as e:
+            self._logger.warning(f"A2A init failed: {e}")
 
     async def _init_todos(self) -> None:
         """Initialize the TODO store."""

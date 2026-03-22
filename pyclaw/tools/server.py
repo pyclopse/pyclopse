@@ -620,13 +620,21 @@ async def sessions_send(
     channel: str = "internal",
 ) -> str:
     """
-    Send a message into another pyclaw session via the gateway API.
+    Send a message directly into another pyclaw agent's active session and get a response.
+
+    Unlike subagent_spawn (which creates an isolated background job), this routes
+    the message through the target agent's current active session — giving the agent
+    its full conversation context and history when generating the response.
+
+    Use this when you need a peer agent to answer a question using their current context.
+    For example: ask the trading agent how the last scan went, with all its trading
+    context available.
 
     Args:
-        message: The message to send
-        agent_id: Target agent ID (uses default agent if not specified)
-        session_id: Optional existing session ID to send into
-        channel: Channel label for the message (default: internal)
+        message:    The message to send
+        agent_id:   Target agent name (e.g. "ritchie"). Defaults to the first configured agent.
+        session_id: Specific session ID to target. Omit to use the agent's current active session.
+        channel:    Channel label recorded on the message (default: "internal")
     """
     try:
         import httpx

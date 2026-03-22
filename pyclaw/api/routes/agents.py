@@ -37,9 +37,12 @@ class SessionMessage(BaseModel):
 
 
 class SendMessageRequest(BaseModel):
-    """Request to send a message to an agent."""
+    """Request to send a message to an agent's active session."""
     content: str
-    session_id: Optional[str] = None  # Create new session if not provided
+    session_id: Optional[str] = None
+    channel: str = "internal"
+    sender: str = "internal"
+    sender_id: str = "internal"
 
 
 class MessageResponse(BaseModel):
@@ -221,48 +224,56 @@ async def list_sessions(agent_id: str):
         raise HTTPException(status_code=500, detail=str(e))
 
 
-# Send message to agent
-@router.post("/{agent_id}/messages", response_model=MessageResponse)
+# Send message to agent's active session
+@router.post("/{agent_id}/messages")
 async def send_message(agent_id: str, request: SendMessageRequest):
-    """Send a message to an agent (creates session if needed)."""
+    """Send a message into an agent's active session and return the response.
+
+    Routes the message through the gateway's standard message pipeline,
+    which uses the agent's single active session (shared across all channels).
+    This means the agent answers with full conversation context intact.
+
+    Use ``session_id`` to target a specific session; omit to use the active one.
+    """
+    import uuid
+
+    gateway = get_gateway()
+    am = getattr(gateway, "_agent_manager", None)
+    if not am or agent_id not in (getattr(am, "agents", {}) or {}):
+        raise HTTPException(status_code=404, detail=f"Agent '{agent_id}' not found")
+
+    message_id = str(uuid.uuid4())
+
     try:
-        gateway = get_gateway()
-        
-        if not hasattr(gateway, 'agents') or agent_id not in gateway.agents:
-            raise HTTPException(status_code=404, detail=f"Agent '{agent_id}' not found")
-        
-        agent = gateway.agents[agent_id]
-        
-        # Get or create session
-        session_id = request.session_id
-        if not session_id:
-            if hasattr(agent, 'create_session'):
-                session = await agent.create_session()
-                session_id = session.get("id")
-            else:
-                session_id = f"session-{now().timestamp()}"
-        
-        # Send message
-        if hasattr(agent, 'process_message'):
-            result = await agent.process_message(session_id, request.content)
-        else:
-            result = {
-                "message_id": f"msg-{now().timestamp()}",
-                "content": "Message processed (stub)",
-            }
-        
-        return MessageResponse(
-            session_id=session_id,
-            message_id=result.get("message_id", "unknown"),
-            content=result.get("content", ""),
-            timestamp=now().isoformat(),
+        response = await gateway.handle_message(
+            channel=request.channel,
+            sender=request.sender,
+            sender_id=request.sender_id,
+            content=request.content,
+            agent_id=agent_id,
+            message_id=message_id,
         )
-    
-    except HTTPException:
-        raise
     except Exception as e:
-        logger.error(f"Error sending message: {e}")
+        logger.error(f"send_message error for agent '{agent_id}': {e}")
         raise HTTPException(status_code=500, detail=str(e))
+
+    # Resolve the session that was used
+    sm = getattr(gateway, "_session_manager", None)
+    session_id = request.session_id
+    if not session_id and sm:
+        try:
+            active = await sm.get_active_session(agent_id)
+            if active:
+                session_id = active.id
+        except Exception:
+            pass
+
+    return {
+        "response": response or "",
+        "session_id": session_id or "unknown",
+        "agent_id": agent_id,
+        "message_id": message_id,
+    }
 
 
 # Get session messages
