@@ -795,7 +795,7 @@ class SkillsView(Vertical):
     def _load(self) -> None:
         skills: List[Any] = []
         try:
-            from pyclaw.skills.registry import discover_skills, get_skill_dirs
+            from pyclaw.skills.registry import discover_skills
 
             gw = getattr(self.app, "gateway", None)
             am = getattr(gw, "_agent_manager", None)
@@ -810,23 +810,14 @@ class SkillsView(Vertical):
                     agent_dirs = list(getattr(agent.config, "skills_dirs", None) or [])
                 else:
                     logger.warning(
-                        f"SkillsView: agent '{self._agent_id}' not found in "
-                        f"agent_manager (keys={list(am.agents.keys())})"
+                        f"SkillsView: agent '{self._agent_id}' not found "
+                        f"(keys={list(am.agents.keys())})"
                     )
             extra = gw_dirs + agent_dirs
-            resolved = get_skill_dirs(self._agent_id, "~/.pyclaw", extra or None)
-            logger.info(
-                f"SkillsView [{self._agent_id}]: extra_dirs={extra} "
-                f"resolved={resolved}"
-            )
             skills = discover_skills(
                 agent_name=self._agent_id,
                 config_dir="~/.pyclaw",
                 extra_dirs=extra or None,
-            )
-            logger.info(
-                f"SkillsView [{self._agent_id}]: found {len(skills)} skills: "
-                f"{[s.name for s in skills]}"
             )
         except Exception as e:
             logger.warning(f"SkillsView load error: {e}", exc_info=True)
@@ -836,7 +827,7 @@ class SkillsView(Vertical):
         t = self.query_one("#sk-table", DataTable)
         bar = self.query_one("#sk-bar", Static)
         t.clear()
-        for skill in skills:
+        for skill in sorted(skills, key=lambda s: s.name.lower()):
             t.add_row(
                 skill.name,
                 skill.version or "—",
