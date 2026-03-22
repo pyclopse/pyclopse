@@ -385,7 +385,7 @@ class JobsView(Vertical):
 # ─────────────────────────────── View: System Prompt ─────────────────────────
 
 
-class SystemPromptView(ScrollableContainer):
+class SystemPromptView(Vertical):
     """Shows the reconstructed system prompt for the active agent."""
 
     DEFAULT_CSS = """
@@ -400,7 +400,9 @@ class SystemPromptView(ScrollableContainer):
         color: $text-muted;
     }
     SystemPromptView #sysprompt-text {
-        padding: 0 2;
+        height: 1fr;
+        overflow-y: scroll;
+        padding: 0 1;
     }
     """
 
@@ -411,12 +413,11 @@ class SystemPromptView(ScrollableContainer):
 
     def compose(self) -> ComposeResult:
         yield Static("", id="sysprompt-bar")
-        yield Static("", id="sysprompt-text")
+        yield RichLog(id="sysprompt-text", markup=False, highlight=False, auto_scroll=False)
 
     def refresh_for_agent(self, agent_id: str) -> None:
         self._agent_id = agent_id
-        bar = self.query_one("#sysprompt-bar", Static)
-        bar.update(f"Loading system prompt for {agent_id} …")
+        self.query_one("#sysprompt-bar", Static).update(f"Loading system prompt for {agent_id} …")
         self._load()
 
     @work(thread=True)
@@ -425,26 +426,21 @@ class SystemPromptView(ScrollableContainer):
         error = ""
         try:
             from pyclaw.core.prompt_builder import build_system_prompt
-
-            text = build_system_prompt(
-                agent_name=self._agent_id,
-                config_dir="~/.pyclaw",
-            )
+            text = build_system_prompt(agent_name=self._agent_id, config_dir="~/.pyclaw")
         except Exception as e:
             error = f"Error building system prompt: {e}"
         self.app.call_from_thread(self._display, text, error)
 
     def _display(self, text: str, error: str) -> None:
         bar = self.query_one("#sysprompt-bar", Static)
-        content = self.query_one("#sysprompt-text", Static)
+        log = self.query_one("#sysprompt-text", RichLog)
+        log.clear()
         if error:
             bar.update(f"Error — {error[:120]}")
-            content.update(error)
+            log.write(error)
         else:
-            bar.update(
-                f"System prompt for: {self._agent_id}  ({len(text):,} chars)"
-            )
-            content.update(text)
+            bar.update(f"System prompt for: {self._agent_id}  ({len(text):,} chars)  — scroll with arrow keys / PgUp / PgDn")
+            log.write(text)
 
 
 # ─────────────────────────────── View: Agent Config ──────────────────────────
