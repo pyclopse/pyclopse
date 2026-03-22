@@ -795,7 +795,7 @@ class SkillsView(Vertical):
     def _load(self) -> None:
         skills: List[Any] = []
         try:
-            from pyclaw.skills.registry import discover_skills
+            from pyclaw.skills.registry import discover_skills, get_skill_dirs
 
             gw = getattr(self.app, "gateway", None)
             am = getattr(gw, "_agent_manager", None)
@@ -808,14 +808,24 @@ class SkillsView(Vertical):
                     gw_cfg = getattr(pc, "gateway", None) if pc else None
                     gw_dirs = list(getattr(gw_cfg, "skills_dirs", None) or [])
                     agent_dirs = list(getattr(agent.config, "skills_dirs", None) or [])
+                else:
+                    logger.warning(
+                        f"SkillsView: agent '{self._agent_id}' not found in "
+                        f"agent_manager (keys={list(am.agents.keys())})"
+                    )
             extra = gw_dirs + agent_dirs
+            resolved = get_skill_dirs(self._agent_id, "~/.pyclaw", extra or None)
+            logger.info(
+                f"SkillsView [{self._agent_id}]: extra_dirs={extra} "
+                f"resolved={resolved}"
+            )
             skills = discover_skills(
                 agent_name=self._agent_id,
                 config_dir="~/.pyclaw",
                 extra_dirs=extra or None,
             )
         except Exception as e:
-            logger.debug(f"SkillsView load error: {e}")
+            logger.warning(f"SkillsView load error: {e}", exc_info=True)
         self.app.call_from_thread(self._populate, skills)
 
     def _populate(self, skills: List[Any]) -> None:
