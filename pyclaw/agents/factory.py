@@ -31,7 +31,11 @@ logger = logging.getLogger("pyclaw.agents.factory")
 
 
 class FastAgentCompilationError(Exception):
-    """Error when compiling YAML to FastAgent code."""
+    """Raised when YAML agent config cannot be compiled to FastAgent code.
+
+    Attributes:
+        args: Inherited exception arguments describing the compilation failure.
+    """
     pass
 
 
@@ -77,11 +81,22 @@ class FastAgentFactory:
     
     @property
     def is_available(self) -> bool:
-        """Check if FastAgent is available."""
+        """Check whether the fast-agent-mcp package is installed and importable.
+
+        Returns:
+            bool: True if FastAgent is available, False otherwise.
+        """
         return FASTAGENT_AVAILABLE
     
     def _ensure_fastagent(self) -> None:
-        """Ensure FastAgent is available, raise error if not."""
+        """Ensure FastAgent is available, raising ImportError if not installed.
+
+        Returns:
+            None
+
+        Raises:
+            ImportError: If fast-agent-mcp is not installed in the environment.
+        """
         if not FASTAGENT_AVAILABLE:
             raise ImportError(
                 "FastAgent is not installed. "
@@ -89,13 +104,20 @@ class FastAgentFactory:
             )
     
     def load_config(self, path: Optional[str] = None) -> Dict[str, Any]:
-        """Load YAML configuration.
-        
+        """Load and parse the YAML agent configuration file.
+
+        Tries the provided path first; if not found and the path does not end with
+        ``.yaml``, also tries appending ``.yaml``.
+
         Args:
-            path: Optional path override, defaults to self.config_path
-            
+            path (Optional[str]): Path to the YAML config file. Defaults to
+                ``self.config_path``.
+
         Returns:
-            Parsed YAML configuration
+            Dict[str, Any]: Parsed YAML configuration dictionary.
+
+        Raises:
+            FileNotFoundError: If neither the given path nor the ``.yaml`` variant exists.
         """
         config_path = path or self.config_path
         
@@ -115,15 +137,18 @@ class FastAgentFactory:
     
     def compile_to_code(self, config: Optional[Dict[str, Any]] = None) -> str:
         """Compile YAML config to Python code with FastAgent decorators.
-        
-        This generates the actual Python code that would be written
-        if you were manually creating FastAgent agents.
-        
+
+        Generates the actual Python code that would be written if you were
+        manually creating FastAgent agents.  Emits ``@fast.agent``,
+        ``@fast.chain``, ``@fast.parallel``, and ``@fast.router`` decorators
+        derived from the YAML structure, plus a boilerplate ``main()`` function.
+
         Args:
-            config: Optional config override
-            
+            config (Optional[Dict[str, Any]]): Config dict to compile. If None,
+                uses ``self._config`` or loads from ``self.config_path``.
+
         Returns:
-            Python code as string
+            str: Generated Python source code as a string.
         """
         config = config or self._config
         if not config:
@@ -215,14 +240,15 @@ class FastAgentFactory:
         return '\n'.join(lines)
     
     def _emit_agent_decorator(self, name: str, spec: Dict[str, Any]) -> List[str]:
-        """Emit decorator code for a single agent.
-        
+        """Emit the ``@fast.agent(...)`` decorator code line for a single agent.
+
         Args:
-            name: Agent name
-            spec: Agent specification
-            
+            name (str): Agent name used as the ``name=`` argument.
+            spec (Dict[str, Any]): Agent specification dict with optional keys
+                ``instruction``, ``model``, ``servers``, and ``human_input``.
+
         Returns:
-            List of code lines
+            List[str]: A list containing the single decorator line string.
         """
         instruction = spec.get('instruction', f'You are {name}.')
         model = spec.get('model', 'sonnet')
@@ -246,22 +272,27 @@ class FastAgentFactory:
         return [f'@fast.agent({", ".join(kwargs)})']
     
     def create_from_config(
-        self, 
+        self,
         config: Optional[Dict[str, Any]] = None,
         model_override: Optional[str] = None
     ) -> "FastAgent":
         """Create a FastAgent instance from config.
-        
-        Note: This creates the FastAgent app but decorators must be 
-        applied at module import time. For full support, use compile_to_code()
+
+        Note: This creates the FastAgent app but decorators must be
+        applied at module import time. For full support, use ``compile_to_code()``
         to generate Python code and import it.
-        
+
         Args:
-            config: Config dict or None to load from file
-            model_override: Override model for all agents
-            
+            config (Optional[Dict[str, Any]]): Config dict to use. If None, loads
+                from ``self.config_path``.
+            model_override (Optional[str]): Override model for all agents.
+                Currently stored but not applied automatically. Defaults to None.
+
         Returns:
-            FastAgent instance (partial - needs decorator application)
+            FastAgent: A partially-configured FastAgent instance (decorators not yet applied).
+
+        Raises:
+            ImportError: If fast-agent-mcp is not installed.
         """
         self._ensure_fastagent()
         
@@ -276,18 +307,22 @@ class FastAgentFactory:
         return self._fast_instance
     
     def generate_agent_module(
-        self, 
+        self,
         output_path: str,
         config: Optional[Dict[str, Any]] = None
     ) -> None:
-        """Generate a Python module from config.
-        
-        This creates a ready-to-run Python file with all the
-        FastAgent decorators properly applied.
-        
+        """Generate a ready-to-run Python module file from config.
+
+        Compiles the YAML config to Python source code and writes it to the
+        given path as a standalone script with all FastAgent decorators applied.
+
         Args:
-            output_path: Path to write the generated module
-            config: Optional config override
+            output_path (str): File path to write the generated Python module.
+            config (Optional[Dict[str, Any]]): Config dict to compile. If None,
+                uses ``self._config`` or loads from ``self.config_path``.
+
+        Returns:
+            None
         """
         config = config or self._config
         if not config:
@@ -301,23 +336,27 @@ class FastAgentFactory:
         logger.info(f"Generated FastAgent module: {output_path}")
     
     def run_agent(
-        self, 
-        agent_name: str, 
+        self,
+        agent_name: str,
         message: str,
         config: Optional[Dict[str, Any]] = None
     ) -> str:
-        """Run a specific agent with a message.
-        
-        For full workflow support, generate code and run it directly.
-        This is a simplified interface for single agents.
-        
+        """Run a specific agent with a message and return the response.
+
+        For full workflow support, generate code with ``compile_to_code()`` and
+        run it directly.  This is a simplified interface for single agents.
+
         Args:
-            agent_name: Name of agent to run
-            message: Message to send
-            config: Optional config override
-            
+            agent_name (str): Name of the agent to run.
+            message (str): Message to send to the agent.
+            config (Optional[Dict[str, Any]]): Config dict to use. If None, uses
+                ``self._config`` or loads from ``self.config_path``.
+
         Returns:
-            Agent response
+            str: The agent's response text.
+
+        Raises:
+            ValueError: If the agent name is not found in the config.
         """
         config = config or self._config
         if not config:
@@ -334,12 +373,25 @@ class FastAgentFactory:
         return asyncio.run(self._run_agent_async(agent_name, message, spec))
     
     async def _run_agent_async(
-        self, 
-        agent_name: str, 
-        message: str, 
+        self,
+        agent_name: str,
+        message: str,
         spec: Dict[str, Any]
     ) -> str:
-        """Async helper for running a single agent."""
+        """Async helper for running a single agent with a given spec.
+
+        Creates a FastAgent ``Context`` from the agent spec, enters it, sends the
+        message, and returns the response as a string.
+
+        Args:
+            agent_name (str): Name of the agent.
+            message (str): Message to send.
+            spec (Dict[str, Any]): Agent specification with optional ``instruction``,
+                ``model``, and ``servers`` keys.
+
+        Returns:
+            str: The agent's response text.
+        """
         from fast_agent import Context
         
         instruction = spec.get('instruction', f'You are {agent_name}.')
@@ -359,7 +411,13 @@ class FastAgentFactory:
             return str(result)
     
     def _load_config(self) -> Dict[str, Any]:
-        """Load config, alias for load_config."""
+        """Return the cached config, loading from disk if not yet loaded.
+
+        Alias for ``load_config()`` when config has not been explicitly loaded.
+
+        Returns:
+            Dict[str, Any]: Parsed YAML configuration dictionary.
+        """
         if not self._config:
             self.load_config()
         return self._config
@@ -376,9 +434,27 @@ class FastAgentFactory:
         human_input: bool = False,
         tools: Optional[List[Dict[str, Any]]] = None,
     ) -> "FastAgent":
-        """Legacy method to create an agent.
-        
-        Note: For full decorator support, use compile_to_code() instead.
+        """Legacy method to store an agent config and return a FastAgent instance.
+
+        Stores the agent specification in ``self._legacy_agents`` for reference.
+        For full decorator support at runtime, use ``compile_to_code()`` instead.
+
+        Args:
+            name (str): Agent name.
+            instruction (str): System prompt for the agent.
+            model (str): Model string. Defaults to ``"sonnet"``.
+            temperature (float): Sampling temperature. Defaults to 0.7.
+            max_tokens (Optional[int]): Maximum tokens per response. Defaults to None.
+            servers (Optional[List[str]]): MCP server names. Defaults to None.
+            human_input (bool): Whether the agent can request human input. Defaults to False.
+            tools (Optional[List[Dict[str, Any]]]): Tool configuration list. Defaults to None.
+
+        Returns:
+            FastAgent: The existing ``self._fast_instance`` or a new ``FastAgent("pyclaw")``
+            instance.
+
+        Raises:
+            ImportError: If fast-agent-mcp is not installed.
         """
         self._ensure_fastagent()
         
@@ -402,7 +478,20 @@ class FastAgentFactory:
         sequence: List[str],
         instruction: Optional[str] = None,
     ) -> Any:
-        """Legacy method for chain workflow."""
+        """Legacy method to register a chain workflow by name.
+
+        Logs the workflow definition and returns the name for downstream use.
+        No actual FastAgent decorator is applied at runtime; use
+        ``compile_to_code()`` to generate the decorator-based code.
+
+        Args:
+            name (str): Workflow name.
+            sequence (List[str]): Ordered list of agent names in the chain.
+            instruction (Optional[str]): Optional orchestrator instruction. Defaults to None.
+
+        Returns:
+            Any: The workflow name string.
+        """
         logger.info(f"Chain workflow '{name}': {sequence}")
         return name
     
@@ -413,7 +502,19 @@ class FastAgentFactory:
         fan_in: Optional[str] = None,
         instruction: Optional[str] = None,
     ) -> Any:
-        """Legacy method for parallel workflow."""
+        """Legacy method to register a parallel workflow by name.
+
+        Logs the workflow definition and returns the name for downstream use.
+
+        Args:
+            name (str): Workflow name.
+            fan_out (List[str]): List of agent names that run in parallel.
+            fan_in (Optional[str]): Aggregator agent name. Defaults to None.
+            instruction (Optional[str]): Optional orchestrator instruction. Defaults to None.
+
+        Returns:
+            Any: The workflow name string.
+        """
         logger.info(f"Parallel workflow '{name}': {fan_out} -> {fan_in}")
         return name
     
@@ -426,7 +527,21 @@ class FastAgentFactory:
         match_strategy: str = "normalized",
         instruction: Optional[str] = None,
     ) -> Any:
-        """Legacy method for maker workflow."""
+        """Legacy method to register a maker (K-voting) workflow by name.
+
+        Logs the workflow definition and returns the name for downstream use.
+
+        Args:
+            name (str): Workflow name.
+            worker (str): Worker agent name that generates candidate responses.
+            k (int): Number of candidates to generate. Defaults to 3.
+            max_samples (int): Maximum total samples. Defaults to 25.
+            match_strategy (str): Strategy for selecting the winner. Defaults to ``"normalized"``.
+            instruction (Optional[str]): Optional orchestrator instruction. Defaults to None.
+
+        Returns:
+            Any: The workflow name string.
+        """
         logger.info(f"Maker workflow '{name}': worker={worker}, k={k}")
         return name
     
@@ -438,7 +553,20 @@ class FastAgentFactory:
         default: bool = True,
         servers: Optional[List[str]] = None,
     ) -> Any:
-        """Legacy method for agents-as-tools workflow."""
+        """Legacy method to register an agents-as-tools (orchestrator) workflow by name.
+
+        Logs the workflow definition and returns the name for downstream use.
+
+        Args:
+            name (str): Workflow name.
+            agents (List[str]): List of sub-agent names available as tools.
+            instruction (str): System prompt for the orchestrator agent.
+            default (bool): Whether this is the default agent. Defaults to True.
+            servers (Optional[List[str]]): MCP server names for the orchestrator. Defaults to None.
+
+        Returns:
+            Any: The workflow name string.
+        """
         logger.info(f"Agents-as-tools workflow '{name}': {agents}")
         return name
 
@@ -448,7 +576,15 @@ _factory: Optional[FastAgentFactory] = None
 
 
 def get_factory(config_path: str = "agents.yaml") -> FastAgentFactory:
-    """Get the global FastAgent factory instance."""
+    """Return the global FastAgentFactory singleton, creating it if necessary.
+
+    Args:
+        config_path (str): Path to the YAML config file used when creating the
+            factory for the first time. Defaults to ``"agents.yaml"``.
+
+    Returns:
+        FastAgentFactory: The global factory instance.
+    """
     global _factory
     if _factory is None:
         _factory = FastAgentFactory(config_path)
@@ -499,21 +635,34 @@ def run_agent_from_config(
 
 
 def create_agent_from_config(config: Dict[str, Any]) -> Any:
-    """Create a FastAgent from a configuration dictionary.
-    
+    """Create a FastAgent or workflow from a configuration dictionary.
+
+    Dispatches to the appropriate factory method based on the ``workflow`` key.
+    Supported workflow types: ``chain``, ``parallel``, ``maker``,
+    ``agents_as_tools``.  If no ``workflow`` key is present, creates a regular
+    single agent.
+
     Args:
-        config: Agent configuration with keys:
-            - name: Agent name
-            - instruction: System prompt
-            - model: Model to use
-            - temperature: Sampling temperature
-            - max_tokens: Max tokens
-            - servers: MCP servers
-            - workflow: Optional workflow type
-            - agents: For workflow patterns
-            
+        config (Dict[str, Any]): Agent configuration dictionary with keys:
+            - ``name`` (str): Agent name.
+            - ``instruction`` (str): System prompt.
+            - ``model`` (str): Model to use.
+            - ``temperature`` (float): Sampling temperature.
+            - ``max_tokens`` (Optional[int]): Max tokens per response.
+            - ``servers`` (Optional[List[str]]): MCP server names.
+            - ``workflow`` (Optional[str]): Workflow type, one of ``chain``,
+              ``parallel``, ``maker``, or ``agents_as_tools``.
+            - ``agents`` (Optional[List[str]]): Sub-agent names for workflow patterns.
+            - ``fan_in`` (Optional[str]): Aggregator agent for parallel workflow.
+            - ``worker`` (Optional[str]): Worker agent for maker workflow.
+            - ``k`` (int): K-voting count for maker workflow.
+            - ``max_samples`` (int): Max samples for maker workflow.
+            - ``human_input`` (bool): Whether agent can request human input.
+            - ``tools`` (Optional[list]): Tool configuration.
+
     Returns:
-        FastAgent instance or workflow
+        Any: A FastAgent instance (regular agent) or workflow name string (legacy
+        workflow types).
     """
     factory = get_factory()
     
@@ -567,7 +716,16 @@ def create_chain_workflow(
     sequence: List[str],
     instruction: Optional[str] = None,
 ) -> Any:
-    """Legacy method for creating chain workflow."""
+    """Module-level legacy helper to create a chain workflow via the global factory.
+
+    Args:
+        name (str): Workflow name.
+        sequence (List[str]): Ordered list of agent names in the chain.
+        instruction (Optional[str]): Optional orchestrator instruction. Defaults to None.
+
+    Returns:
+        Any: The workflow name string returned by the factory.
+    """
     return get_factory().create_chain_workflow(name, sequence, instruction)
 
 
@@ -577,7 +735,17 @@ def create_parallel_workflow(
     fan_in: Optional[str] = None,
     instruction: Optional[str] = None,
 ) -> Any:
-    """Legacy method for creating parallel workflow."""
+    """Module-level legacy helper to create a parallel workflow via the global factory.
+
+    Args:
+        name (str): Workflow name.
+        fan_out (List[str]): List of agent names that run in parallel.
+        fan_in (Optional[str]): Aggregator agent name. Defaults to None.
+        instruction (Optional[str]): Optional orchestrator instruction. Defaults to None.
+
+    Returns:
+        Any: The workflow name string returned by the factory.
+    """
     return get_factory().create_parallel_workflow(name, fan_out, fan_in, instruction)
 
 

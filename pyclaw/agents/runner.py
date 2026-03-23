@@ -66,7 +66,14 @@ def _patch_openai_llm_for_reasoning_details() -> None:
 
 
 def strip_thinking_tags(text: str) -> str:
-    """Remove <thinking>...</thinking> blocks from *text* and normalise whitespace."""
+    """Remove <thinking>...</thinking> blocks from text and normalise whitespace.
+
+    Args:
+        text (str): Input text that may contain thinking/think XML tags.
+
+    Returns:
+        str: Text with all thinking blocks removed and excess blank lines collapsed.
+    """
     stripped = _THINKING_RE.sub("", text)
     # Collapse more than two consecutive newlines left behind by removals
     stripped = re.sub(r"\n{3,}", "\n\n", stripped)
@@ -74,13 +81,17 @@ def strip_thinking_tags(text: str) -> str:
 
 
 def format_thinking_for_telegram(text: str) -> Optional[str]:
-    """Return a single HTML-formatted Telegram message with thinking shown
-    as an inline spoiler followed by the response.
+    """Return a single HTML-formatted Telegram message with thinking shown as an inline spoiler.
 
     The thinking block is hidden behind a tap-to-reveal spoiler; the response
     follows immediately after so everything arrives in one message.
 
-    Returns None if the text contains no thinking blocks.
+    Args:
+        text (str): Raw agent response that may contain thinking/think XML tags.
+
+    Returns:
+        Optional[str]: HTML-formatted string with an expandable blockquote for
+        thinking content, or None if the text contains no thinking blocks.
     """
     import html as _html
 
@@ -114,7 +125,19 @@ _FA_ERROR_PREFIX = "I hit an internal error"
 
 
 def _is_fastagent_error_msg(msg: Any) -> bool:
-    """Return True if *msg* is a FastAgent internal-error assistant message."""
+    """Return True if msg is a FastAgent internal-error assistant message.
+
+    FastAgent catches model errors and returns them as a plain-text assistant
+    message starting with ``_FA_ERROR_PREFIX`` rather than raising an exception.
+    This helper detects that pattern so callers can raise instead of saving the
+    error response to history.
+
+    Args:
+        msg (Any): A FastAgent ``PromptMessageExtended`` or similar message object.
+
+    Returns:
+        bool: True if the message is an assistant error response, False otherwise.
+    """
     if getattr(msg, "role", None) != "assistant":
         return False
     content = getattr(msg, "content", None)
@@ -147,7 +170,14 @@ def _purge_corrupted_pairs(messages: List[Any]) -> List[Any]:
         return messages
 
     def _has_tool_calls(msg: Any) -> bool:
-        """Return True if the message has actual tool calls (in msg.tool_calls)."""
+        """Return True if the message has actual tool calls in msg.tool_calls.
+
+        Args:
+            msg (Any): A FastAgent message object.
+
+        Returns:
+            bool: True if tool_calls is non-None and non-empty.
+        """
         tool_calls = getattr(msg, "tool_calls", None)
         return bool(tool_calls)  # non-None, non-empty dict
 
@@ -156,6 +186,13 @@ def _purge_corrupted_pairs(messages: List[Any]) -> List[Any]:
 
         Legitimate tool-result user messages have content=[] (empty list) but DO
         have tool_results populated.  Only messages with both empty are orphaned.
+
+        Args:
+            msg (Any): A FastAgent message object.
+
+        Returns:
+            bool: True if the message is a user role message with no content and
+            no tool_results (i.e. an orphaned synthetic placeholder).
         """
         if getattr(msg, "role", None) != "user":
             return False
@@ -333,10 +370,50 @@ _BUILTIN_SERVERS = frozenset(["pyclaw", "fetch", "time", "filesystem", "chrome-d
 
 
 class AgentRunner:
-    """
-    Runner for FastAgent-based execution.
+    """Runner for FastAgent-based execution.
 
     Wires MCP servers from agent config so tools are available to the agent.
+    Each runner owns a single FastAgent ``fast.run()`` context that stays alive
+    for the entire lifetime of the runner.  Session history is persisted to
+    ``history_path`` on disk using FastAgent's native JSON format.
+
+    Attributes:
+        agent_name (str): Name of the agent as registered with FastAgent.
+        instruction (str): System prompt / instruction for the agent.
+        model (str): Model string passed to FastAgent (e.g. ``anthropic.claude-sonnet-4-6``).
+        temperature (float): Sampling temperature for the model.
+        max_tokens (Optional[int]): Maximum tokens per response.
+        top_p (Optional[float]): Top-p nucleus sampling parameter.
+        max_iterations (Optional[int]): Maximum agentic loop iterations.
+        parallel_tool_calls (Optional[bool]): Whether to allow parallel tool calls.
+        streaming_timeout (Optional[float]): Per-chunk streaming timeout in seconds.
+        request_params (Dict[str, Any]): Extra provider-specific request parameters.
+        servers (List[str]): MCP server names from fastagent.config.yaml.
+        tools_config (Dict[str, Any]): Tool allowlist/denylist config.
+        show_thinking (bool): If False, strip ``<thinking>`` blocks before returning.
+        api_key (Optional[str]): Provider API key override.
+        base_url (Optional[str]): Provider base URL override.
+        owner_name (str): Agent name sent as ``X-Agent-Name`` to the MCP server.
+        session_id (Optional[str]): Session ID for per-session runners; None for base runners.
+        history_path (Optional[Path]): Path to ``history.json`` for session persistence.
+        reasoning_effort (Optional[str]): FA reasoning effort setting.
+        text_verbosity (Optional[str]): FA text verbosity setting.
+        service_tier (Optional[str]): FA service tier setting.
+        workflow (Optional[str]): Workflow type if this runner wraps a workflow agent.
+        child_agent_configs (Dict[str, Any]): Child agent configurations for workflow runners.
+        plan_type (str): Planning type for orchestrator/iterative_planner workflows.
+        plan_iterations (Optional[int]): Max planning iterations.
+        generator (Optional[str]): Generator agent name for evaluator_optimizer workflow.
+        evaluator (Optional[str]): Evaluator agent name for evaluator_optimizer workflow.
+        min_rating (str): Minimum rating for evaluator_optimizer workflow.
+        max_refinements (int): Max refinement rounds for evaluator_optimizer workflow.
+        refinement_instruction (Optional[str]): Extra refinement instruction.
+        worker (Optional[str]): Worker agent name for maker workflow.
+        k (int): Number of candidates for maker workflow K-voting.
+        max_samples (int): Maximum samples for maker workflow.
+        match_strategy (str): Match strategy for maker workflow.
+        red_flag_max_length (Optional[int]): Max length before red-flag detection triggers.
+        pyclaw_config (Optional[Any]): Full PyClaw config object for building FA settings.
     """
 
     def __init__(
@@ -384,6 +461,48 @@ class AgentRunner:
         service_tier: Optional[str] = None,
         pyclaw_config: Optional[Any] = None,
     ):
+        """Initialize an AgentRunner with all agent and workflow configuration.
+
+        Args:
+            agent_name (str): Name of the agent registered with FastAgent.
+            instruction (str): System prompt for the agent.
+            model (str): Model string, e.g. ``anthropic.claude-sonnet-4-6``. Defaults to ``"sonnet"``.
+            temperature (float): Sampling temperature. Defaults to 0.7.
+            max_tokens (Optional[int]): Maximum tokens per response. Defaults to None.
+            top_p (Optional[float]): Top-p nucleus sampling value. Defaults to None.
+            max_iterations (Optional[int]): Max agentic loop iterations. Defaults to None.
+            parallel_tool_calls (Optional[bool]): Whether parallel tool calls are allowed. Defaults to None.
+            workflow (Optional[str]): Workflow type: ``orchestrator``, ``iterative_planner``,
+                ``evaluator_optimizer``, or ``maker``. Defaults to None.
+            child_agent_configs (Optional[Dict[str, Any]]): Child agent configurations for
+                workflow runners keyed by agent name. Defaults to None.
+            plan_type (str): Planning type for orchestrator/iterative_planner. Defaults to ``"full"``.
+            plan_iterations (Optional[int]): Max planning iterations. Defaults to None.
+            generator (Optional[str]): Generator agent name for evaluator_optimizer. Defaults to None.
+            evaluator (Optional[str]): Evaluator agent name for evaluator_optimizer. Defaults to None.
+            min_rating (str): Minimum rating for evaluator_optimizer. Defaults to ``"GOOD"``.
+            max_refinements (int): Max refinement rounds for evaluator_optimizer. Defaults to 3.
+            refinement_instruction (Optional[str]): Extra refinement instruction. Defaults to None.
+            worker (Optional[str]): Worker agent name for maker workflow. Defaults to None.
+            k (int): Number of K-voting candidates for maker workflow. Defaults to 3.
+            max_samples (int): Maximum samples for maker workflow. Defaults to 50.
+            match_strategy (str): Match strategy for maker workflow. Defaults to ``"exact"``.
+            red_flag_max_length (Optional[int]): Max response length before red-flag triggers. Defaults to None.
+            streaming_timeout (Optional[float]): Per-chunk streaming timeout in seconds. Defaults to None.
+            servers (Optional[List[str]]): MCP server names. Defaults to ``["pyclaw"]``.
+            tools_config (Optional[Dict[str, Any]]): Tool policy config (allowlist/denylist). Defaults to None.
+            show_thinking (bool): If True, thinking blocks are returned as-is. Defaults to False.
+            api_key (Optional[str]): Provider API key override. Defaults to None.
+            base_url (Optional[str]): Provider base URL override. Defaults to None.
+            owner_name (Optional[str]): Agent name sent as ``X-Agent-Name`` header. Defaults to ``agent_name``.
+            request_params (Optional[Dict[str, Any]]): Extra provider-specific request parameters. Defaults to None.
+            history_path (Optional[Path]): Path to ``history.json`` for session persistence. Defaults to None.
+            session_id (Optional[str]): Session ID for per-session runners. Defaults to None.
+            reasoning_effort (Optional[str]): FA reasoning effort setting. Defaults to None.
+            text_verbosity (Optional[str]): FA text verbosity setting. Defaults to None.
+            service_tier (Optional[str]): FA service tier setting. Defaults to None.
+            pyclaw_config (Optional[Any]): Full PyClaw config object for building FA Settings. Defaults to None.
+        """
         self.agent_name = agent_name
         self.instruction = instruction
         self.model = model
@@ -450,7 +569,18 @@ class AgentRunner:
         self.red_flag_max_length: Optional[int] = red_flag_max_length
 
     async def _load_history(self) -> None:
-        """Load history from disk into the FastAgent agent (once per lifetime)."""
+        """Load history from disk into the FastAgent agent (once per lifetime).
+
+        Reads the FA-native ``history.json`` file from ``self.history_path`` and
+        injects the messages into the live agent's message history via
+        ``load_message_history``.  Immediately purges any corrupted
+        ``assistant(stop=toolUse)+user(empty)`` pairs injected by
+        ``reconcile_interrupted_history``.  No-ops if history has already been
+        loaded, if no ``history_path`` is set, or if the file does not exist.
+
+        Returns:
+            None
+        """
         if self._history_loaded:
             return
         self._history_loaded = True
@@ -481,7 +611,21 @@ class AgentRunner:
             )
 
     async def _save_history(self) -> None:
-        """Save FastAgent's current message history to disk (atomic with rotation)."""
+        """Save FastAgent's current message history to disk (atomic with rotation).
+
+        Strips trailing FastAgent error responses and their preceding user turns,
+        purges corrupted tool-call pairs, strips tool-call/result plumbing from
+        the copy going to disk, then writes atomically to a temp file and rotates
+        current → previous before promoting the new file.  The live in-memory
+        ``agent.message_history`` is also updated so it stays consistent with
+        what is saved.
+
+        No-ops if this runner wraps a workflow agent, if ``history_path`` is None,
+        or if the FastAgent app has not been initialized yet.
+
+        Returns:
+            None
+        """
         if self.workflow:
             return
         if self.history_path is None or self._app is None:
@@ -535,7 +679,14 @@ class AgentRunner:
             )
 
     def _all_servers(self) -> List[str]:
-        """Return deduplicated list of servers needed by parent + all child agents."""
+        """Return deduplicated list of servers needed by parent and all child agents.
+
+        Collects MCP server names from ``self.servers`` and from every child agent
+        config's ``servers`` list, preserving insertion order.
+
+        Returns:
+            List[str]: Ordered, deduplicated list of MCP server names.
+        """
         seen: Dict[str, None] = dict.fromkeys(self.servers)
         for child_cfg in (getattr(self, "child_agent_configs", None) or {}).values():
             for s in (child_cfg.get("servers") or []):
@@ -550,7 +701,9 @@ class AgentRunner:
         PyClaw config object.  Unknown server names (not in ``_BUILTIN_SERVERS``)
         are skipped with a warning.
 
-        Returns the constructed ``fast_agent.config.Settings`` instance.
+        Returns:
+            Any: A constructed ``fast_agent.config.Settings`` instance with MCP
+            server definitions and provider credentials populated from pyclaw config.
         """
         from fast_agent.config import (
             Settings, MCPSettings, MCPServerSettings,
@@ -673,11 +826,26 @@ class AgentRunner:
         )
 
     def _register_workflow(self, fast: Any, parent_rp: Any, fa_settings: Any) -> None:
-        """Register child agents + workflow decorator on *fast* before FA context starts.
+        """Register child agents and workflow decorator on fast before FA context starts.
 
-        Called from initialize() when self.workflow is set.  All child agents are
-        registered first (required by FA's decorator ordering rules) then the
-        workflow agent is registered with default=True so _app.send() routes to it.
+        Called from ``initialize()`` when ``self.workflow`` is set.  All child agents
+        are registered first (required by FA's decorator ordering rules) then the
+        workflow agent is registered with ``default=True`` so ``_app.send()`` routes
+        to it automatically.
+
+        Args:
+            fast (Any): The ``FastAgent`` application instance to decorate.
+            parent_rp (Any): The ``FARequestParams`` for the parent/workflow agent.
+            fa_settings (Any): The ``fast_agent.config.Settings`` used to resolve which
+                MCP servers are available.
+
+        Returns:
+            None
+
+        Raises:
+            ValueError: If ``evaluator_optimizer`` workflow is missing ``generator`` or
+                ``evaluator`` agent names, or if ``maker`` workflow is missing a ``worker``
+                agent name, or if an unknown workflow type is specified.
         """
         from fast_agent.llm.request_params import RequestParams as FARequestParams
 
@@ -768,8 +936,19 @@ class AgentRunner:
             f"with children={list(self.child_agent_configs)}"
         )
 
-    async def initialize(self):
-        """Initialize the FastAgent app with configured MCP servers."""
+    async def initialize(self) -> None:
+        """Initialize the FastAgent app with configured MCP servers.
+
+        Builds a ``FastAgent`` instance, injects the ``Settings`` object built from
+        pyclaw config (replacing any on-disk ``fastagent.config.yaml``), registers
+        the agent or workflow via decorators, enters the ``fast.run()`` context, and
+        applies model-level settings (reasoning_effort, text_verbosity, service_tier).
+
+        No-ops if ``self._app`` is already set (i.e. already initialized).
+
+        Returns:
+            None
+        """
         if self._app is not None:
             return
 
@@ -859,9 +1038,12 @@ class AgentRunner:
     def _apply_fa_model_settings(self) -> None:
         """Apply reasoning_effort, text_verbosity, and service_tier to the FA agent.
 
-        Called once at the end of initialize().  Each setting is optional — if not
+        Called once at the end of ``initialize()``.  Each setting is optional — if not
         configured it is left at FastAgent's default.  Failures are logged and
         swallowed so a misconfigured setting never prevents the runner from starting.
+
+        Returns:
+            None
         """
         if not any([self.reasoning_effort, self.text_verbosity, self.service_tier]):
             return
@@ -890,13 +1072,22 @@ class AgentRunner:
             logger.warning(f"{self._log_prefix} Could not apply FA model settings: {e}")
 
     async def run(self, prompt: str) -> str:
-        """Run a single prompt through the agent.
+        """Run a single prompt through the agent and return the complete response.
+
+        Acquires the run lock (serialising concurrent calls on the same runner),
+        loads history on first call, enforces per-model concurrency limits, and
+        saves history after a successful turn.  Strips ``<thinking>`` blocks
+        unless ``show_thinking`` is True.
 
         Args:
-            prompt: User prompt
+            prompt (str): User prompt to send to the agent.
 
         Returns:
-            Agent response content
+            str: The agent's text response with thinking blocks stripped (unless
+            ``show_thinking`` is True).
+
+        Raises:
+            RuntimeError: If FastAgent returns an internal-error response string.
         """
         if self._app is None:
             await self.initialize()
@@ -936,11 +1127,19 @@ class AgentRunner:
                     await self._save_history()
     
     async def run_stream(self, prompt: str) -> AsyncIterator[tuple[str, bool]]:
-        """Run a prompt and stream the response.
+        """Run a prompt and stream the response as incremental chunks.
+
+        Acquires the run lock (serialising concurrent calls), loads history on
+        first call, enforces per-model concurrency limits, and saves history after
+        a successful stream completes.
+
+        Args:
+            prompt (str): User prompt to send to the agent.
 
         Yields:
-            (text_chunk, is_reasoning) tuples.  is_reasoning=True for thinking/
-            reasoning content, False for normal response content.
+            tuple[str, bool]: ``(text_chunk, is_reasoning)`` pairs.
+            ``is_reasoning=True`` for thinking/reasoning content,
+            ``is_reasoning=False`` for normal response content.
         """
         if self._app is None:
             await self.initialize()
@@ -968,7 +1167,21 @@ class AgentRunner:
                     await self._save_history()
 
     async def _run_stream_inner(self, prompt: str) -> AsyncIterator[tuple[str, bool]]:
-        """Inner streaming implementation — called under the concurrency lock."""
+        """Inner streaming implementation called under the concurrency lock.
+
+        Registers a stream listener on the FA agent if the agent supports
+        ``add_stream_listener``; otherwise falls back to a non-streaming send that
+        yields the full response as a single chunk.
+
+        Args:
+            prompt (str): User prompt to send to the agent.
+
+        Yields:
+            tuple[str, bool]: ``(text_chunk, is_reasoning)`` pairs.
+
+        Raises:
+            RuntimeError: If the agent returns a FastAgent internal-error string.
+        """
         # Get the agent and set up streaming
         agent = self._app._agent(None)
 
@@ -1016,10 +1229,17 @@ class AgentRunner:
     async def inject_turns(self, turns: list) -> None:
         """Inject synthetic PromptMessageExtended turns without an LLM call.
 
-        *turns* is a list of dicts matching the PromptMessageExtended JSON schema
+        Turns is a list of dicts matching the PromptMessageExtended JSON schema
         (role, content, tool_calls/tool_results, stop_reason).  The turns are
         deserialised through FastAgent's own prompt_serialization pipeline and
         appended to the live message history, then saved to disk.
+
+        Args:
+            turns (list): List of dicts matching the ``PromptMessageExtended`` JSON
+                schema with keys such as ``role``, ``content``, ``stop_reason``.
+
+        Returns:
+            None
         """
         if self._app is None:
             await self.initialize()
@@ -1069,6 +1289,14 @@ class AgentRunner:
         Uses FastAgent's ``SlashCommandHandler`` to run built-in ACP commands
         such as ``model reasoning``, ``history``, ``clear``, etc.  The handler
         is lazily created on first call and cached for the lifetime of this runner.
+
+        Args:
+            command_name (str): ACP slash command name without the leading ``/``
+                (e.g. ``"model"``, ``"history"``).
+            arguments (str): Arguments string passed verbatim to the command handler.
+
+        Returns:
+            str: The command's text response, or an error message if unavailable.
         """
         if self._app is None:
             return "Agent not initialized."
@@ -1093,7 +1321,14 @@ class AgentRunner:
             return f"/{command_name} unavailable: {e}"
 
     async def cleanup(self) -> None:
-        """Close the FastAgent context and release MCP connections."""
+        """Close the FastAgent context and release MCP connections.
+
+        Calls ``__aexit__`` on the FastAgent ``fast.run()`` context, which closes
+        all MCP server connections.  Safe to call multiple times.
+
+        Returns:
+            None
+        """
         if self._fa_context is not None:
             try:
                 await self._fa_context.__aexit__(None, None, None)
@@ -1103,7 +1338,12 @@ class AgentRunner:
             self._app = None
 
     def get_history(self) -> List[Dict[str, str]]:
-        """Get message history."""
+        """Return a copy of the in-memory message history for this runner.
+
+        Returns:
+            List[Dict[str, str]]: A copy of the list of message dicts, each
+            containing ``role`` and ``content`` keys.
+        """
         return self._message_history.copy()
 
 

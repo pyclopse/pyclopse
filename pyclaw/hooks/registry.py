@@ -12,7 +12,17 @@ logger = logging.getLogger("pyclaw.hooks")
 
 @dataclass
 class HookRegistration:
-    """A single registered hook handler."""
+    """A single registered hook handler entry stored in the HookRegistry.
+
+    Attributes:
+        event (str): Event name this handler is registered for.
+        handler (Callable): Async callable invoked when the event fires.
+        priority (int): Execution order; lower values run first. Defaults to 0.
+        description (str): Human-readable description for introspection. Defaults to "".
+        source (str): Origin of the handler — "code" for Python handlers or
+            "file:<path>" for subprocess-backed file handlers. Defaults to "code".
+    """
+
     event: str
     handler: Callable
     priority: int = 0       # lower = runs first
@@ -42,6 +52,7 @@ class HookRegistry:
     """
 
     def __init__(self) -> None:
+        """Initialise an empty HookRegistry with no registered handlers."""
         self._hooks: Dict[str, List[HookRegistration]] = {}
 
     # ------------------------------------------------------------------ #
@@ -79,14 +90,29 @@ class HookRegistry:
         logger.debug(f"Registered hook: {event} -> {handler.__name__} (p={priority})")
 
     def unregister(self, event: str, handler: Callable) -> bool:
-        """Remove a specific handler from an event. Returns True if removed."""
+        """Remove a specific handler from an event's registration list.
+
+        Uses identity comparison (``is``) to locate the handler.
+
+        Args:
+            event (str): Event name to remove the handler from.
+            handler (Callable): The exact callable object to remove.
+
+        Returns:
+            bool: True if the handler was found and removed; False otherwise.
+        """
         bucket = self._hooks.get(event, [])
         before = len(bucket)
         self._hooks[event] = [r for r in bucket if r.handler is not handler]
         return len(self._hooks[event]) < before
 
     def clear(self, event: Optional[str] = None) -> None:
-        """Clear all handlers for an event, or all handlers if event is None."""
+        """Clear registered handlers for a specific event or for all events.
+
+        Args:
+            event (Optional[str]): Event name to clear. If None, all handlers
+                for all events are removed. Defaults to None.
+        """
         if event:
             self._hooks.pop(event, None)
         else:
@@ -169,7 +195,16 @@ class HookRegistry:
     # ------------------------------------------------------------------ #
 
     def list_hooks(self) -> Dict[str, List[Dict[str, Any]]]:
-        """Return a dict of event → list of handler info dicts."""
+        """Return a mapping of event names to their registered handler info dicts.
+
+        Only events with at least one handler are included. Each handler is
+        represented as a dict with keys: ``name``, ``priority``, ``description``,
+        and ``source``.
+
+        Returns:
+            Dict[str, List[Dict[str, Any]]]: Mapping of event name to list of
+                handler info dicts, suitable for the ``/api/v1/hooks`` endpoint.
+        """
         result: Dict[str, List[Dict[str, Any]]] = {}
         for event, regs in self._hooks.items():
             if regs:
@@ -185,9 +220,17 @@ class HookRegistry:
         return result
 
     def event_count(self) -> int:
-        """Number of events with at least one handler."""
+        """Return the number of events that have at least one registered handler.
+
+        Returns:
+            int: Count of distinct event names with one or more handlers.
+        """
         return sum(1 for regs in self._hooks.values() if regs)
 
     def handler_count(self) -> int:
-        """Total number of registered handlers across all events."""
+        """Return the total number of registered handlers across all events.
+
+        Returns:
+            int: Sum of handler counts for every event in the registry.
+        """
         return sum(len(regs) for regs in self._hooks.values())

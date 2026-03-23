@@ -19,7 +19,14 @@ router = APIRouter()
 
 
 def _scheduler():
-    """Get the live scheduler from the gateway."""
+    """Get the live job scheduler from the gateway.
+
+    Returns:
+        Any: The running job scheduler instance.
+
+    Raises:
+        HTTPException: With status 503 if the scheduler is not running.
+    """
     from pyclaw.api.app import get_gateway
     gw = get_gateway()
     sched = getattr(gw, "_job_scheduler", None)
@@ -29,7 +36,18 @@ def _scheduler():
 
 
 def _resolve(sched, name_or_id: str) -> Job:
-    """Resolve job by name or ID, raise 404 if missing."""
+    """Resolve a job from the scheduler by name or ID.
+
+    Args:
+        sched: The active job scheduler instance.
+        name_or_id (str): Either the job's UUID or its human-readable name.
+
+    Returns:
+        Job: The matching job object.
+
+    Raises:
+        HTTPException: With status 404 if no job matches ``name_or_id``.
+    """
     job = sched.resolve(name_or_id)
     if not job:
         raise HTTPException(status_code=404, detail=f"Job not found: {name_or_id!r}")
@@ -72,6 +90,17 @@ def _parse_schedule(schedule_str: str):
 
 
 def _parse_deliver(channel: Optional[str], chat_id: Optional[str], webhook_url: Optional[str]):
+    """Build a delivery target object from the supplied parameters.
+
+    Args:
+        channel (Optional[str]): Channel name for the delivery (e.g. "telegram").
+        chat_id (Optional[str]): Specific chat / user ID within the channel.
+        webhook_url (Optional[str]): External webhook URL.  Takes priority over
+            channel/chat_id when provided.
+
+    Returns:
+        DeliverWebhook | DeliverAnnounce: The appropriate delivery target.
+    """
     if webhook_url:
         return DeliverWebhook(url=webhook_url)
     if channel is None and chat_id is None:
@@ -84,6 +113,26 @@ def _parse_deliver(channel: Optional[str], chat_id: Optional[str], webhook_url: 
 # ---------------------------------------------------------------------------
 
 class CreateCommandJobRequest(BaseModel):
+    """Request body for creating a shell-command job.
+
+    Attributes:
+        name (str): Unique human-readable job name.
+        schedule (str): Schedule string — cron expression, interval shorthand
+            (e.g. "30m"), or ISO datetime for a one-shot run.
+        command (str): Shell command to execute.
+        agent (Optional[str]): Agent that owns this job; determines which
+            agent's jobs.yaml file the job is written to.
+        description (Optional[str]): Human-readable job description.
+        enabled (bool): Whether the job starts enabled. Defaults to True.
+        timeout_seconds (int): Execution timeout in seconds. Defaults to 300.
+        max_retries (int): Number of retries on failure. Defaults to 0.
+        delete_after_run (bool): Remove job after it runs once. Defaults to False.
+        deliver_channel (Optional[str]): Target channel for job output delivery.
+        deliver_chat_id (Optional[str]): Target chat ID for output delivery.
+        deliver_webhook_url (Optional[str]): Webhook URL for output delivery.
+        alert_after (Optional[int]): Failure-alert threshold in minutes.
+    """
+
     name: str
     schedule: str               # human-friendly: "0 9 * * *", "30m", ISO datetime
     command: str
@@ -100,6 +149,25 @@ class CreateCommandJobRequest(BaseModel):
 
 
 class CreateAgentJobRequest(BaseModel):
+    """Request body for creating an agent-prompt job.
+
+    Attributes:
+        name (str): Unique human-readable job name.
+        schedule (str): Schedule string (cron, interval, or ISO datetime).
+        agent (str): Agent ID that will process the message.
+        message (str): Prompt text sent to the agent on each run.
+        model (Optional[str]): Model override for this job's runs.
+        description (Optional[str]): Human-readable job description.
+        enabled (bool): Whether the job starts enabled. Defaults to True.
+        timeout_seconds (int): Execution timeout in seconds. Defaults to 300.
+        delete_after_run (bool): Remove job after it runs once. Defaults to False.
+        deliver_channel (Optional[str]): Target channel for output delivery.
+        deliver_chat_id (Optional[str]): Target chat ID for output delivery.
+        deliver_webhook_url (Optional[str]): Webhook URL for output delivery.
+        alert_after (Optional[int]): Failure-alert threshold in minutes.
+        report_to_agent (Optional[str]): Agent ID that receives the run report.
+    """
+
     name: str
     schedule: str
     agent: str
@@ -117,6 +185,26 @@ class CreateAgentJobRequest(BaseModel):
 
 
 class UpdateJobRequest(BaseModel):
+    """Partial update payload for an existing job.
+
+    All fields are optional. Only the fields explicitly set in the request
+    body are applied to the job. For AgentRun jobs, prompt/session fields
+    are applied only when the job's ``run.kind`` is "agent".
+
+    Attributes:
+        name (Optional[str]): New job name.
+        description (Optional[str]): New description.
+        enabled (Optional[bool]): Enable or disable the job.
+        schedule (Optional[str]): New schedule expression.
+        timeout_seconds (Optional[int]): New execution timeout.
+        deliver_channel (Optional[str]): New delivery channel.
+        deliver_chat_id (Optional[str]): New delivery chat ID.
+        deliver_webhook_url (Optional[str]): New delivery webhook URL.
+        deliver_none (bool): When True, set delivery to DeliverNone (discard output).
+        session_mode (Optional[str]): AgentRun session mode override.
+        report_to_agent (Optional[str]): Agent that receives the run report.
+    """
+
     name: Optional[str] = None
     description: Optional[str] = None
     enabled: Optional[bool] = None
@@ -147,13 +235,26 @@ class UpdateJobRequest(BaseModel):
 
 @router.get("/status")
 async def scheduler_status() -> Dict[str, Any]:
-    """Overall scheduler status."""
+    """Return the job scheduler's overall status summary.
+
+    Returns:
+        Dict[str, Any]: Scheduler status data (running, job counts, etc.).
+    """
     return _scheduler().get_status()
 
 
 @router.get("/")
 async def list_jobs(enabled_only: bool = False, owner: Optional[str] = None) -> Dict[str, Any]:
-    """List all jobs, optionally filtered by owner."""
+    """List all scheduled jobs.
+
+    Args:
+        enabled_only (bool): When True, return only enabled jobs. Defaults to False.
+        owner (Optional[str]): Filter jobs to those owned by this agent ID.
+
+    Returns:
+        Dict[str, Any]: ``{"jobs": [...], "total": int}`` where each job is
+            serialised via ``model_dump(mode="json")``.
+    """
     jobs = await _scheduler().list_jobs(owner=owner)
     if enabled_only:
         jobs = [j for j in jobs if j.enabled]
@@ -165,14 +266,35 @@ async def list_jobs(enabled_only: bool = False, owner: Optional[str] = None) -> 
 
 @router.get("/{name_or_id}")
 async def get_job(name_or_id: str) -> Dict[str, Any]:
-    """Get a job by name or ID."""
+    """Return a single job by name or UUID.
+
+    Args:
+        name_or_id (str): The job's UUID or human-readable name.
+
+    Returns:
+        Dict[str, Any]: The job serialised via ``model_dump(mode="json")``.
+
+    Raises:
+        HTTPException: With status 404 if the job is not found.
+    """
     job = _resolve(_scheduler(), name_or_id)
     return job.model_dump(mode="json")
 
 
 @router.post("/command", status_code=201)
 async def create_command_job(req: CreateCommandJobRequest) -> Dict[str, Any]:
-    """Create a shell command job."""
+    """Create and schedule a new shell-command job.
+
+    Args:
+        req (CreateCommandJobRequest): Job configuration including name,
+            schedule, and command to execute.
+
+    Returns:
+        Dict[str, Any]: ``{"ok": True, "job": {...}}`` with the created job.
+
+    Raises:
+        HTTPException: With status 422 if the schedule string cannot be parsed.
+    """
     try:
         schedule = _parse_schedule(req.schedule)
     except ValueError as e:
@@ -197,7 +319,18 @@ async def create_command_job(req: CreateCommandJobRequest) -> Dict[str, Any]:
 
 @router.post("/agent", status_code=201)
 async def create_agent_job(req: CreateAgentJobRequest) -> Dict[str, Any]:
-    """Create an agent prompt job."""
+    """Create and schedule a new agent-prompt job.
+
+    Args:
+        req (CreateAgentJobRequest): Job configuration including agent ID,
+            message prompt, and schedule.
+
+    Returns:
+        Dict[str, Any]: ``{"ok": True, "job": {...}}`` with the created job.
+
+    Raises:
+        HTTPException: With status 422 if the schedule string cannot be parsed.
+    """
     try:
         schedule = _parse_schedule(req.schedule)
     except ValueError as e:
@@ -222,7 +355,19 @@ async def create_agent_job(req: CreateAgentJobRequest) -> Dict[str, Any]:
 
 @router.patch("/{name_or_id}")
 async def update_job(name_or_id: str, req: UpdateJobRequest) -> Dict[str, Any]:
-    """Update a job's configuration."""
+    """Partially update a job's configuration.
+
+    Args:
+        name_or_id (str): The job's UUID or human-readable name.
+        req (UpdateJobRequest): Fields to update; None values are skipped.
+
+    Returns:
+        Dict[str, Any]: ``{"ok": True, "job": {...}}`` with the updated job.
+
+    Raises:
+        HTTPException: 404 if the job is not found; 422 if the new schedule
+            string cannot be parsed.
+    """
     sched = _scheduler()
     job = _resolve(sched, name_or_id)
 
@@ -270,7 +415,20 @@ async def update_job(name_or_id: str, req: UpdateJobRequest) -> Dict[str, Any]:
 
 @router.delete("/{name_or_id}")
 async def delete_job(name_or_id: str) -> Dict[str, Any]:
-    """Delete a job."""
+    """Delete a job permanently.
+
+    System jobs (names wrapped in double underscores, e.g. ``__heartbeat__``)
+    cannot be deleted; use ``/disable`` to turn them off instead.
+
+    Args:
+        name_or_id (str): The job's UUID or human-readable name.
+
+    Returns:
+        Dict[str, Any]: ``{"ok": True, "deleted": "<job_name>"}``.
+
+    Raises:
+        HTTPException: 404 if the job is not found; 403 for system jobs.
+    """
     sched = _scheduler()
     job = _resolve(sched, name_or_id)
     if job.name.startswith("__") and job.name.endswith("__"):
@@ -281,7 +439,17 @@ async def delete_job(name_or_id: str) -> Dict[str, Any]:
 
 @router.post("/{name_or_id}/enable")
 async def enable_job(name_or_id: str) -> Dict[str, Any]:
-    """Enable a disabled job."""
+    """Enable a previously disabled job.
+
+    Args:
+        name_or_id (str): The job's UUID or human-readable name.
+
+    Returns:
+        Dict[str, Any]: ``{"ok": True, "job": "<name>", "next_run": "..."}``.
+
+    Raises:
+        HTTPException: With status 404 if the job is not found.
+    """
     sched = _scheduler()
     job = _resolve(sched, name_or_id)
     await sched.enable_job(job.id)
@@ -290,7 +458,19 @@ async def enable_job(name_or_id: str) -> Dict[str, Any]:
 
 @router.post("/{name_or_id}/disable")
 async def disable_job(name_or_id: str) -> Dict[str, Any]:
-    """Disable a job without deleting it."""
+    """Disable a job so it will not run until re-enabled.
+
+    The job remains in the scheduler and can be re-enabled via ``/enable``.
+
+    Args:
+        name_or_id (str): The job's UUID or human-readable name.
+
+    Returns:
+        Dict[str, Any]: ``{"ok": True, "job": "<name>"}``.
+
+    Raises:
+        HTTPException: With status 404 if the job is not found.
+    """
     sched = _scheduler()
     job = _resolve(sched, name_or_id)
     await sched.disable_job(job.id)
@@ -299,7 +479,20 @@ async def disable_job(name_or_id: str) -> Dict[str, Any]:
 
 @router.post("/{name_or_id}/run")
 async def run_job_now(name_or_id: str) -> Dict[str, Any]:
-    """Trigger a job to run immediately."""
+    """Trigger an immediate out-of-schedule run for a job.
+
+    The job is dispatched asynchronously; the response is returned before
+    execution completes.
+
+    Args:
+        name_or_id (str): The job's UUID or human-readable name.
+
+    Returns:
+        Dict[str, Any]: ``{"ok": True, "job": "<name>", "status": "triggered"}``.
+
+    Raises:
+        HTTPException: With status 404 if the job is not found.
+    """
     sched = _scheduler()
     job = _resolve(sched, name_or_id)
     await sched.run_job_now(job.id)
@@ -308,7 +501,19 @@ async def run_job_now(name_or_id: str) -> Dict[str, Any]:
 
 @router.get("/{name_or_id}/history")
 async def get_job_history(name_or_id: str, limit: int = 20) -> Dict[str, Any]:
-    """Get recent run history for a job."""
+    """Return recent execution history for a job.
+
+    Args:
+        name_or_id (str): The job's UUID or human-readable name.
+        limit (int): Maximum number of run records to return. Defaults to 20.
+
+    Returns:
+        Dict[str, Any]: ``{"job_id": ..., "job_name": ..., "runs": [...]}``
+            where each run includes its duration in milliseconds.
+
+    Raises:
+        HTTPException: With status 404 if the job is not found.
+    """
     sched = _scheduler()
     job = _resolve(sched, name_or_id)
     runs = sched.get_run_history(job.id, limit=limit)

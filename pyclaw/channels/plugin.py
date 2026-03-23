@@ -52,8 +52,7 @@ if TYPE_CHECKING:
 
 
 class GatewayHandle:
-    """
-    Narrow gateway interface given to channel plugins.
+    """Narrow gateway interface given to channel plugins.
 
     Plugins call :meth:`dispatch` to deliver an inbound message to the agent
     and receive the response back.
@@ -70,36 +69,36 @@ class GatewayHandle:
         text: str,
         message_id: Optional[str] = None,
     ) -> Optional[str]:
-        """
-        Deliver an inbound message to the gateway and return the agent reply.
+        """Deliver an inbound message to the gateway and return the agent reply.
 
-        Parameters
-        ----------
-        channel:
-            Channel identifier, e.g. ``"discord"``.
-        user_id:
-            Platform user ID (string).
-        user_name:
-            Human-readable user name for display.
-        text:
-            Message content.
-        message_id:
-            Optional platform message ID (used for deduplication).
+        Args:
+            channel (str): Channel identifier, e.g. ``"discord"``.
+            user_id (str): Platform user ID (string).
+            user_name (str): Human-readable user name for display.
+            text (str): Message content.
+            message_id (Optional[str]): Optional platform message ID used for
+                deduplication. Defaults to None.
 
-        Returns
-        -------
-        str or None:
-            Agent reply text, or ``None`` if no response was generated.
+        Returns:
+            Optional[str]: Agent reply text, or ``None`` if no response was
+                generated.
+
+        Raises:
+            NotImplementedError: Always — replaced by ``_GatewayHandleImpl``
+                at runtime.
         """
         raise NotImplementedError  # replaced by _GatewayHandleImpl at runtime
 
 
 class ChannelPlugin(ABC):
-    """
-    Abstract base class for gateway-integrated channel plugins.
+    """Abstract base class for gateway-integrated channel plugins.
 
-    Subclass this to add a new messaging channel.  Override
-    :meth:`start`, :meth:`stop`, and :meth:`send`.
+    Subclass this to add a new messaging channel. Override :meth:`start`,
+    :meth:`stop`, and :meth:`send`.
+
+    Attributes:
+        name (str): Channel identifier used for registration. Subclasses
+            should override this as a class attribute or property.
     """
 
     # Class-level default name — subclasses can override as a class attribute
@@ -108,39 +107,35 @@ class ChannelPlugin(ABC):
 
     @abstractmethod
     async def start(self, gateway: GatewayHandle) -> None:
-        """
-        Start the channel.
+        """Start the channel.
 
-        Called by the gateway during :meth:`~pyclaw.core.gateway.Gateway.initialize`.
-        Establish connections, start polling loops, register webhooks, etc.
+        Called by the gateway during ``Gateway.initialize()``. Implementors
+        must establish connections, start polling loops, register webhooks,
+        and store the gateway handle for later use in dispatching inbound
+        messages.
 
-        Parameters
-        ----------
-        gateway:
-            Handle to use for dispatching inbound messages.
+        Args:
+            gateway (GatewayHandle): Handle to use for dispatching inbound
+                messages to the agent.
         """
 
     @abstractmethod
     async def stop(self) -> None:
-        """
-        Stop the channel.
+        """Stop the channel.
 
-        Called by the gateway during :meth:`~pyclaw.core.gateway.Gateway.stop`.
-        Cancel polling tasks, close connections, deregister webhooks, etc.
+        Called by the gateway during ``Gateway.stop()``. Implementors must
+        cancel any polling tasks, close open connections, and deregister
+        webhooks to allow a clean shutdown.
         """
 
     @abstractmethod
     async def send(self, user_id: str, text: str, **kwargs) -> None:
-        """
-        Send a message to a user on this channel.
+        """Send a message to a user on this channel.
 
-        Parameters
-        ----------
-        user_id:
-            Platform user ID as returned to the ``dispatch`` call.
-        text:
-            Message content to send.
-        **kwargs:
-            Platform-specific extras (e.g. ``thread_ts`` for Slack,
-            ``parse_mode`` for Telegram).
+        Args:
+            user_id (str): Platform user ID as returned to the ``dispatch``
+                call.
+            text (str): Message content to send.
+            **kwargs: Platform-specific extras, e.g. ``thread_ts`` for Slack
+                or ``parse_mode`` for Telegram.
         """

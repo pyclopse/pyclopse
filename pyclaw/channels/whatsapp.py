@@ -14,9 +14,33 @@ logger = logging.getLogger("pyclaw.channels.whatsapp")
 
 
 class WhatsAppAdapter(ChannelAdapter):
-    """WhatsApp Business Cloud API adapter."""
+    """WhatsApp Business Cloud API adapter.
+
+    Uses the Meta Graph API (``graph.facebook.com``) to send and receive
+    WhatsApp messages. Requires a WhatsApp Business account and a Meta
+    Developer app with the WhatsApp product enabled.
+
+    Attributes:
+        phone_number_id (Optional[str]): WhatsApp Business phone number ID
+            from the Meta Developer dashboard.
+        access_token (Optional[str]): Meta access token for API calls.
+        verify_token (Optional[str]): Token used for webhook verification
+            challenges.
+        app_secret (Optional[str]): Meta app secret for webhook signature
+            verification.
+    """
 
     def __init__(self, config: Dict[str, Any]):
+        """Initialize the WhatsApp adapter with API credentials.
+
+        Args:
+            config (Dict[str, Any]): Configuration dictionary. Expected keys:
+                ``phone_number_id`` (str): WhatsApp Business phone number ID.
+                ``access_token`` (str): Meta Graph API access token.
+                ``verify_token`` (str): Webhook verification token.
+                ``app_secret`` (str): Meta app secret for signature
+                    verification.
+        """
         super().__init__(config)
         self.phone_number_id = config.get("phone_number_id")
         self.access_token = config.get("access_token")
@@ -27,10 +51,22 @@ class WhatsAppAdapter(ChannelAdapter):
 
     @property
     def channel_name(self) -> str:
+        """Return the channel name for this adapter.
+
+        Returns:
+            str: Always ``"whatsapp"``.
+        """
         return "whatsapp"
 
     async def connect(self) -> None:
-        """Initialize the WhatsApp client."""
+        """Initialize the WhatsApp Business API client and verify credentials.
+        Creates an httpx session with the Meta Graph API authorization header
+        and verifies credentials by fetching the phone number info.
+
+        Raises:
+            RuntimeError: If ``httpx`` is not installed or if the API
+                verification call fails.
+        """
         try:
             import httpx
 
@@ -60,7 +96,10 @@ class WhatsAppAdapter(ChannelAdapter):
             raise RuntimeError(f"Failed to connect to WhatsApp: {e}")
 
     async def disconnect(self) -> None:
-        """Disconnect the WhatsApp client."""
+        """Disconnect the WhatsApp client and release resources.
+
+        Closes the httpx session if one is open.
+        """
         if self._session:
             await self._session.aclose()
         self._session = None
@@ -72,7 +111,28 @@ class WhatsAppAdapter(ChannelAdapter):
         content: str,
         reply_to: Optional[str] = None,
     ) -> str:
-        """Send a message to a WhatsApp user."""
+        """Send a text message to a WhatsApp user.
+
+        Sends a ``text`` type message via the WhatsApp Business Cloud API.
+        Adds a ``context`` field for replies.
+
+        Args:
+            target (MessageTarget): Destination. Uses ``target.user_id`` as
+                the recipient phone number. A leading ``+`` is added
+                automatically if missing.
+            content (str): Text content to send.
+            reply_to (Optional[str]): WhatsApp message ID to reply to.
+                Sets the ``context.message_id`` field. Defaults to None.
+
+        Returns:
+            str: WhatsApp message ID of the sent message, or an empty string
+                if the response does not include one.
+
+        Raises:
+            RuntimeError: If the client is not connected or the API returns
+                an error.
+            ValueError: If ``target.user_id`` is not set.
+        """
         if not self._session:
             raise RuntimeError("WhatsApp client not connected")
 
@@ -115,7 +175,30 @@ class WhatsAppAdapter(ChannelAdapter):
         target: MessageTarget,
         media: MediaAttachment,
     ) -> str:
-        """Send media to a WhatsApp user."""
+        """Send a media attachment to a WhatsApp user.
+
+        Selects the WhatsApp media type (``image``, ``video``, ``audio``, or
+        ``document``) based on ``media.mime_type``. Requires a public URL
+        via ``media.url``; local file upload requires an external media server
+        and is not implemented.
+
+        Args:
+            target (MessageTarget): Destination. Uses ``target.user_id`` as
+                the recipient phone number.
+            media (MediaAttachment): Media to send. ``url`` must be set.
+
+        Returns:
+            str: WhatsApp message ID of the sent message, or an empty string
+                if the response does not include one.
+
+        Raises:
+            RuntimeError: If the client is not connected or the API returns
+                an error.
+            NotImplementedError: If ``media.file_path`` is set (local file
+                upload requires a media server).
+            ValueError: If ``target.user_id`` is not set, or if neither
+                ``media.url`` nor ``media.file_path`` is provided.
+        """
         if not self._session:
             raise RuntimeError("WhatsApp client not connected")
 
@@ -171,7 +254,19 @@ class WhatsAppAdapter(ChannelAdapter):
         return ""
 
     async def react(self, message_id: str, emoji: str) -> None:
-        """Add reaction to a message."""
+        """Add an emoji reaction to a WhatsApp message (not fully supported).
+
+        The WhatsApp Business Cloud API does not support arbitrary emoji
+        reactions.
+
+        Args:
+            message_id (str): Unused.
+            emoji (str): Unused.
+
+        Raises:
+            NotImplementedError: Always — WhatsApp reactions are not fully
+                supported in the Business API.
+        """
         # WhatsApp doesn't support reactions in the same way
         # You can only react with limited emoji via the API
         raise NotImplementedError(
@@ -179,7 +274,21 @@ class WhatsAppAdapter(ChannelAdapter):
         )
 
     def verify_webhook(self, payload: str, signature: str) -> bool:
-        """Verify WhatsApp webhook signature."""
+        """Verify a WhatsApp webhook signature using HMAC-SHA256.
+
+        Computes the expected signature from the app secret and raw payload,
+        then compares it to the provided signature using a constant-time
+        comparison.
+
+        Args:
+            payload (str): Raw request body as a string.
+            signature (str): Value of the ``X-Hub-Signature-256`` header
+                (format: ``sha256=<hex>``).
+
+        Returns:
+            bool: ``True`` if the signature is valid, ``False`` otherwise or
+                if no app secret is configured.
+        """
         if not self.app_secret:
             return False
 
@@ -193,7 +302,20 @@ class WhatsAppAdapter(ChannelAdapter):
         return hmac.compare_digest(f"sha256={expected_signature}", signature)
 
     async def handle_webhook(self, payload: Dict[str, Any]) -> Optional[Message]:
-        """Handle incoming WhatsApp webhook."""
+        """Parse and handle an incoming WhatsApp Business webhook payload.
+
+        Iterates over ``entry[].changes[].value.messages[]`` and returns the
+        first text message found. Skips verification challenges and non-text
+        message types.
+
+        Args:
+            payload (Dict[str, Any]): Raw JSON webhook payload from the Meta
+                platform.
+
+        Returns:
+            Optional[Message]: Parsed message for the first text message
+                found, or ``None`` if none are present or on parse error.
+        """
         try:
             # Handle verification challenge
             if payload.get("object") == "whatsapp_business_account":
@@ -244,5 +366,9 @@ class WhatsAppAdapter(ChannelAdapter):
             return None
 
     async def _listen(self) -> None:
-        """WhatsApp uses webhooks, polling not needed."""
+        """No-op listener for WhatsApp.
+
+        WhatsApp Business Cloud API delivers messages via webhooks. Polling
+        is not supported and this method is a no-op placeholder.
+        """
         pass

@@ -58,6 +58,17 @@ class PyclawAcpClient:
         permission_handler: Optional[Callable] = None,
         chunk_callback: Optional[Callable[[str, bool], None]] = None,
     ) -> None:
+        """Initialize the ACP client with optional permission and chunk callbacks.
+
+        Args:
+            permission_handler (Optional[Callable]): Async callable with signature
+                ``(options, tool_call) -> PermissionOptionKind str`` invoked when the
+                agent requests a tool execution permission. Defaults to auto-approving
+                with ``"allow_once"`` when None.
+            chunk_callback (Optional[Callable[[str, bool], None]]): Sync callable
+                invoked for each streaming chunk with ``(text, is_reasoning)`` args.
+                Defaults to None (chunks are discarded).
+        """
         # async callable(options, tool_call) -> PermissionOptionKind str
         self._permission_handler = permission_handler
         # sync callable(text: str, is_reasoning: bool)
@@ -66,9 +77,32 @@ class PyclawAcpClient:
         self._terminals: Dict[str, asyncio.subprocess.Process] = {}
 
     def on_connect(self, conn: Any) -> None:
+        """Store the ACP agent connection object when the protocol connects.
+
+        Args:
+            conn (Any): The ACP agent connection object provided by the ACP library.
+
+        Returns:
+            None
+        """
         self._agent_conn = conn
 
     async def session_update(self, session_id: str, update: Any, **kwargs: Any) -> None:
+        """Handle an incremental session update from the ACP agent.
+
+        Dispatches ``AgentMessageChunk`` and ``AgentThoughtChunk`` updates to the
+        registered ``chunk_callback`` with ``is_reasoning=False`` and
+        ``is_reasoning=True`` respectively.
+
+        Args:
+            session_id (str): The ACP session identifier.
+            update (Any): An ACP schema update object, typically
+                ``AgentMessageChunk`` or ``AgentThoughtChunk``.
+            **kwargs (Any): Additional keyword arguments from the ACP protocol.
+
+        Returns:
+            None
+        """
         from acp.schema import AgentMessageChunk, AgentThoughtChunk
 
         cb = self._chunk_callback
@@ -86,6 +120,22 @@ class PyclawAcpClient:
     async def request_permission(
         self, options: list, session_id: str, tool_call: Any, **kwargs: Any
     ) -> Any:
+        """Handle a tool permission request from the ACP agent.
+
+        Invokes ``permission_handler`` if set; otherwise defaults to
+        ``"allow_once"``.  Returns a ``RequestPermissionResponse`` with either an
+        ``AllowedOutcome`` (selected option) or a ``DeniedOutcome`` (cancelled).
+
+        Args:
+            options (list): List of ``PermissionOption`` objects the agent is
+                requesting approval for.
+            session_id (str): The ACP session identifier.
+            tool_call (Any): The tool call object requesting permission.
+            **kwargs (Any): Additional keyword arguments from the ACP protocol.
+
+        Returns:
+            Any: A ``RequestPermissionResponse`` schema object.
+        """
         from acp.schema import AllowedOutcome, DeniedOutcome, RequestPermissionResponse
 
         if self._permission_handler:
@@ -106,6 +156,17 @@ class PyclawAcpClient:
     async def write_text_file(
         self, content: str, path: str, session_id: str, **kwargs: Any
     ) -> Any:
+        """Write text content to a local file on behalf of the ACP agent.
+
+        Args:
+            content (str): Text content to write.
+            path (str): Absolute or relative path of the file to write.
+            session_id (str): The ACP session identifier.
+            **kwargs (Any): Additional keyword arguments from the ACP protocol.
+
+        Returns:
+            Any: A ``WriteTextFileResponse`` schema object.
+        """
         from acp.schema import WriteTextFileResponse
 
         try:
@@ -122,6 +183,22 @@ class PyclawAcpClient:
         line: Optional[int] = None,
         **kwargs: Any,
     ) -> Any:
+        """Read text content from a local file on behalf of the ACP agent.
+
+        Supports optional line-offset and character/line limiting.
+
+        Args:
+            path (str): Absolute or relative path of the file to read.
+            session_id (str): The ACP session identifier.
+            limit (Optional[int]): Maximum number of lines (when ``line`` is set) or
+                characters (without ``line``) to return. Defaults to None (no limit).
+            line (Optional[int]): 1-based starting line number. When set, ``limit``
+                is treated as a line count. Defaults to None.
+            **kwargs (Any): Additional keyword arguments from the ACP protocol.
+
+        Returns:
+            Any: A ``ReadTextFileResponse`` schema object with ``content`` field.
+        """
         from acp.schema import ReadTextFileResponse
 
         try:
@@ -148,6 +225,23 @@ class PyclawAcpClient:
         output_byte_limit: Optional[int] = None,
         **kwargs: Any,
     ) -> Any:
+        """Spawn a terminal subprocess on behalf of the ACP agent.
+
+        Creates an asyncio subprocess and tracks it under a UUID terminal ID.
+
+        Args:
+            command (str): Executable to run.
+            session_id (str): The ACP session identifier.
+            args (Optional[list]): Additional CLI arguments. Defaults to None.
+            cwd (Optional[str]): Working directory for the subprocess. Defaults to None.
+            env (Optional[list]): List of environment variable objects with ``name``
+                and ``value`` attributes, merged over ``os.environ``. Defaults to None.
+            output_byte_limit (Optional[int]): Not currently enforced. Defaults to None.
+            **kwargs (Any): Additional keyword arguments from the ACP protocol.
+
+        Returns:
+            Any: A ``CreateTerminalResponse`` schema object with ``terminal_id``.
+        """
         from acp.schema import CreateTerminalResponse
 
         tid = str(uuid.uuid4())
@@ -171,6 +265,20 @@ class PyclawAcpClient:
     async def terminal_output(
         self, session_id: str, terminal_id: str, **kwargs: Any
     ) -> Any:
+        """Read buffered stdout output from a tracked terminal subprocess.
+
+        Reads up to 64 KiB with a 5-second timeout.  Returns empty string on
+        timeout or if the terminal is not found.
+
+        Args:
+            session_id (str): The ACP session identifier.
+            terminal_id (str): UUID of the terminal returned by ``create_terminal``.
+            **kwargs (Any): Additional keyword arguments from the ACP protocol.
+
+        Returns:
+            Any: A ``TerminalOutputResponse`` schema object with ``output`` and
+            ``truncated`` fields.
+        """
         from acp.schema import TerminalOutputResponse
 
         proc = self._terminals.get(terminal_id)
@@ -186,6 +294,16 @@ class PyclawAcpClient:
     async def release_terminal(
         self, session_id: str, terminal_id: str, **kwargs: Any
     ) -> Any:
+        """Remove a terminal from the tracking registry without killing it.
+
+        Args:
+            session_id (str): The ACP session identifier.
+            terminal_id (str): UUID of the terminal to release.
+            **kwargs (Any): Additional keyword arguments from the ACP protocol.
+
+        Returns:
+            Any: A ``ReleaseTerminalResponse`` schema object.
+        """
         from acp.schema import ReleaseTerminalResponse
 
         self._terminals.pop(terminal_id, None)
@@ -194,6 +312,16 @@ class PyclawAcpClient:
     async def wait_for_terminal_exit(
         self, session_id: str, terminal_id: str, **kwargs: Any
     ) -> Any:
+        """Block until a tracked terminal subprocess exits and return its exit code.
+
+        Args:
+            session_id (str): The ACP session identifier.
+            terminal_id (str): UUID of the terminal to wait on.
+            **kwargs (Any): Additional keyword arguments from the ACP protocol.
+
+        Returns:
+            Any: A ``WaitForTerminalExitResponse`` schema object with ``exit_code``.
+        """
         from acp.schema import WaitForTerminalExitResponse
 
         proc = self._terminals.get(terminal_id)
@@ -208,6 +336,16 @@ class PyclawAcpClient:
     async def kill_terminal(
         self, session_id: str, terminal_id: str, **kwargs: Any
     ) -> Any:
+        """Send SIGTERM to a tracked terminal subprocess and remove it from registry.
+
+        Args:
+            session_id (str): The ACP session identifier.
+            terminal_id (str): UUID of the terminal to kill.
+            **kwargs (Any): Additional keyword arguments from the ACP protocol.
+
+        Returns:
+            Any: A ``KillTerminalCommandResponse`` schema object.
+        """
         from acp.schema import KillTerminalCommandResponse
 
         proc = self._terminals.pop(terminal_id, None)
@@ -219,10 +357,34 @@ class PyclawAcpClient:
         return KillTerminalCommandResponse()
 
     async def ext_method(self, method: str, params: dict) -> dict:
+        """Handle an extended ACP method call (no-op stub).
+
+        Called by the ACP library for protocol extensions not covered by the
+        standard interface.  Logs the method name and returns an empty dict.
+
+        Args:
+            method (str): Extended method name.
+            params (dict): Method parameters.
+
+        Returns:
+            dict: Empty dictionary (extension not implemented).
+        """
         logger.debug(f"ACP ext_method: {method}")
         return {}
 
     async def ext_notification(self, method: str, params: dict) -> None:
+        """Handle an extended ACP notification (no-op stub).
+
+        Called by the ACP library for protocol extension notifications.
+        Logs the method name and takes no action.
+
+        Args:
+            method (str): Extended notification method name.
+            params (dict): Notification parameters.
+
+        Returns:
+            None
+        """
         logger.debug(f"ACP ext_notification: {method}")
 
 
@@ -262,6 +424,25 @@ class AcpRunner:
         model: Optional[str] = None,
         permission_handler: Optional[Callable] = None,
     ) -> None:
+        """Initialize the ACP runner without starting the subprocess.
+
+        The subprocess is not started until ``initialize()`` or the first
+        ``run()``/``run_stream()`` call.
+
+        Args:
+            command (str): Binary to spawn as the ACP stdio server.
+            args (Optional[List[str]]): Extra CLI arguments for the binary.
+                Defaults to None.
+            cwd (Optional[str]): Working directory for the subprocess and ACP session.
+                Defaults to the current working directory.
+            env (Optional[Dict[str, str]]): Extra environment variables merged over
+                ``os.environ``. Defaults to None.
+            model (Optional[str]): If set, ``set_session_model`` is called after
+                session creation. Defaults to None.
+            permission_handler (Optional[Callable]): Async callable
+                ``(options, tool_call) -> PermissionOptionKind`` for tool permission
+                decisions. Defaults to None (auto-approve with ``"allow_once"``).
+        """
         self.command = command
         self.args = args or []
         self.cwd = cwd or os.getcwd()
@@ -274,7 +455,16 @@ class AcpRunner:
         self._exit_stack: Optional[AsyncExitStack] = None
 
     async def initialize(self) -> None:
-        """Spawn the agent subprocess and create an ACP session."""
+        """Spawn the agent subprocess and create an ACP session.
+
+        Calls ``spawn_agent_process`` to start the subprocess, performs the ACP
+        protocol handshake, creates a new session via ``conn.new_session``, and
+        optionally sets the model with ``conn.set_session_model``.  No-ops if
+        already initialized (``self._conn`` is not None).
+
+        Returns:
+            None
+        """
         if self._conn is not None:
             return
 
@@ -319,7 +509,16 @@ class AcpRunner:
                 logger.warning(f"AcpRunner: set_session_model failed: {exc}")
 
     async def run(self, prompt: str) -> str:
-        """Run a prompt and return the full response text."""
+        """Run a prompt through the ACP agent and return the full response text.
+
+        Collects all non-reasoning chunks from ``run_stream`` and concatenates them.
+
+        Args:
+            prompt (str): User prompt to send to the agent.
+
+        Returns:
+            str: The agent's complete response text (reasoning chunks excluded).
+        """
         chunks: List[str] = []
         async for text, is_reasoning in self.run_stream(prompt):
             if not is_reasoning:
@@ -329,11 +528,21 @@ class AcpRunner:
     async def run_stream(
         self, prompt: str
     ) -> AsyncIterator[Tuple[str, bool]]:
-        """
-        Run a prompt and stream ``(text, is_reasoning)`` tuples.
+        """Run a prompt and stream incremental (text, is_reasoning) tuples.
+
+        Calls ``initialize()`` if not yet started, then sends the prompt via
+        ``conn.prompt()`` while routing streaming chunks from the agent's
+        ``session_update`` callback through an asyncio Queue.
 
         Reasoning/thought chunks have ``is_reasoning=True``; response chunks
         have ``is_reasoning=False``.
+
+        Args:
+            prompt (str): User prompt to send to the agent.
+
+        Yields:
+            Tuple[str, bool]: ``(text_chunk, is_reasoning)`` pairs streamed as
+            the agent produces output.
         """
         if self._conn is None:
             await self.initialize()
@@ -380,7 +589,14 @@ class AcpRunner:
                     pass
 
     async def cleanup(self) -> None:
-        """Shut down the agent subprocess."""
+        """Shut down the agent subprocess and close the ACP connection.
+
+        Calls ``aclose()`` on the ``AsyncExitStack`` that owns the subprocess
+        context, then clears all internal state.  Safe to call multiple times.
+
+        Returns:
+            None
+        """
         if self._exit_stack:
             try:
                 await self._exit_stack.aclose()
@@ -393,10 +609,23 @@ class AcpRunner:
                 self._client = None
 
     async def __aenter__(self) -> "AcpRunner":
+        """Enter the async context manager, initializing the ACP runner.
+
+        Returns:
+            AcpRunner: This runner instance after initialization.
+        """
         await self.initialize()
         return self
 
     async def __aexit__(self, *_: Any) -> None:
+        """Exit the async context manager and shut down the agent subprocess.
+
+        Args:
+            *_ (Any): Exception type, value, and traceback (ignored).
+
+        Returns:
+            None
+        """
         await self.cleanup()
 
 
@@ -425,12 +654,34 @@ class ClaudeCodeRunner:
         model: Optional[str] = None,
         args: Optional[List[str]] = None,
     ) -> None:
+        """Initialize the Claude Code runner.
+
+        Args:
+            cwd (Optional[str]): Working directory for the ``claude`` subprocess.
+                Defaults to the current working directory.
+            env (Optional[Dict[str, str]]): Extra environment variables merged over
+                ``os.environ``. Defaults to None.
+            model (Optional[str]): Model override passed as ``--model`` to Claude.
+                Defaults to None.
+            args (Optional[List[str]]): Extra flags passed verbatim to ``claude``.
+                Defaults to None.
+        """
         self.cwd = cwd or os.getcwd()
         self.env = env or {}
         self.model = model
         self.args = args or []
 
     def _build_cmd(self, prompt: str, stream: bool) -> List[str]:
+        """Build the ``claude`` CLI command list for a given prompt.
+
+        Args:
+            prompt (str): User prompt to pass to ``claude -p``.
+            stream (bool): If True, appends ``--output-format stream-json
+                --include-partial-messages`` for streaming output.
+
+        Returns:
+            List[str]: Complete command list suitable for ``subprocess.exec``.
+        """
         cmd = ["claude", "-p", prompt]
         if stream:
             cmd += ["--output-format", "stream-json", "--include-partial-messages"]
@@ -440,6 +691,14 @@ class ClaudeCodeRunner:
         return cmd
 
     async def run(self, prompt: str) -> str:
+        """Run a prompt through Claude Code and return the full response text.
+
+        Args:
+            prompt (str): User prompt to send to Claude Code.
+
+        Returns:
+            str: The complete response text (reasoning chunks excluded).
+        """
         chunks: List[str] = []
         async for text, is_reasoning in self.run_stream(prompt):
             if not is_reasoning:
@@ -447,11 +706,19 @@ class ClaudeCodeRunner:
         return "".join(chunks)
 
     async def run_stream(self, prompt: str) -> AsyncIterator[Tuple[str, bool]]:
-        """
-        Stream ``(text, is_reasoning)`` tuples from ``claude -p``.
+        """Stream (text, is_reasoning) tuples from ``claude -p``.
 
         Claude Code's stream-json format emits *cumulative* content blocks, so
-        delta-slicing is applied: only the newly added text is yielded each time.
+        delta-slicing is applied: only the newly added text is yielded each event.
+        The ``CLAUDECODE`` and ``CLAUDE_CODE_ENTRYPOINT`` environment variables are
+        cleared for the subprocess to prevent nested-invocation blocking.
+
+        Args:
+            prompt (str): User prompt to send to Claude Code.
+
+        Yields:
+            Tuple[str, bool]: ``(text_chunk, is_reasoning)`` pairs.
+            ``is_reasoning`` is always ``False`` for Claude Code output.
         """
         cmd = self._build_cmd(prompt, stream=True)
         # Clear Claude Code env vars so nested invocations aren't blocked
@@ -512,18 +779,16 @@ class ClaudeCodeRunner:
 # ---------------------------------------------------------------------------
 
 class OpenCodeRunner:
-    """
-    ACP runner for OpenCode using ``opencode acp`` (stdio ACP protocol).
+    """ACP runner for OpenCode using ``opencode acp`` (stdio ACP protocol).
 
     Spawns ``opencode acp`` as an ACP stdio server and communicates with it
     using the standard ACP protocol.  Keeps the subprocess alive across
     multiple calls so session context is preserved.
 
-    Args:
-        cwd:    Working directory for the opencode process and ACP session.
-        env:    Extra environment variables.
-        model:  Override the model (``--model provider/model``).
-        args:   Extra flags passed verbatim to ``opencode acp``.
+    Attributes:
+        cwd (str): Working directory for the opencode process and ACP session.
+        env (Dict[str, str]): Extra environment variables.
+        model (Optional[str]): Model override string.
     """
 
     def __init__(
@@ -533,6 +798,18 @@ class OpenCodeRunner:
         model: Optional[str] = None,
         args: Optional[List[str]] = None,
     ) -> None:
+        """Initialize the OpenCode runner.
+
+        Args:
+            cwd (Optional[str]): Working directory for the opencode process and
+                ACP session. Defaults to the current working directory.
+            env (Optional[Dict[str, str]]): Extra environment variables merged over
+                ``os.environ``. Defaults to None.
+            model (Optional[str]): Override the model using
+                ``--model provider/model`` syntax. Defaults to None.
+            args (Optional[List[str]]): Extra flags passed verbatim to
+                ``opencode acp``. Defaults to None.
+        """
         self.cwd = cwd or os.getcwd()
         self.env = env or {}
         self.model = model
@@ -546,23 +823,62 @@ class OpenCodeRunner:
 
     @property
     def _session_id(self) -> Optional[str]:
+        """Return the current ACP session ID from the underlying AcpRunner.
+
+        Returns:
+            Optional[str]: The ACP session ID, or None if not yet initialized.
+        """
         return self._runner._session_id
 
     async def run(self, prompt: str) -> str:
-        """Run a prompt and return the full response text."""
+        """Run a prompt through OpenCode and return the full response text.
+
+        Args:
+            prompt (str): User prompt to send to OpenCode.
+
+        Returns:
+            str: The agent's complete response text (reasoning chunks excluded).
+        """
         return await self._runner.run(prompt)
 
     async def run_stream(self, prompt: str) -> AsyncIterator[Tuple[str, bool]]:
-        """Stream ``(text, is_reasoning)`` tuples from opencode acp."""
+        """Stream (text, is_reasoning) tuples from opencode acp.
+
+        Delegates to the underlying ``AcpRunner.run_stream``.
+
+        Args:
+            prompt (str): User prompt to send to OpenCode.
+
+        Yields:
+            Tuple[str, bool]: ``(text_chunk, is_reasoning)`` pairs.
+        """
         async for chunk in self._runner.run_stream(prompt):
             yield chunk
 
     async def cleanup(self) -> None:
+        """Shut down the opencode subprocess and close the ACP connection.
+
+        Returns:
+            None
+        """
         await self._runner.cleanup()
 
     async def __aenter__(self) -> "OpenCodeRunner":
+        """Enter the async context manager, initializing the OpenCode runner.
+
+        Returns:
+            OpenCodeRunner: This runner instance after initialization.
+        """
         await self._runner.initialize()
         return self
 
     async def __aexit__(self, *_: Any) -> None:
+        """Exit the async context manager and shut down the OpenCode process.
+
+        Args:
+            *_ (Any): Exception type, value, and traceback (ignored).
+
+        Returns:
+            None
+        """
         await self.cleanup()

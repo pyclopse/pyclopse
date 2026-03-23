@@ -12,13 +12,34 @@ router = APIRouter()
 
 
 def _get_gateway():
+    """Retrieve the global gateway instance.
+
+    Returns:
+        Any: The gateway instance.
+
+    Raises:
+        HTTPException: With status 503 if the gateway is not initialized.
+    """
     from pyclaw.api.app import get_gateway
     return get_gateway()
 
 
 @router.get("/detail", response_model=Dict[str, Any])
 async def health_detail():
-    """Return extended health information about the gateway and its subsystems."""
+    """Return extended health information about the gateway and its subsystems.
+
+    Inspects each major subsystem (session manager, agent manager, job
+    scheduler, Telegram, audit logger) and reports its individual status.
+    Uptime is derived from ``gateway._usage["started_at"]``.
+
+    Returns:
+        Dict[str, Any]: Health report with keys:
+            - ``status`` ("healthy" | "degraded")
+            - ``initialized`` (bool)
+            - ``running`` (bool)
+            - ``uptime_seconds`` (float)
+            - ``subsystems`` (dict of per-subsystem status dicts)
+    """
     gateway = _get_gateway()
 
     subsystems: Dict[str, Any] = {}

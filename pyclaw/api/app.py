@@ -14,6 +14,7 @@ from .routes import tools as tools_routes
 from .routes import health as health_routes
 from .routes import hooks as hooks_routes
 from .routes import subagents as subagents_routes
+from .routes import self_ as self_routes
 
 logger = logging.getLogger("pyclaw.api")
 
@@ -26,13 +27,24 @@ _app: Optional[Any] = None
 
 
 def set_gateway(gateway: Any) -> None:
-    """Set the global gateway instance for API access."""
+    """Set the global gateway instance for API access.
+
+    Args:
+        gateway (Any): The gateway instance to register.
+    """
     global _gateway
     _gateway = gateway
 
 
 def get_gateway() -> Any:
-    """Get the global gateway instance."""
+    """Get the global gateway instance.
+
+    Returns:
+        Any: The registered gateway instance.
+
+    Raises:
+        HTTPException: With status 503 if the gateway has not been initialized.
+    """
     if _gateway is None:
         raise HTTPException(status_code=503, detail="Gateway not initialized")
     return _gateway
@@ -40,14 +52,36 @@ def get_gateway() -> Any:
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    """Application lifespan handler."""
+    """Manage the FastAPI application lifespan.
+
+    Logs startup and shutdown events. Used as the lifespan context manager
+    for the FastAPI application.
+
+    Args:
+        app (FastAPI): The FastAPI application instance.
+
+    Yields:
+        None: Control is yielded to the application for its normal lifecycle.
+    """
     logger.info("Starting pyclaw API server...")
     yield
     logger.info("Shutting down pyclaw API server...")
 
 
 def create_app(gateway: Optional[Any] = None) -> FastAPI:
-    """Create and configure the FastAPI application."""
+    """Create and configure the FastAPI application.
+
+    Loads configuration, sets up CORS middleware, registers all API routers
+    under ``/api/v1/``, and installs a global exception handler.
+
+    Args:
+        gateway (Optional[Any]): Gateway instance to bind to the app.
+            When provided, ``set_gateway()`` is called immediately so all
+            route handlers can reach the gateway via ``get_gateway()``.
+
+    Returns:
+        FastAPI: The fully configured application instance.
+    """
     from pyclaw.config.loader import ConfigLoader
     
     # Get config
@@ -90,23 +124,43 @@ def create_app(gateway: Optional[Any] = None) -> FastAPI:
     app.include_router(todos_routes.router, prefix="/api/v1/todos", tags=["todos"])
     app.include_router(hooks_routes.router, prefix="/api/v1/hooks", tags=["hooks"])
     app.include_router(subagents_routes.router, prefix="/api/v1/subagents", tags=["subagents"])
+    app.include_router(self_routes.router, prefix="/api/v1/self", tags=["self"])
 
     # Health check
     @app.get("/health")
     async def health_check():
+        """Return a simple liveness probe response.
+
+        Returns:
+            dict: ``{"status": "healthy", "service": "pyclaw"}``.
+        """
         return {"status": "healthy", "service": "pyclaw"}
-    
+
     @app.get("/")
     async def root():
+        """Return service discovery metadata.
+
+        Returns:
+            dict: Service name, version, and link to the interactive docs.
+        """
         return {
             "service": "pyclaw",
             "version": "0.1.0",
             "docs": "/docs",
         }
-    
+
     # Error handler
     @app.exception_handler(Exception)
     async def global_exception_handler(request: Request, exc: Exception):
+        """Handle any unhandled exception and return a generic 500 response.
+
+        Args:
+            request (Request): The incoming HTTP request.
+            exc (Exception): The unhandled exception.
+
+        Returns:
+            JSONResponse: HTTP 500 with ``{"detail": "Internal server error"}``.
+        """
         logger.error(f"Unhandled exception: {exc}", exc_info=True)
         return JSONResponse(
             status_code=500,

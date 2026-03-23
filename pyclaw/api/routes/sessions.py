@@ -16,6 +16,15 @@ router = APIRouter()
 # ---------------------------------------------------------------------------
 
 class MessageOut(BaseModel):
+    """A single message from a session's conversation history.
+
+    Attributes:
+        id (str): Synthetic message identifier (``{session_id}-{index}``).
+        role (str): Speaker role ("user" or "assistant").
+        content (str): Plain text content of the message.
+        timestamp (str): ISO-formatted timestamp of the session creation.
+    """
+
     id: str
     role: str
     content: str
@@ -23,6 +32,19 @@ class MessageOut(BaseModel):
 
 
 class SessionSummary(BaseModel):
+    """Summary information for a single session.
+
+    Attributes:
+        id (str): Unique session identifier.
+        agent_id (str): ID of the agent that owns the session.
+        channel (str): Channel the session belongs to.
+        user_id (str): ID of the user the session is associated with.
+        created_at (str): ISO-formatted creation timestamp.
+        updated_at (str): ISO-formatted last-updated timestamp.
+        message_count (int): Number of messages exchanged.
+        is_active (bool): Whether the session is still active.
+    """
+
     id: str
     agent_id: str
     channel: str
@@ -34,6 +56,14 @@ class SessionSummary(BaseModel):
 
 
 class SessionDetail(SessionSummary):
+    """Full session detail including conversation history.
+
+    Extends :class:`SessionSummary` with the complete message log.
+
+    Attributes:
+        messages (List[MessageOut]): All messages in chronological order.
+    """
+
     messages: List[MessageOut]
 
 
@@ -42,6 +72,14 @@ class SessionDetail(SessionSummary):
 # ---------------------------------------------------------------------------
 
 def _session_manager():
+    """Retrieve the gateway's session manager.
+
+    Returns:
+        Any: The session manager instance.
+
+    Raises:
+        HTTPException: With status 503 if the gateway is not initialized.
+    """
     from pyclaw.api.app import get_gateway
     return get_gateway().session_manager
 
@@ -57,7 +95,18 @@ async def list_sessions(
     user_id: Optional[str] = None,
     active_only: bool = True,
 ):
-    """List sessions with optional filters."""
+    """List sessions with optional filters.
+
+    Args:
+        agent_id (Optional[str]): Filter to sessions belonging to this agent.
+        channel (Optional[str]): Filter to sessions on this channel.
+        user_id (Optional[str]): Filter to sessions for this user.
+        active_only (bool): When True, return only active sessions. Defaults to True.
+
+    Returns:
+        Dict[str, Any]: ``{"sessions": [...], "total": int}`` with each entry
+            as a :class:`SessionSummary` dict.
+    """
     sm = _session_manager()
     sessions = await sm.list_sessions(
         agent_id=agent_id,

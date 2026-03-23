@@ -31,28 +31,40 @@ logger = logging.getLogger("pyclaw.memory.embeddings")
 # ---------------------------------------------------------------------------
 
 class EmbeddingBackend(ABC):
-    """Async interface for generating text embeddings."""
+    """Async interface for generating text embeddings.
+
+    All embedding providers implement this interface.  Callers use
+    :func:`make_embedding_backend` to obtain the correct concrete
+    implementation based on the ``EmbeddingConfig`` section of the pyclaw
+    config file.
+    """
 
     @abstractmethod
     async def embed(self, texts: List[str]) -> List[List[float]]:
-        """
-        Return one embedding vector per text.
+        """Return one embedding vector per input text.
 
-        Parameters
-        ----------
-        texts:
-            Non-empty list of strings to embed.
+        Implementors must call the underlying API or model and return the
+        resulting floating-point vectors in the same order as *texts*.
 
-        Returns
-        -------
-        list of list[float]:
-            Parallel list of embedding vectors (same order as *texts*).
+        Args:
+            texts (List[str]): Non-empty list of strings to embed.
+
+        Returns:
+            List[List[float]]: Parallel list of embedding vectors (same
+                order as *texts*).
         """
 
     @property
     @abstractmethod
     def dimensions(self) -> int:
-        """Dimensionality of vectors produced by this backend (0 = unknown)."""
+        """Dimensionality of vectors produced by this backend.
+
+        Implementors should return the actual output dimension, or 0 when
+        the dimension is unknown (e.g. determined at runtime by the server).
+
+        Returns:
+            int: Vector dimensionality, or 0 if unknown.
+        """
 
 
 # ---------------------------------------------------------------------------
@@ -60,7 +72,19 @@ class EmbeddingBackend(ABC):
 # ---------------------------------------------------------------------------
 
 def cosine_similarity(a: List[float], b: List[float]) -> float:
-    """Return cosine similarity in [−1, 1] between two vectors."""
+    """Return cosine similarity in [−1, 1] between two floating-point vectors.
+
+    Uses pure Python arithmetic — no numpy dependency.  Returns 0.0 when
+    either vector has zero magnitude to avoid division by zero.
+
+    Args:
+        a (List[float]): First embedding vector.
+        b (List[float]): Second embedding vector (must be the same length
+            as *a*).
+
+    Returns:
+        float: Cosine similarity score in the range [−1, 1].
+    """
     dot = sum(x * y for x, y in zip(a, b))
     norm_a = math.sqrt(sum(x * x for x in a))
     norm_b = math.sqrt(sum(x * x for x in b))
@@ -74,12 +98,29 @@ def cosine_similarity(a: List[float], b: List[float]) -> float:
 # ---------------------------------------------------------------------------
 
 class OpenAIEmbeddingBackend(EmbeddingBackend):
-    """OpenAI Embeddings API (``/v1/embeddings``)."""
+    """OpenAI Embeddings API provider (``/v1/embeddings``).
+
+    Uses ``text-embedding-3-small`` by default.  A custom ``base_url`` can
+    be set to point at any OpenAI-compatible endpoint.
+
+    Attributes:
+        _model (str): Embedding model name.
+        _api_key (Optional[str]): API key, or None to use environment
+            variable ``OPENAI_API_KEY``.
+        _base_url (Optional[str]): Override base URL for the API.
+        _dims (int): Requested output dimension (0 = use model default).
+    """
 
     _DEFAULT_MODEL = "text-embedding-3-small"
     _DEFAULT_DIMS = 1536
 
     def __init__(self, config: "EmbeddingConfig") -> None:
+        """Initialise the OpenAI embedding backend from config.
+
+        Args:
+            config (EmbeddingConfig): Pydantic config object with fields
+                ``model``, ``api_key``, ``base_url``, and ``dimensions``.
+        """
         self._model = config.model or self._DEFAULT_MODEL
         self._api_key = config.api_key or None
         self._base_url = config.base_url or None
@@ -87,9 +128,26 @@ class OpenAIEmbeddingBackend(EmbeddingBackend):
 
     @property
     def dimensions(self) -> int:
+        """Dimensionality of vectors produced by this backend.
+
+        Returns:
+            int: Configured dimension if set, otherwise the model default
+                (1536 for ``text-embedding-3-small``).
+        """
         return self._dims or self._DEFAULT_DIMS
 
     async def embed(self, texts: List[str]) -> List[List[float]]:
+        """Embed *texts* via the OpenAI Embeddings API.
+
+        Args:
+            texts (List[str]): Strings to embed.
+
+        Returns:
+            List[List[float]]: One embedding vector per input text.
+
+        Raises:
+            RuntimeError: If the ``openai`` package is not installed.
+        """
         try:
             from openai import AsyncOpenAI
         except ImportError as exc:
@@ -118,21 +176,57 @@ class OpenAIEmbeddingBackend(EmbeddingBackend):
 # ---------------------------------------------------------------------------
 
 class GeminiEmbeddingBackend(EmbeddingBackend):
-    """Google Gemini Embeddings (``models/text-embedding-004``)."""
+    """Google Gemini Embeddings provider (``models/text-embedding-004``).
+
+    Calls the ``genai.embed_content`` function via a thread executor since
+    the ``google-generativeai`` SDK is synchronous.
+
+    Attributes:
+        _model (str): Gemini embedding model name.
+        _api_key (Optional[str]): API key, or None to use the environment.
+        _dims (int): Requested output dimension (0 = use model default).
+    """
 
     _DEFAULT_MODEL = "models/text-embedding-004"
     _DEFAULT_DIMS = 768
 
     def __init__(self, config: "EmbeddingConfig") -> None:
+        """Initialise the Gemini embedding backend from config.
+
+        Args:
+            config (EmbeddingConfig): Pydantic config object with fields
+                ``model``, ``api_key``, and ``dimensions``.
+        """
         self._model = config.model or self._DEFAULT_MODEL
         self._api_key = config.api_key or None
         self._dims = config.dimensions or 0
 
     @property
     def dimensions(self) -> int:
+        """Dimensionality of vectors produced by this backend.
+
+        Returns:
+            int: Configured dimension if set, otherwise the model default
+                (768 for ``text-embedding-004``).
+        """
         return self._dims or self._DEFAULT_DIMS
 
     async def embed(self, texts: List[str]) -> List[List[float]]:
+        """Embed *texts* using the Google Gemini Embeddings API.
+
+        Each text is embedded individually via a thread executor because
+        the Google SDK is synchronous.
+
+        Args:
+            texts (List[str]): Strings to embed.
+
+        Returns:
+            List[List[float]]: One embedding vector per input text.
+
+        Raises:
+            RuntimeError: If the ``google-generativeai`` package is not
+                installed.
+        """
         try:
             import google.generativeai as genai  # type: ignore
         except ImportError as exc:
@@ -163,16 +257,31 @@ class GeminiEmbeddingBackend(EmbeddingBackend):
 # ---------------------------------------------------------------------------
 
 class LocalEmbeddingBackend(EmbeddingBackend):
-    """
-    OpenAI-compatible HTTP embedding server.
+    """OpenAI-compatible HTTP embedding server provider.
 
     Works with llama.cpp (``--embedding`` flag), Ollama (API-compatible
     mode), and LM Studio.  Defaults to ``http://localhost:11434``.
+
+    The response body is expected to contain either an OpenAI-style
+    ``{"data": [{"embedding": [...]}]}`` envelope or a flat
+    ``{"embeddings": [[...]]}`` array.
+
+    Attributes:
+        _model (str): Model name to pass to the server (may be empty).
+        _base_url (str): Server base URL without trailing slash.
+        _api_key (str): Bearer token sent in the ``Authorization`` header.
+        _dims (int): Expected dimension (0 = unknown / unrestricted).
     """
 
     _DEFAULT_BASE_URL = "http://localhost:11434"
 
     def __init__(self, config: "EmbeddingConfig") -> None:
+        """Initialise the local embedding backend from config.
+
+        Args:
+            config (EmbeddingConfig): Pydantic config object with fields
+                ``model``, ``base_url``, ``api_key``, and ``dimensions``.
+        """
         self._model = config.model or ""
         self._base_url = (config.base_url or self._DEFAULT_BASE_URL).rstrip("/")
         self._api_key = config.api_key or "local"
@@ -180,9 +289,26 @@ class LocalEmbeddingBackend(EmbeddingBackend):
 
     @property
     def dimensions(self) -> int:
+        """Dimensionality of vectors produced by this backend.
+
+        Returns:
+            int: Configured dimension if set, otherwise 0 (unknown).
+        """
         return self._dims
 
     async def embed(self, texts: List[str]) -> List[List[float]]:
+        """Embed *texts* by posting to the local OpenAI-compatible server.
+
+        Args:
+            texts (List[str]): Strings to embed.
+
+        Returns:
+            List[List[float]]: One embedding vector per input text.
+
+        Raises:
+            RuntimeError: If the ``httpx`` package is not installed, or if
+                the server returns an unexpected response format.
+        """
         try:
             import httpx
         except ImportError as exc:
@@ -221,15 +347,23 @@ class LocalEmbeddingBackend(EmbeddingBackend):
 # ---------------------------------------------------------------------------
 
 def make_embedding_backend(config: "EmbeddingConfig") -> Optional[EmbeddingBackend]:
-    """
-    Construct an :class:`EmbeddingBackend` from *config*.
+    """Construct an :class:`EmbeddingBackend` from *config*.
 
     Returns ``None`` if embeddings are disabled (``config.enabled = False``).
+    Otherwise selects the appropriate provider class based on
+    ``config.provider`` and returns an initialised instance.
 
-    Raises
-    ------
-    ValueError
-        For an unrecognised provider name.
+    Args:
+        config (EmbeddingConfig): Pydantic ``EmbeddingConfig`` object read
+            from the pyclaw config file.
+
+    Returns:
+        Optional[EmbeddingBackend]: A configured embedding backend instance,
+            or None if embeddings are disabled.
+
+    Raises:
+        ValueError: For an unrecognised provider name (anything other than
+            ``"openai"``, ``"gemini"``, or ``"local"``).
     """
     if not config.enabled:
         return None

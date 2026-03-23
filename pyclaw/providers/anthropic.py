@@ -10,6 +10,16 @@ class AnthropicProvider(Provider):
     """Provider for Anthropic's Claude models."""
     
     def __init__(self, config: Dict[str, Any]):
+        """Initialise the Anthropic provider, validating that an API key is available.
+
+        Args:
+            config (Dict[str, Any]): Provider configuration dict. The ``api_key``
+                entry (or the ``ANTHROPIC_API_KEY`` environment variable) must be
+                present.
+
+        Raises:
+            ValueError: If no API key is found in config or the environment.
+        """
         super().__init__(config)
         # Get API key from config or environment
         api_key = self.api_key or os.environ.get("ANTHROPIC_API_KEY")
@@ -20,7 +30,12 @@ class AnthropicProvider(Provider):
     
     @property
     def client(self):
-        """Lazy-load the Anthropic client."""
+        """Lazy-load the Anthropic async client.
+
+        Returns:
+            anthropic.AsyncAnthropic: The shared Anthropic client instance,
+                constructed on the first access.
+        """
         if self._client is None:
             import anthropic
             self._client = anthropic.AsyncAnthropic(
@@ -30,7 +45,20 @@ class AnthropicProvider(Provider):
         return self._client
     
     def _convert_messages(self, messages: List[Message]) -> List[Dict[str, Any]]:
-        """Convert internal messages to Anthropic format."""
+        """Convert internal message objects to the Anthropic API message format.
+
+        System role messages are re-emitted as assistant turns prefixed with
+        ``"System: "`` because Anthropic's messages API does not accept a
+        ``system`` role inside the messages array.
+
+        Args:
+            messages (List[Message]): Sequence of internal :class:`Message`
+                objects to convert.
+
+        Returns:
+            List[Dict[str, Any]]: List of message dicts ready for the Anthropic
+                ``messages.create`` call.
+        """
         converted = []
         for msg in messages:
             if msg.role == "system":
@@ -47,7 +75,16 @@ class AnthropicProvider(Provider):
         return converted
     
     def _convert_tools(self, tools: Optional[List[Dict[str, Any]]]) -> Optional[List[Dict[str, Any]]]:
-        """Convert tools to Anthropic tool format."""
+        """Convert generic tool definitions to the Anthropic tool schema format.
+
+        Args:
+            tools (Optional[List[Dict[str, Any]]]): Generic tool list where each
+                entry has ``name``, ``description``, and ``parameters`` keys.
+
+        Returns:
+            Optional[List[Dict[str, Any]]]: Tools formatted with Anthropic's
+                ``input_schema`` key, or ``None`` if ``tools`` is empty/None.
+        """
         if not tools:
             return None
         
@@ -70,7 +107,23 @@ class AnthropicProvider(Provider):
         max_tokens: Optional[int] = None,
         **kwargs,
     ) -> ChatResponse:
-        """Send a non-streaming chat completion request."""
+        """Send a non-streaming chat completion request to the Anthropic API.
+
+        Args:
+            messages (List[Message]): Conversation history to send.
+            model (Optional[str]): Model identifier. Defaults to the provider's
+                ``default_model`` or ``claude-3-5-sonnet-20241022``.
+            tools (Optional[List[Dict[str, Any]]]): Tool definitions to make
+                available to the model.
+            temperature (float): Sampling temperature. Defaults to 0.7.
+            max_tokens (Optional[int]): Maximum tokens to generate. Defaults to
+                4096.
+            **kwargs: Additional keyword arguments (ignored).
+
+        Returns:
+            ChatResponse: Completed response including content, any tool calls,
+                the resolved model name, and token usage statistics.
+        """
         model = model or self.default_model or "claude-3-5-sonnet-20241022"
         max_tokens = max_tokens or 4096
         

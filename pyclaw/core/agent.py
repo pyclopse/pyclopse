@@ -37,7 +37,28 @@ ToolExecutor = Callable[[str, List[str], str], Awaitable[Dict[str, Any]]]
 
 @dataclass
 class Agent:
-    """Agent that handles conversations."""
+    """Agent that handles conversations using a FastAgent runner.
+
+    Each agent instance owns a base AgentRunner and a dict of per-session
+    runners keyed by session ID.  The base runner is used only as a template;
+    all actual message processing goes through per-session runners so that
+    conversation histories remain isolated across users.
+
+    Attributes:
+        id (str): Unique agent identifier (matches the key in config.agents).
+        name (str): Human-readable agent name.
+        config (ConfigModel): Pydantic AgentConfig object for this agent.
+        session_manager (Any): SessionManager instance (optional).
+        tool_executor (Optional[ToolExecutor]): Legacy tool execution callback.
+        provider (Optional[Any]): LLM provider instance (optional).
+        skill_runner (Optional[Any]): SkillRunner for tool execution (optional).
+        config_dir (str): Base config directory used for bootstrap file lookup.
+        fast_agent (Optional[Any]): Alias for fast_agent_runner (compat).
+        fast_agent_runner (Optional[Any]): The base AgentRunner instance.
+        pyclaw_config (Optional[Any]): Full pyclaw Config forwarded to runners.
+        is_running (bool): Whether the agent has been started.
+        current_session (Optional[Session]): The most recently active session.
+    """
 
     id: str
     name: str
@@ -62,6 +83,7 @@ class Agent:
     _logger: logging.Logger = field(init=False)
 
     def __post_init__(self):
+        """Post-initialization: set up logger and initialize FastAgent if configured."""
         object.__setattr__(self, "_logger", logging.getLogger(f"pyclaw.agent.{self.id}"))
         object.__setattr__(self, "_session_runners", {})
 
@@ -70,7 +92,16 @@ class Agent:
             self._init_fastagent()
 
     def _should_use_fastagent(self) -> bool:
-        """Check if agent should use FastAgent."""
+        """Check whether this agent should initialize a FastAgent runner.
+
+        Returns True when:
+        - ``config.use_fastagent`` is explicitly True, or
+        - ``config.model`` starts with ``"fastagent"`` or ``"fa:"``, or
+        - ``config.workflow`` is set (workflow agents always use FastAgent).
+
+        Returns:
+            bool: True if FastAgent should be initialized; False otherwise.
+        """
         # Use FastAgent if explicitly configured via use_fastagent flag
         if getattr(self.config, "use_fastagent", False):
             return True
@@ -85,7 +116,16 @@ class Agent:
 
     @property
     def system_prompt(self) -> str:
-        """Get system prompt - built from agent files or config."""
+        """Build and return the agent's system prompt.
+
+        Attempts to assemble the prompt from bootstrap files in the agent's
+        config directory (SOUL.md, IDENTITY.md, MEMORY.md, etc.) via
+        build_system_prompt().  Falls back to ``config.system_prompt`` if no
+        files are found, and to the generic default if neither is set.
+
+        Returns:
+            str: The complete system prompt string.
+        """
         # Try to build from agent files (like OpenClaw)
         if hasattr(self, "config_dir"):
             # gateway.skills_dirs (global) + agent.skills_dirs (per-agent)
@@ -100,7 +140,15 @@ class Agent:
         return getattr(self.config, "system_prompt", "You are a helpful AI assistant.")
 
     def _init_fastagent(self) -> None:
-        """Initialize FastAgent for this agent."""
+        """Initialize the base FastAgent runner for this agent.
+
+        Translates the pyclaw model string to the FastAgent format, resolves
+        provider credentials, builds child agent configs for workflow runners,
+        and creates the AgentRunner stored in ``self.fast_agent_runner``.
+
+        Logs a warning and returns early if FastAgent is unavailable or if
+        runner construction fails.
+        """
         if not FASTAGENT_AVAILABLE:
             self._logger.warning("FastAgent not available")
             return
@@ -235,11 +283,25 @@ class Agent:
         """Get or create a dedicated AgentRunner for a session.
 
         Each session gets its own runner so conversation histories are properly
-        isolated across users.  Pass *model_override* to use a different model
-        than the agent default for this session.  Pass *history_path* (a Path)
-        to have the runner automatically load/save FA native history.
-        Pass *instruction_override* to use a custom system prompt instead of the
-        agent's default (used for job runs with custom prompt_preset/flags).
+        isolated across users.  The runner is cached in ``_session_runners``
+        and returned on subsequent calls with the same session_id.
+
+        Args:
+            session_id (str): Session identifier used as the cache key.
+            model_override (Optional[str]): If set, the runner uses this model
+                instead of the agent default. Defaults to None.
+            history_path (Optional[Any]): Path to the FA-native history JSON
+                file.  When provided, the runner loads/saves history automatically.
+                Defaults to None.
+            instruction_override (Optional[str]): Custom system prompt for this
+                runner, replacing the agent's default.  Used for job runs with
+                custom prompt_preset / flags.  Defaults to None.
+
+        Returns:
+            Any: The AgentRunner instance for the session.
+
+        Raises:
+            RuntimeError: If no base FastAgent runner has been configured.
         """
         if not self.fast_agent_runner:
             raise RuntimeError(
@@ -297,7 +359,15 @@ class Agent:
         return self._session_runners[session_id]
 
     async def evict_session_runner(self, session_id: str) -> None:
-        """Tear down and remove the runner for a session so the next call gets a fresh one."""
+        """Tear down and remove the runner for a session.
+
+        Calls cleanup() on the runner to close FastAgent MCP connections, then
+        removes it from the cache.  The next message for this session will
+        create a fresh runner via _get_session_runner().
+
+        Args:
+            session_id (str): The session whose runner should be evicted.
+        """
         runner = self._session_runners.pop(session_id, None)
         if runner is not None:
             try:
@@ -307,7 +377,11 @@ class Agent:
             self._logger.debug(f"Evicted session runner for {session_id[:8]}")
 
     async def start(self) -> None:
-        """Start the agent."""
+        """Start the agent and initialize the base FastAgent runner.
+
+        Sets ``is_running = True`` and calls ``fast_agent_runner.initialize()``
+        so that MCP server connections are established before the first message.
+        """
         self.is_running = True
         self._logger.info(f"Agent {self.name} started")
 
@@ -316,7 +390,12 @@ class Agent:
             await self.fast_agent_runner.initialize()
 
     async def stop(self) -> None:
-        """Stop the agent."""
+        """Stop the agent, cleaning up all session runners and the base runner.
+
+        Cancels any pending tasks, calls cleanup() on every per-session runner
+        to release FastAgent MCP connections, then cleans up the base runner.
+        Must be called before the MCP server is stopped.
+        """
         self.is_running = False
 
         # Cancel pending tasks
@@ -347,7 +426,21 @@ class Agent:
         message: IncomingMessage,
         session: Session,
     ) -> Optional[OutgoingMessage]:
-        """Handle an incoming message."""
+        """Handle an incoming message and return the agent's response.
+
+        Delegates to _handle_with_fastagent() using the per-session runner.
+        On CancelledError (from queue interrupt/steer), evicts the session runner
+        so the next message starts with a clean context.  On other errors,
+        evicts the runner and returns an error OutgoingMessage.
+
+        Args:
+            message (IncomingMessage): The incoming message to process.
+            session (Session): The active session for this message.
+
+        Returns:
+            Optional[OutgoingMessage]: The agent's reply, or an error message
+                if processing failed.
+        """
         self.current_session = session
 
         try:
@@ -386,14 +479,27 @@ class Agent:
         prompt: str,
         session: Session,
     ) -> str:
-        """Handle message using a per-session FastAgent runner.
+        """Handle a message using a per-session FastAgent runner with fallback support.
 
-        Implements the model fallback chain: if the configured model raises an
-        error and ``config.fallbacks`` is non-empty, each fallback model is tried
-        in order.  The session remembers which fallback is active (via
-        ``session.context["_fallback_index"]``) so subsequent messages continue
-        using the working model.  A user-visible notice is prepended to the first
-        response from a fallback model.
+        Implements the model fallback chain: builds a candidate list of
+        [primary_model] + config.fallbacks.  The session context tracks the
+        active fallback index so subsequent messages continue on the same
+        working model.  If the active model raises an exception and a fallback
+        is available, the session runner is evicted, a new one is created with
+        the next model, and a user-visible notice is prepended to the response.
+
+        Args:
+            prompt (str): The user message text.
+            session (Session): The active session carrying model overrides and
+                fallback state in ``session.context``.
+
+        Returns:
+            str: The agent's text response, possibly prefixed with a fallback
+                notice.
+
+        Raises:
+            Exception: Re-raises the last exception when all models in the
+                fallback chain are exhausted.
         """
         instruction_override = session.context.get("instruction_override")
         history_path = None if session.context.get("no_history") else session.history_path
@@ -452,7 +558,20 @@ class Agent:
         args: List[str],
         cwd: str,
     ) -> Dict[str, Any]:
-        """Execute a tool."""
+        """Execute a tool by name, dispatching to the skill runner or tool executor.
+
+        Prefers the skill_runner when configured; falls back to tool_executor.
+        Returns an error dict if neither is available.
+
+        Args:
+            tool_name (str): The tool or skill name to execute.
+            args (List[str]): Positional arguments for the tool.
+            cwd (str): Working directory for the tool invocation.
+
+        Returns:
+            Dict[str, Any]: Result dict with at least ``success`` (bool) and
+                either ``result`` (on success) or ``error`` (on failure).
+        """
         if self.skill_runner:
             # Use skill runner
             result = await self.skill_runner.execute(
@@ -474,7 +593,13 @@ class Agent:
         return await self.tool_executor(tool_name, args, cwd)
 
     def get_status(self) -> Dict[str, Any]:
-        """Get agent status."""
+        """Return a status snapshot for this agent.
+
+        Returns:
+            Dict[str, Any]: Dict with keys ``id``, ``name``, ``is_running``,
+                ``model``, ``session_id``, ``pending_tasks``, ``provider``,
+                ``fast_agent``, ``skills``.
+        """
         return {
             "id": self.id,
             "name": self.name,
@@ -488,7 +613,13 @@ class Agent:
         }
 
     def update_config(self, **updates) -> None:
-        """Update agent configuration."""
+        """Update agent configuration fields in-place.
+
+        Only updates fields that already exist on ``self.config``.
+
+        Args:
+            **updates: Field name / value pairs to apply to ``self.config``.
+        """
         for key, value in updates.items():
             if hasattr(self.config, key):
                 setattr(self.config, key, value)
@@ -496,9 +627,23 @@ class Agent:
 
 
 def _translate_to_fa_model(raw_model: str, pyclaw_config: Any) -> str:
-    """Translate a pyclaw model string (e.g. ``minimax/M2.5``) to a FastAgent
-    model string (e.g. ``generic.M2.5``), injecting provider credentials as env
-    vars if needed.  Returns the raw model unchanged when no translation applies.
+    """Translate a pyclaw model string to a FastAgent model string.
+
+    Strips ``fastagent:``, ``fa:``, and ``fastagent/`` prefixes.  If the
+    remaining string contains a ``/``, looks up the provider in
+    ``pyclaw_config.providers`` and uses its ``fastagent_provider`` field to
+    produce ``<fa_provider>.<model_name>``.  Also injects provider API key and
+    base URL into environment variables if present.
+
+    Args:
+        raw_model (str): Pyclaw model string, e.g. ``"minimax/MiniMax-M2.5"``
+            or ``"fa:anthropic/claude-3-5-sonnet"``.
+        pyclaw_config (Any): The loaded pyclaw Config object (used to look up
+            provider settings).
+
+    Returns:
+        str: FastAgent-compatible model string, e.g. ``"generic.MiniMax-M2.5"``,
+            or the raw model unchanged if no translation applies.
     """
     import os
     for prefix in ("fastagent:", "fa:", "fastagent/"):
@@ -534,9 +679,17 @@ def _translate_to_fa_model(raw_model: str, pyclaw_config: Any) -> str:
 
 
 class AgentManager:
-    """Manages multiple agents."""
+    """Manages multiple Agent instances across the gateway.
+
+    Maintains a registry of agents keyed by agent_id.  The first registered
+    agent becomes the default, used when no explicit agent routing is present.
+
+    Attributes:
+        agents (Dict[str, Agent]): All registered agents keyed by agent ID.
+    """
 
     def __init__(self):
+        """Initialize the AgentManager with empty agent registry."""
         self.agents: Dict[str, Agent] = {}
         self._default_agent_id: Optional[str] = None
         self._logger = logging.getLogger("pyclaw.agent_manager")
@@ -550,7 +703,26 @@ class AgentManager:
         pyclaw_config: Optional[Any] = None,
         **kwargs,
     ) -> Agent:
-        """Create a new agent with optional provider."""
+        """Create and register a new agent with optional LLM provider.
+
+        Args:
+            agent_id (str): Unique identifier for the agent.
+            name (str): Human-readable display name.
+            config (ConfigModel): Pydantic AgentConfig for the agent.
+            provider_config (Optional[Dict[str, Any]]): Provider configuration
+                dict (e.g. ``{"type": "openai", "api_key": "…"}``).  If
+                provided, a provider instance is created and attached.
+            pyclaw_config (Optional[Any]): Full pyclaw Config forwarded to the
+                agent for model translation and concurrency lookup.
+            **kwargs: Additional keyword arguments forwarded to the Agent
+                dataclass constructor.
+
+        Returns:
+            Agent: The newly created and registered Agent instance.
+
+        Raises:
+            ValueError: If an agent with agent_id is already registered.
+        """
         if agent_id in self.agents:
             raise ValueError(f"Agent {agent_id} already exists")
 
@@ -580,7 +752,14 @@ class AgentManager:
         return agent
 
     async def start_agent(self, agent_id: str) -> bool:
-        """Start an agent."""
+        """Start a single agent by ID.
+
+        Args:
+            agent_id (str): The agent to start.
+
+        Returns:
+            bool: True if the agent was found and started; False otherwise.
+        """
         agent = self.agents.get(agent_id)
         if agent:
             await agent.start()
@@ -588,7 +767,14 @@ class AgentManager:
         return False
 
     async def stop_agent(self, agent_id: str) -> bool:
-        """Stop an agent."""
+        """Stop a single agent by ID.
+
+        Args:
+            agent_id (str): The agent to stop.
+
+        Returns:
+            bool: True if the agent was found and stopped; False otherwise.
+        """
         agent = self.agents.get(agent_id)
         if agent:
             await agent.stop()
@@ -596,34 +782,62 @@ class AgentManager:
         return False
 
     async def start_all(self) -> None:
-        """Start all agents."""
+        """Start all registered agents concurrently (sequential await)."""
         for agent in self.agents.values():
             await agent.start()
 
     async def stop_all(self) -> None:
-        """Stop all agents."""
+        """Stop all registered agents, releasing their FastAgent MCP connections."""
         for agent in self.agents.values():
             await agent.stop()
 
     def get_agent(self, agent_id: str) -> Optional[Agent]:
-        """Get an agent by ID."""
+        """Return an agent by its ID.
+
+        Args:
+            agent_id (str): The agent identifier to look up.
+
+        Returns:
+            Optional[Agent]: The Agent instance, or None if not found.
+        """
         return self.agents.get(agent_id)
 
     def get_default_agent(self) -> Optional[Agent]:
-        """Get the default agent."""
+        """Return the default agent (first registered, or explicitly set via set_default_agent).
+
+        Returns:
+            Optional[Agent]: The default Agent, or None if no agents are registered.
+        """
         if self._default_agent_id:
             return self.agents.get(self._default_agent_id)
         return None
 
     def set_default_agent(self, agent_id: str) -> bool:
-        """Set the default agent."""
+        """Set the default agent by ID.
+
+        Args:
+            agent_id (str): The agent to designate as default.
+
+        Returns:
+            bool: True if the agent exists and was set as default; False otherwise.
+        """
         if agent_id in self.agents:
             self._default_agent_id = agent_id
             return True
         return False
 
     def remove_agent(self, agent_id: str) -> bool:
-        """Remove an agent."""
+        """Remove an agent from the registry.
+
+        If the removed agent was the default, a new default is automatically
+        selected from the remaining agents (or set to None if empty).
+
+        Args:
+            agent_id (str): The agent to remove.
+
+        Returns:
+            bool: True if the agent was found and removed; False otherwise.
+        """
         agent = self.agents.pop(agent_id, None)
         if agent:
             if self._default_agent_id == agent_id:
@@ -633,11 +847,21 @@ class AgentManager:
         return False
 
     def list_agents(self) -> List[Agent]:
-        """List all agents."""
+        """Return all registered agents.
+
+        Returns:
+            List[Agent]: All Agent instances in registration order.
+        """
         return list(self.agents.values())
 
     def get_status(self) -> Dict[str, Any]:
-        """Get agent manager status."""
+        """Return a status snapshot of the agent manager and all agents.
+
+        Returns:
+            Dict[str, Any]: Dict with keys ``total_agents``, ``running_agents``,
+                ``default_agent``, and ``agents`` (list of per-agent dicts with
+                ``id``, ``name``, ``is_running``, ``model``).
+        """
         return {
             "total_agents": len(self.agents),
             "running_agents": len([a for a in self.agents.values() if a.is_running]),

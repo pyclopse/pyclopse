@@ -10,7 +10,20 @@ logger = logging.getLogger("pyclaw.commands")
 
 @dataclass
 class CommandContext:
-    """Context passed to every command handler."""
+    """Context passed to every command handler.
+
+    Provides the handler with access to the gateway and the current session
+    so it can read/modify state without needing direct imports.
+
+    Attributes:
+        gateway (Any): The live Gateway instance.
+        session (Optional[Any]): The active Session, or None for stateless
+            commands (e.g. commands that run before a session is established).
+        sender_id (str): Stable user identifier for the caller.
+        channel (str): Channel name the command arrived on.
+        thread_id (Optional[str]): Telegram topic ID or Slack thread_ts,
+            if the command was sent inside a thread.
+    """
 
     gateway: Any          # Gateway instance
     session: Optional[Any]  # Session (may be None for stateless commands)
@@ -21,7 +34,15 @@ class CommandContext:
 
 @dataclass
 class Command:
-    """A registered slash command."""
+    """A registered slash command.
+
+    Attributes:
+        name (str): Lowercase command name without the leading slash.
+        description (str): Short human-readable description shown in /help.
+        usage (str): Usage string shown in help, e.g. ``"/reset"``.
+        handler (Callable): Async callable ``(args: str, ctx: CommandContext)
+            -> str`` that implements the command.
+    """
 
     name: str
     description: str
@@ -30,9 +51,15 @@ class Command:
 
 
 class CommandRegistry:
-    """Registry of slash commands available in pyclaw."""
+    """Registry of slash commands available in pyclaw.
+
+    Commands are registered by name (without the leading slash) and dispatched
+    when a message starts with ``/``.  Built-in commands are registered via
+    register_builtin_commands(); custom commands can be added via register().
+    """
 
     def __init__(self) -> None:
+        """Initialize the CommandRegistry with an empty command table."""
         self._commands: Dict[str, Command] = {}
 
     def register(
@@ -42,7 +69,17 @@ class CommandRegistry:
         description: str,
         usage: str = "",
     ) -> None:
-        """Register a slash command handler."""
+        """Register a slash command handler.
+
+        Args:
+            name (str): Command name.  The leading ``/`` is stripped and the
+                name is lowercased before storage.
+            handler (Callable): Async callable ``(args: str, ctx: CommandContext)
+                -> str``.
+            description (str): Short description shown in /help output.
+            usage (str): Usage string (e.g. ``"/model [name]"``).  Defaults to
+                ``"/<name>"`` when empty.
+        """
         key = name.lstrip("/").lower()
         self._commands[key] = Command(
             name=key,
@@ -52,10 +89,20 @@ class CommandRegistry:
         )
 
     async def dispatch(self, text: str, ctx: CommandContext) -> Optional[str]:
-        """Dispatch a slash command.
+        """Dispatch a slash command and return the response string.
 
-        Returns None if *text* does not start with '/'.
-        Returns a reply string for any recognised or unrecognised command.
+        Parses the command name from the first word after ``/`` and looks it up
+        in the registry.  Unknown commands return None so callers can fall
+        through to agent routing.
+
+        Args:
+            text (str): Raw message text, expected to start with ``/``.
+            ctx (CommandContext): Execution context for the handler.
+
+        Returns:
+            Optional[str]: Response string from the handler, an error message
+                if the handler raised, or None if text does not start with ``/``
+                or the command name is not registered.
         """
         text = text.strip()
         if not text.startswith("/"):
@@ -77,7 +124,12 @@ class CommandRegistry:
             return f"Error running /{name}: {e}"
 
     def help_text(self) -> str:
-        """Return a human-readable list of all registered commands."""
+        """Return a human-readable list of all registered commands.
+
+        Returns:
+            str: Newline-separated list of ``  /name — description`` lines,
+                or ``"No commands registered."`` if empty.
+        """
         if not self._commands:
             return "No commands registered."
         lines = ["Available commands:"]
@@ -87,7 +139,14 @@ class CommandRegistry:
 
     def commands_for_telegram(self) -> List[tuple]:
         """Return (command, description) pairs suitable for Telegram setMyCommands.
-        Telegram requires descriptions 1-256 chars and command names 1-32 chars, lowercase."""
+
+        Truncates command names to 32 characters and descriptions to 256
+        characters as required by the Telegram Bot API.
+
+        Returns:
+            List[tuple]: List of ``(name, description)`` string tuples, sorted
+                alphabetically by command name.
+        """
         result = []
         for cmd in sorted(self._commands.values(), key=lambda c: c.name):
             name = cmd.name[:32].lower()
@@ -111,8 +170,17 @@ _FA_MODEL_SUBCOMMANDS = frozenset({
 def _get_runner(ctx: CommandContext) -> Optional[Any]:
     """Return the already-initialized AgentRunner for this session, or None.
 
-    Only returns a runner if one already exists (i.e. the session has had at
+    Looks up the AgentRunner in the agent's _session_runners dict.  Only
+    returns a runner when one already exists (i.e. the session has had at
     least one message processed).  Does NOT create a new runner.
+
+    Args:
+        ctx (CommandContext): The command execution context containing the
+            gateway and session.
+
+    Returns:
+        Optional[Any]: The AgentRunner for the session, or None if no runner
+            has been created yet or no session/agent is available.
     """
     if ctx.session is None:
         return None
@@ -126,7 +194,19 @@ def _get_runner(ctx: CommandContext) -> Optional[Any]:
 
 
 def register_builtin_commands(registry: CommandRegistry, gateway: Any) -> None:
-    """Register the standard gateway commands into *registry*."""
+    """Register all standard gateway commands into a CommandRegistry.
+
+    Defines and registers the following commands: help, reset, status, model,
+    job, start, new, stop, compact, whoami, models, think, usage, context,
+    reload, restart, config, export, verbose, approve, skills, skill, reboot,
+    subagents, queue, tts, history, clear, mcp, cards, card, agent, bash,
+    allowlist, reasoning, session, and focus.
+
+    Args:
+        registry (CommandRegistry): The registry to add commands to.
+        gateway (Any): The Gateway instance, captured in closures so command
+            handlers can access subsystems at call time.
+    """
 
     async def cmd_help(args: str, ctx: CommandContext) -> str:
         return registry.help_text()

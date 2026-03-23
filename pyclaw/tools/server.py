@@ -27,6 +27,9 @@ Tools provided:
   audit_log_search - search audit log entries by field/keyword
   workflow_chain   - run a sequential chain of agent steps
   workflow_parallel - run agents in parallel (fan-out/fan-in)
+  self_topics      - list all pyclaw knowledge topics
+  self_read        - read a pyclaw documentation topic
+  self_source      - read pyclaw source code with line numbers
 """
 import asyncio
 import json
@@ -52,9 +55,28 @@ mcp = FastMCP("pyclaw")
 # ---------------------------------------------------------------------------
 
 class _ToolLoggingMiddleware(Middleware):
-    """Log MCP tool calls to the per-agent logger."""
+    """FastMCP middleware that logs every tool call to the per-agent logger.
+
+    Resolves the calling agent name and session ID from the ``X-Agent-Name`` and
+    ``X-Session-ID`` HTTP headers, then logs the tool name, truncated arguments,
+    and a preview of the result at ``INFO`` level.  Warnings are emitted when a
+    tool raises an exception.
+    """
 
     async def on_call_tool(self, context: MiddlewareContext, call_next) -> Any:
+        """Intercept a tool call, log it, invoke the real handler, and log the result.
+
+        Args:
+            context (MiddlewareContext): FastMCP middleware context containing the
+                ``message`` (tool name and arguments).
+            call_next: Async callable to invoke the next middleware or the real tool.
+
+        Returns:
+            Any: The ``ToolResult`` returned by the real tool handler.
+
+        Raises:
+            Exception: Re-raises any exception from the real tool after logging it.
+        """
         # Resolve calling agent and session from HTTP request headers
         try:
             headers = get_http_headers()
@@ -125,7 +147,22 @@ _ALWAYS_BLOCKED = {
 
 
 def _is_safe(command: str) -> tuple[bool, str]:
-    """Return (allowed, reason)."""
+    """Evaluate whether a shell command is permitted by the current security policy.
+
+    Checks against always-blocked destructive patterns first, then applies the
+    mode from ``PYCLAW_EXEC_SECURITY``:
+    - ``all``: permit everything (except always-blocked patterns).
+    - ``none``: deny everything.
+    - ``allowlist`` (default): permit only commands whose first token appears in
+      the ``PYCLAW_SAFE_BINS`` set, or all commands if ``PYCLAW_SAFE_BINS`` is empty.
+
+    Args:
+        command (str): Shell command string to evaluate.
+
+    Returns:
+        tuple[bool, str]: ``(allowed, reason)`` where ``allowed`` is True if the
+        command may execute and ``reason`` is a human-readable explanation.
+    """
     cmd_lower = command.strip().lower()
 
     # Block known destructive patterns
@@ -162,14 +199,19 @@ async def bash(
     timeout: Optional[int] = None,
     background: bool = False,
 ) -> str:
-    """
-    Execute a shell command and return its output.
+    """Execute a shell command and return its output.
 
     Args:
-        command: Shell command to run (passed to /bin/sh -c)
-        cwd: Working directory (defaults to current dir)
-        timeout: Seconds before timeout (default 30)
-        background: If True, start process and return PID immediately
+        command (str): Shell command to run (passed to /bin/sh -c).
+        cwd (Optional[str]): Working directory. Defaults to current directory.
+        timeout (Optional[int]): Seconds before timeout. Defaults to 30.
+        background (bool): If True, start the process and return PID immediately
+            without waiting for completion. Defaults to False.
+
+    Returns:
+        str: Combined stdout/stderr output with exit code appended on failure,
+        or a ``[BACKGROUND] PID=...`` message if background=True, or a
+        ``[DENIED]``/``[TIMEOUT]``/``[ERROR]`` prefixed message on failure.
     """
     allowed, reason = _is_safe(command)
     if not allowed:
@@ -237,13 +279,17 @@ async def web_search(
     max_results: int = 8,
     region: str = "us-en",
 ) -> str:
-    """
-    Search the web using DuckDuckGo. Returns titles, URLs, and snippets.
+    """Search the web using DuckDuckGo. Returns titles, URLs, and snippets.
 
     Args:
-        query: Search query
-        max_results: Number of results to return (max 20)
-        region: Search region (e.g. us-en, uk-en, de-de)
+        query (str): Search query string.
+        max_results (int): Number of results to return (max 20). Defaults to 8.
+        region (str): Search region code (e.g. ``us-en``, ``uk-en``, ``de-de``).
+            Defaults to ``"us-en"``.
+
+    Returns:
+        str: Formatted search results with titles, URLs, and body snippets, or
+        an ``[ERROR]`` prefixed message on failure.
     """
     try:
         try:
@@ -277,13 +323,18 @@ async def send_message(
     channel: str = "telegram",
     chat_id: Optional[str] = None,
 ) -> str:
-    """
-    Send a message to a configured channel (Telegram by default).
+    """Send a message to a configured channel (Telegram by default).
 
     Args:
-        text: Message text to send
-        channel: Channel name (currently: telegram)
-        chat_id: Override chat ID (uses default from config if not provided)
+        text (str): Message text to send.
+        channel (str): Channel name. Currently only ``"telegram"`` is supported.
+            Defaults to ``"telegram"``.
+        chat_id (Optional[str]): Override chat ID. Uses ``PYCLAW_TELEGRAM_CHAT_ID``
+            environment variable if not provided. Defaults to None.
+
+    Returns:
+        str: ``[OK] Message sent to ...`` on success, or an ``[ERROR]`` prefixed
+        message describing the failure.
     """
     if channel != "telegram":
         return f"[ERROR] Channel {channel!r} not yet implemented. Use 'telegram'."
@@ -317,7 +368,13 @@ async def send_message(
 
 @mcp.tool()
 async def sessions_list() -> str:
-    """List all active pyclaw sessions with their agent, channel, and status."""
+    """List all active pyclaw sessions with their agent, channel, and status.
+
+    Returns:
+        str: Formatted list of up to 20 most recent sessions showing ID, agent,
+        channel, message count, and last-updated timestamp, or a message
+        indicating no sessions were found.
+    """
     try:
         from pyclaw.config.loader import ConfigLoader
 
@@ -348,12 +405,15 @@ async def sessions_list() -> str:
 
 @mcp.tool()
 async def sessions_history(session_id: str, max_messages: int = 20) -> str:
-    """
-    Get conversation history for a session.
+    """Get conversation history for a session.
 
     Args:
-        session_id: Session ID (partial match supported)
-        max_messages: Max messages to return
+        session_id (str): Session ID or partial substring to match.
+        max_messages (int): Maximum number of messages to return. Defaults to 20.
+
+    Returns:
+        str: Formatted session header followed by role-labelled message excerpts,
+        or an ``[ERROR]`` prefixed message on failure.
     """
     try:
         sessions_dir = Path("~/.pyclaw/sessions").expanduser()
@@ -381,11 +441,10 @@ async def sessions_history(session_id: str, max_messages: int = 20) -> str:
 # ---------------------------------------------------------------------------
 
 def _agent_memory_service(agent_name: Optional[str] = None):
-    """
-    Return a memory accessor for the given agent.
+    """Return a memory accessor for the given agent.
 
     If the gateway has already initialised a MemoryService (in-process mode),
-    we create an ephemeral MemoryService that shares the global HookRegistry
+    creates an ephemeral MemoryService that shares the global HookRegistry
     and the configured embedding backend, but uses the agent-specific
     FileMemoryBackend directory.  This ensures that plugin hooks registered
     for ``memory:*`` events are respected and that vector search works.
@@ -393,6 +452,18 @@ def _agent_memory_service(agent_name: Optional[str] = None):
     When running as a standalone MCP process (no gateway in this process), the
     function falls back to using FileMemoryBackend directly — the interface is
     identical so all call sites work unchanged.
+
+    Args:
+        agent_name (Optional[str]): Agent name used to resolve the memory directory
+            (``~/.pyclaw/agents/{agent_name}``).  Falls back to the
+            ``PYCLAW_AGENT_NAME`` environment variable if not provided. Defaults to None.
+
+    Returns:
+        Union[MemoryService, FileMemoryBackend]: A memory accessor object with
+        ``search``, ``read``, ``write``, ``delete``, and ``list`` methods.
+
+    Raises:
+        RuntimeError: If neither ``agent_name`` nor ``PYCLAW_AGENT_NAME`` is available.
     """
     from pyclaw.memory.file_backend import FileMemoryBackend
 
@@ -431,12 +502,16 @@ def _agent_memory_service(agent_name: Optional[str] = None):
 
 @mcp.tool()
 async def memory_search(ctx: Context, query: str, limit: int = 10) -> str:
-    """
-    Search long-term memory for relevant context.
+    """Search long-term memory for relevant context.
 
     Args:
-        query: Search query (keywords)
-        limit: Maximum number of results to return
+        ctx (Context): FastMCP request context (injected automatically).
+        query (str): Search query keywords or phrase.
+        limit (int): Maximum number of results to return. Defaults to 10.
+
+    Returns:
+        str: Formatted list of memory entries with key, date, tags, and content,
+        or ``"No memory results found."`` if there are no matches.
     """
     try:
         headers = get_http_headers()
@@ -460,11 +535,15 @@ async def memory_search(ctx: Context, query: str, limit: int = 10) -> str:
 
 @mcp.tool()
 async def memory_get(ctx: Context, key: str) -> str:
-    """
-    Get a specific memory entry by key.
+    """Get a specific memory entry by key.
 
     Args:
-        key: Memory key to retrieve
+        ctx (Context): FastMCP request context (injected automatically).
+        key (str): Memory key to retrieve.
+
+    Returns:
+        str: Formatted entry with key, date, content, and optional tags, or a
+        ``"No memory entry found"`` message if the key does not exist.
     """
     try:
         headers = get_http_headers()
@@ -487,7 +566,12 @@ async def memory_get(ctx: Context, key: str) -> str:
 
 @mcp.tool()
 async def session_status() -> str:
-    """Return current gateway status: uptime, active sessions, loaded agents."""
+    """Return current gateway status: uptime, active sessions, and loaded agents.
+
+    Returns:
+        str: JSON-formatted gateway status dict, or a message indicating the
+        gateway is not running.
+    """
     try:
         import json
         status_file = Path("~/.pyclaw/status.json").expanduser()
@@ -505,13 +589,16 @@ async def session_status() -> str:
 
 @mcp.tool()
 async def memory_store(ctx: Context, key: str, value: str, tags: Optional[str] = None) -> str:
-    """
-    Store or update a key/value entry in long-term memory.
+    """Store or update a key/value entry in long-term memory.
 
     Args:
-        key: Memory key (e.g. "user-preference-theme")
-        value: Content to store
-        tags: Optional comma-separated tags for retrieval
+        ctx (Context): FastMCP request context (injected automatically).
+        key (str): Memory key (e.g. ``"user-preference-theme"``).
+        value (str): Content to store.
+        tags (Optional[str]): Comma-separated tags for retrieval. Defaults to None.
+
+    Returns:
+        str: ``[OK] Stored: {key}`` on success, or an ``[ERROR]`` message on failure.
     """
     try:
         headers = get_http_headers()
@@ -526,11 +613,15 @@ async def memory_store(ctx: Context, key: str, value: str, tags: Optional[str] =
 
 @mcp.tool()
 async def memory_delete(ctx: Context, key: str) -> str:
-    """
-    Delete a memory entry by key.
+    """Delete a memory entry by key.
 
     Args:
-        key: Memory key to delete
+        ctx (Context): FastMCP request context (injected automatically).
+        key (str): Memory key to delete.
+
+    Returns:
+        str: ``[OK] Deleted: {key}`` on success, ``[NOT FOUND]`` if the key does
+        not exist, or an ``[ERROR]`` message on failure.
     """
     try:
         headers = get_http_headers()
@@ -546,11 +637,15 @@ async def memory_delete(ctx: Context, key: str) -> str:
 
 @mcp.tool()
 async def memory_list(ctx: Context, prefix: str = "") -> str:
-    """
-    List all memory keys, optionally filtered by prefix.
+    """List all memory keys, optionally filtered by prefix.
 
     Args:
-        prefix: Optional key prefix filter
+        ctx (Context): FastMCP request context (injected automatically).
+        prefix (str): Optional key prefix to filter by. Defaults to ``""``.
+
+    Returns:
+        str: Newline-separated list of matching memory keys, or
+        ``"No memory entries found."`` if none exist.
     """
     try:
         headers = get_http_headers()
@@ -566,15 +661,20 @@ async def memory_list(ctx: Context, prefix: str = "") -> str:
 
 @mcp.tool()
 async def memory_reindex(ctx: Context, batch_size: int = 32) -> str:
-    """
-    Rebuild the vector search index for all memory entries.
+    """Rebuild the vector search index for all memory entries.
 
     Use this after enabling embeddings on an existing memory directory, or
     after switching embedding models.  Has no effect if no embedding backend
     is configured (returns a message explaining this).
 
     Args:
-        batch_size: Number of entries to embed per API call (default 32)
+        ctx (Context): FastMCP request context (injected automatically).
+        batch_size (int): Number of entries to embed per API call. Defaults to 32.
+
+    Returns:
+        str: ``[OK] Reindex complete: indexed=N errors=N`` on success, an
+        informational message if no embedding backend is configured, or an
+        ``[ERROR]`` message on failure.
     """
     try:
         headers = get_http_headers()
@@ -1062,7 +1162,20 @@ async def tts(
 # ---------------------------------------------------------------------------
 
 def _jobs_api(path: str, method: str = "GET", **kwargs) -> dict:
-    """Call the jobs HTTP API synchronously."""
+    """Call the gateway jobs HTTP API synchronously.
+
+    Args:
+        path (str): URL path suffix appended to ``/api/v1/jobs``.
+        method (str): HTTP method (``"GET"``, ``"POST"``, etc.). Defaults to ``"GET"``.
+        **kwargs: Additional keyword arguments forwarded to the httpx client method
+            (e.g. ``json=`` for request body).
+
+    Returns:
+        dict: Parsed JSON response body.
+
+    Raises:
+        httpx.HTTPStatusError: If the gateway returns a non-2xx status code.
+    """
     import httpx
     url = f"{_GATEWAY_BASE}/api/v1/jobs{path}"
     with httpx.Client(timeout=15) as client:
@@ -1072,7 +1185,19 @@ def _jobs_api(path: str, method: str = "GET", **kwargs) -> dict:
 
 
 def _subagents_api(path: str, method: str = "GET", **kwargs) -> dict:
-    """Call the subagents HTTP API synchronously."""
+    """Call the gateway subagents HTTP API synchronously.
+
+    Args:
+        path (str): URL path suffix appended to ``/api/v1/subagents``.
+        method (str): HTTP method. Defaults to ``"GET"``.
+        **kwargs: Additional keyword arguments forwarded to the httpx client method.
+
+    Returns:
+        dict: Parsed JSON response body.
+
+    Raises:
+        httpx.HTTPStatusError: If the gateway returns a non-2xx status code.
+    """
     import httpx
     url = f"{_GATEWAY_BASE}/api/v1/subagents{path}"
     with httpx.Client(timeout=15) as client:
@@ -1082,7 +1207,17 @@ def _subagents_api(path: str, method: str = "GET", **kwargs) -> dict:
 
 
 def _fmt_http_err(e: Exception, resource_id: str = "") -> str:
-    """Convert an httpx HTTP error to a friendly tool result string."""
+    """Convert an httpx HTTP error to a friendly tool result string.
+
+    Args:
+        e (Exception): The exception to convert; checked for a ``.response``
+            attribute with a ``.status_code``.
+        resource_id (str): Optional resource identifier appended to ``[NOT FOUND]``
+            messages for context. Defaults to ``""``.
+
+    Returns:
+        str: A ``[NOT FOUND]``, ``[CONFLICT]``, or ``[ERROR]`` prefixed string.
+    """
     status = getattr(getattr(e, "response", None), "status_code", None)
     if status == 404:
         suffix = f" '{resource_id}'" if resource_id else ""
@@ -1093,17 +1228,28 @@ def _fmt_http_err(e: Exception, resource_id: str = "") -> str:
 
 
 def _get_caller_agent() -> Optional[str]:
-    """Read X-Agent-Name from the MCP HTTP request headers."""
+    """Read the calling agent name from the MCP HTTP request headers.
+
+    Returns:
+        Optional[str]: Value of the ``X-Agent-Name`` header, or None if the
+        header is absent or the request context is unavailable.
+    """
     return get_http_headers().get("x-agent-name") or None
 
 
 @mcp.tool()
 def jobs_list(all_agents: bool = False) -> str:
-    """
-    List scheduled jobs with status, next run time, and run counts.
+    """List scheduled jobs with status, next run time, and run counts.
 
     By default shows only jobs owned by the calling agent.
     Set all_agents=True to list every job across all agents.
+
+    Args:
+        all_agents (bool): If True, list jobs from all agents. Defaults to False.
+
+    Returns:
+        str: Formatted list of jobs showing name, kind, schedule, next run time,
+        and run count, or ``"No jobs scheduled."`` if none exist.
     """
     try:
         agent = _get_caller_agent()
@@ -1131,11 +1277,14 @@ def jobs_list(all_agents: bool = False) -> str:
 
 @mcp.tool()
 def jobs_get(job: str) -> str:
-    """
-    Get full details of a job by name or ID.
+    """Get full details of a job by name or ID.
 
     Args:
-        job: Job name or ID
+        job (str): Job name or ID.
+
+    Returns:
+        str: JSON-formatted job details, or a ``[NOT FOUND]`` / ``[ERROR]``
+        message if the job does not exist.
     """
     try:
         return json.dumps(_jobs_api(f"/{job}"), indent=2, default=str)
@@ -1167,7 +1316,11 @@ def jobs_create_command(
         description: Optional description
         timeout_seconds: Max execution time in seconds (default 300)
         deliver_channel: "telegram", "slack", or "" for gateway default
-        deliver_chat_id: Specific recipient ID (optional)
+        deliver_chat_id (str): Specific recipient ID (optional). Defaults to ``""``.
+
+    Returns:
+        str: ``[OK] Created command job '{name}' (id=...) next_run=...`` on success,
+        or an ``[ERROR]`` message on failure.
     """
     try:
         data = _jobs_api("/command", method="POST", json={
@@ -1207,11 +1360,15 @@ def jobs_create_agent(
                   "2026-03-10T09:00:00Z"    one-shot
         agent: Agent name from config (e.g. "assistant")
         message: Prompt to send to the agent each run
-        model: Optional model override, empty = use agent default
-        description: Optional description
-        timeout_seconds: Max agent response time (default 300)
-        deliver_channel: "telegram", "slack", or "" for gateway default
-        deliver_chat_id: Specific recipient ID (optional)
+        model (str): Optional model override; empty string uses agent default. Defaults to ``""``.
+        description (str): Optional description. Defaults to ``""``.
+        timeout_seconds (int): Max agent response time in seconds. Defaults to 300.
+        deliver_channel (str): ``"telegram"``, ``"slack"``, or ``""`` for gateway default. Defaults to ``""``.
+        deliver_chat_id (str): Specific recipient ID (optional). Defaults to ``""``.
+
+    Returns:
+        str: ``[OK] Created agent job '{name}' (id=...) next_run=...`` on success,
+        or an ``[ERROR]`` message on failure.
     """
     try:
         data = _jobs_api("/agent", method="POST", json={
@@ -1248,8 +1405,13 @@ def jobs_update(
         timeout_seconds: New timeout in seconds (0 = keep current)
         deliver_channel: New delivery channel (empty = keep current)
         deliver_chat_id: New delivery chat ID (empty = keep current)
-        report_to_agent: Agent name to deliver results to active session (empty = keep current, "none" = clear)
-        deliver_none: Set to true to suppress all delivery notifications
+        report_to_agent (str): Agent name to deliver results to active session;
+            ``"none"`` clears the setting; empty keeps current. Defaults to ``""``.
+        deliver_none (bool): If True, suppress all delivery notifications. Defaults to False.
+
+    Returns:
+        str: ``[OK] Updated '{name}' next_run=...`` on success, or a
+        ``[NOT FOUND]`` / ``[ERROR]`` message on failure.
     """
     try:
         payload: dict = {}
@@ -1285,7 +1447,11 @@ def jobs_delete(job: str) -> str:
     Use jobs_enable or jobs_disable to control them instead.
 
     Args:
-        job: Job name or ID
+        job (str): Job name or ID.
+
+    Returns:
+        str: ``[OK] Deleted job '...'`` on success, ``[FORBIDDEN]`` for system jobs,
+        or a ``[NOT FOUND]`` / ``[ERROR]`` message on failure.
     """
     if job.startswith("__") and job.endswith("__"):
         return f"[FORBIDDEN] System job '{job}' cannot be deleted. Use jobs_enable or jobs_disable to control it."
@@ -1298,11 +1464,14 @@ def jobs_delete(job: str) -> str:
 
 @mcp.tool()
 def jobs_enable(job: str) -> str:
-    """
-    Enable a disabled job.
+    """Enable a disabled job.
 
     Args:
-        job: Job name or ID
+        job (str): Job name or ID.
+
+    Returns:
+        str: ``[OK] Enabled '{job}' next_run=...`` on success, or a
+        ``[NOT FOUND]`` / ``[ERROR]`` message on failure.
     """
     try:
         data = _jobs_api(f"/{job}/enable", method="POST")
@@ -1313,11 +1482,14 @@ def jobs_enable(job: str) -> str:
 
 @mcp.tool()
 def jobs_disable(job: str) -> str:
-    """
-    Disable a job without deleting it.
+    """Disable a job without deleting it.
 
     Args:
-        job: Job name or ID
+        job (str): Job name or ID.
+
+    Returns:
+        str: ``[OK] Disabled '{job}'`` on success, or a ``[NOT FOUND]`` /
+        ``[ERROR]`` message on failure.
     """
     try:
         data = _jobs_api(f"/{job}/disable", method="POST")
@@ -2217,6 +2389,77 @@ async def secret_get(name: str) -> str:
         return r.get("value", "")
     except Exception as e:
         return f"[ERROR] {e}"
+
+
+# ---------------------------------------------------------------------------
+# Self-knowledge tools
+# ---------------------------------------------------------------------------
+
+_self_loader = None
+
+
+def _get_self_loader():
+    global _self_loader
+    if _self_loader is None:
+        from pyclaw.self.loader import DocLoader
+        _self_loader = DocLoader()
+    return _self_loader
+
+
+@mcp.tool()
+def self_topics() -> str:
+    """List all available pyclaw self-knowledge topics.
+
+    Returns the full topic index. Call this first to discover what documentation
+    is available before calling self_read(). Topics are grouped by category:
+    architecture/, systems/, and development/.
+
+    Example:
+        self_topics()
+    """
+    return _get_self_loader().topics()
+
+
+@mcp.tool()
+def self_read(topic: str) -> str:
+    """Read pyclaw documentation for a specific topic.
+
+    Returns the full markdown documentation for the requested topic. Use
+    self_topics() first to see what topics are available.
+
+    Args:
+        topic: Path relative to the knowledge base root, without .md extension.
+               Examples: 'overview', 'architecture/gateway', 'systems/jobs',
+               'development/testing'
+
+    Example:
+        self_read('architecture/sessions')
+        self_read('systems/jobs')
+        self_read('development/conventions')
+    """
+    return _get_self_loader().read(topic)
+
+
+@mcp.tool()
+def self_source(module: str) -> str:
+    """Read pyclaw source code with line numbers.
+
+    Returns the source of any file within the pyclaw package, with line numbers
+    prepended to each line. Only paths within the pyclaw package are accessible.
+
+    Use this for fine-grained implementation detail after using self_read() for
+    conceptual understanding.
+
+    Args:
+        module: Path relative to the pyclaw package root, using forward slashes.
+                Examples: 'core/gateway.py', 'agents/runner.py',
+                'jobs/scheduler.py', 'tools/server.py'
+
+    Example:
+        self_source('core/gateway.py')
+        self_source('hooks/registry.py')
+    """
+    return _get_self_loader().source(module)
 
 
 # ---------------------------------------------------------------------------

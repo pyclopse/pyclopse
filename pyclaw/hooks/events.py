@@ -2,19 +2,46 @@
 
 
 class HookEvent:
-    """
-    Named hook events fired throughout the pyclaw lifecycle.
+    """Named hook event constants fired throughout the pyclaw lifecycle.
 
-    Two categories:
+    This class acts as a namespace of string constants — it is never
+    instantiated. Importing ``HookEvent`` is the only required import for
+    event name lookups.
 
-    Notification events — all registered handlers run; return values are
-    ignored.  Use these for logging, auditing, side-effects, etc.
+    Two categories of events are defined:
 
-    Interceptable events — handlers run in priority order and the first
-    handler that returns a non-None value short-circuits the chain.  The
-    returned value is used as the operation result instead of the default
-    backend.  The memory:* events use this mechanism so that a plugin can
-    transparently replace ClawVault with an alternative backend.
+    **Notification events** — all registered handlers are called in priority
+    order. Return values are ignored. Use these for logging, auditing, and
+    side-effects.
+
+    **Interceptable events** — handlers run in priority order and the first
+    handler that returns a non-None value short-circuits the chain. The
+    returned value replaces the default backend result. The ``memory:*``
+    events use this contract so that plugins can transparently substitute an
+    alternative memory backend for ClawVault.
+
+    Attributes:
+        GATEWAY_STARTUP (str): Fired once when the gateway has fully started up.
+        GATEWAY_SHUTDOWN (str): Fired once when the gateway is shutting down.
+        MESSAGE_RECEIVED (str): Inbound message, fired before any preprocessing.
+        MESSAGE_TRANSCRIBED (str): Fired after voice/audio transcription (voice only).
+        MESSAGE_PREPROCESSED (str): After preprocessing, before agent dispatch.
+        MESSAGE_SENT (str): Outbound reply, fired after the agent response is sent.
+        COMMAND_NEW (str): Fired when a /new slash command is processed.
+        COMMAND_RESET (str): Fired when a /reset slash command is processed.
+        COMMAND_ANY (str): Wildcard — also fires for every command:xxx event.
+        SESSION_CREATED (str): Fired when a new session is created.
+        SESSION_EXPIRED (str): Fired when a session is evicted by the TTL reaper.
+        AGENT_BOOTSTRAP (str): New session runner created; bootstrap files loaded.
+        AGENT_RESPONSE (str): Fired after an agent produces a response.
+        TOOL_BEFORE (str): Fired before a tool is executed.
+        TOOL_AFTER (str): Fired after a tool execution completes.
+        MEMORY_READ (str): Interceptable — read a memory entry by key.
+        MEMORY_WRITE (str): Interceptable — write a memory entry.
+        MEMORY_DELETE (str): Interceptable — delete a memory entry.
+        MEMORY_SEARCH (str): Interceptable — search memory for matching entries.
+        MEMORY_LIST (str): Interceptable — list all memory entries.
+        INTERCEPTABLE (frozenset): Set of event names that use the first-wins contract.
     """
 
     # ------------------------------------------------------------------ #

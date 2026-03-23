@@ -34,7 +34,16 @@ logger = logging.getLogger(__name__)
 
 @dataclass
 class QueuedMessage:
-    """A single inbound message waiting for dispatch."""
+    """A single inbound message waiting for dispatch.
+
+    Attributes:
+        content (str): The message text content.
+        kwargs (dict): Extra keyword arguments forwarded to the dispatch function.
+        future (asyncio.Future): Resolved with the dispatch result (or cancelled
+            if the message is evicted).
+        arrived_at (float): Monotonic timestamp of when the message was enqueued.
+    """
+
     content: str
     kwargs: dict
     future: asyncio.Future
@@ -42,7 +51,15 @@ class QueuedMessage:
 
 
 class SessionMessageQueue:
-    """Per-session queue with a drain loop that applies the configured mode."""
+    """Per-session queue with a drain loop that applies the configured queue mode.
+
+    Each session gets its own queue instance.  The drain loop serializes
+    dispatch calls according to the active QueueMode (followup, collect,
+    interrupt, steer, steer-backlog, or queue).
+
+    Attributes:
+        session_key (str): Identifies this queue (used in log messages).
+    """
 
     def __init__(
         self,
@@ -53,6 +70,20 @@ class SessionMessageQueue:
         drop: DropPolicy,
         dispatch_fn: Callable,  # async (content: str, **kwargs) -> Optional[str]
     ):
+        """Initialize the SessionMessageQueue.
+
+        Args:
+            session_key (str): Unique key identifying this queue (e.g.
+                "telegram:12345").
+            mode (QueueMode): How queued messages are combined or cancelled.
+            debounce_ms (int): Milliseconds to wait before draining after the
+                most recent enqueue (ignored in QUEUE mode).
+            cap (int): Maximum number of messages to hold before drop policy
+                applies (ignored in interrupt/steer modes).
+            drop (DropPolicy): Which message to discard when cap is reached.
+            dispatch_fn (Callable): Async callable ``(content: str, **kwargs)``
+                that performs the actual agent call and returns the response.
+        """
         self.session_key = session_key
         self._mode = mode
         self._debounce_ms = debounce_ms
@@ -70,7 +101,25 @@ class SessionMessageQueue:
         self._logger = logging.getLogger(f"pyclaw.queue.{session_key}")
 
     async def enqueue(self, content: str, **kwargs) -> asyncio.Future:
-        """Add a message to the queue and return a Future that resolves with the response."""
+        """Add a message to the queue and return a Future that resolves with the response.
+
+        Applies the configured QueueMode immediately on arrival:
+        - INTERRUPT: cancels all in-flight and queued items.
+        - STEER / STEER_PLUS_BACKLOG: cancels the current task only.
+        - STEER_BACKLOG: accumulates without cancelling.
+        - FOLLOWUP / COLLECT / QUEUE: applies the cap + drop policy.
+
+        The drain loop is started as a background task if not already running.
+
+        Args:
+            content (str): Message text to dispatch.
+            **kwargs: Extra keyword arguments forwarded to the dispatch function
+                (e.g. session, agent routing metadata).
+
+        Returns:
+            asyncio.Future: Resolved with the dispatch result string, or
+                cancelled if this message is evicted by cap/drop/interrupt.
+        """
         loop = asyncio.get_event_loop()
         fut = loop.create_future()
         msg = QueuedMessage(content=content, kwargs=kwargs, future=fut)
@@ -109,7 +158,17 @@ class SessionMessageQueue:
         return fut
 
     def _apply_cap(self, msg: QueuedMessage) -> None:
-        """Apply cap + drop policy for followup/collect modes."""
+        """Apply cap and drop policy for followup/collect/queue modes.
+
+        If the queue has room, the message is appended.  When the cap is
+        reached, the drop policy determines which message is discarded:
+        - DropPolicy.NEW: the incoming message is cancelled and discarded.
+        - DropPolicy.OLD / DropPolicy.SUMMARIZE: the oldest queued message is
+          evicted (SUMMARIZE also sets a flag to prepend a label on the next drain).
+
+        Args:
+            msg (QueuedMessage): The message to add or discard.
+        """
         if len(self._queue) < self._cap:
             self._queue.append(msg)
             return
@@ -125,7 +184,13 @@ class SessionMessageQueue:
         self._queue.append(msg)
 
     async def _drain_loop(self) -> None:
-        """Drain loop — runs as a background task, processes queue per mode."""
+        """Drain the queue in a background task, processing messages per the active mode.
+
+        Runs until the queue is empty, then exits.  A new drain task is created
+        by enqueue() the next time a message arrives.  Handles cancellation for
+        interrupt and steer modes by re-inserting inflight items at the front
+        of the queue before the next iteration.
+        """
         while True:
             # Debounce: let rapid bursts settle before draining.
             # queue mode skips debounce — it drains immediately one-by-one.
@@ -222,7 +287,16 @@ class SessionMessageQueue:
                     break
 
     def update_config(self, **kwargs) -> None:
-        """Update live queue config — used by /queue command."""
+        """Update live queue configuration without restarting the drain loop.
+
+        Changes take effect on the next drain iteration.  Used by the
+        ``/queue`` slash command to adjust queue behaviour at runtime.
+
+        Args:
+            **kwargs: Supported keys: ``mode`` (str QueueMode value),
+                ``debounce_ms`` (int), ``cap`` (int), ``drop`` (str
+                DropPolicy value).
+        """
         if "mode" in kwargs:
             self._mode = QueueMode(kwargs["mode"])
         if "debounce_ms" in kwargs:
@@ -234,9 +308,20 @@ class SessionMessageQueue:
 
 
 class QueueManager:
-    """Manages per-session message queues across the gateway."""
+    """Manages per-session message queues across the gateway.
+
+    Creates and stores one SessionMessageQueue per session key.  Allows
+    runtime configuration overrides via the ``/queue`` slash command without
+    recreating queues or losing pending messages.
+
+    Attributes:
+        _queues (Dict[str, SessionMessageQueue]): Active queues keyed by session key.
+        _config_overrides (Dict[str, dict]): Per-session config overrides applied
+            at queue creation and when update_config() is called.
+    """
 
     def __init__(self) -> None:
+        """Initialize the QueueManager with empty queue and override dicts."""
         self._queues: Dict[str, SessionMessageQueue] = {}
         # Session-level config overrides (set by /queue command)
         self._config_overrides: Dict[str, dict] = {}
@@ -247,12 +332,21 @@ class QueueManager:
         base_config: QueueConfig,
         dispatch_fn: Callable,
     ) -> SessionMessageQueue:
-        """Get existing queue or create one with the given config.
+        """Get an existing queue or create one with the resolved configuration.
 
-        Resolution order (highest to lowest priority):
-          1. Per-session override (set by ``/queue`` command)
-          2. Per-channel override (``queue.byChannel.<channel>`` in agent config)
-          3. Agent base config (``queue.mode``)
+        Configuration is resolved in descending priority:
+        1. Per-session override stored by a prior ``/queue`` command.
+        2. Per-channel override (``queue.byChannel.<channel>`` in agent config).
+        3. Agent base queue config (``queue.mode``).
+
+        Args:
+            session_key (str): Unique identifier for the session, typically
+                ``"<channel>:<sender_id>"``.
+            base_config (QueueConfig): Agent-level queue configuration.
+            dispatch_fn (Callable): Async dispatch callable passed to the queue.
+
+        Returns:
+            SessionMessageQueue: The existing or newly created queue.
         """
         if session_key not in self._queues:
             overrides = self._config_overrides.get(session_key, {})
@@ -281,15 +375,29 @@ class QueueManager:
         return self._queues[session_key]
 
     def remove(self, session_key: str) -> None:
-        """Remove and cancel a session's queue."""
+        """Remove a session's queue and cancel its drain task.
+
+        Args:
+            session_key (str): The session key whose queue should be removed.
+        """
         q = self._queues.pop(session_key, None)
         if q and q._drain_task and not q._drain_task.done():
             q._drain_task.cancel()
 
     def update_config(self, session_key: str, **kwargs) -> bool:
-        """Update config for a session key (stores override + applies to live queue).
+        """Update configuration for a session key.
 
-        Returns True if a live queue was updated, False if only the override was stored.
+        Stores the override for future queue creation and, if a live queue
+        already exists, applies the change immediately.
+
+        Args:
+            session_key (str): The session key to update.
+            **kwargs: Queue config fields to update (see
+                SessionMessageQueue.update_config for supported keys).
+
+        Returns:
+            bool: True if a live queue was updated; False if only the stored
+                override was updated (queue not yet created).
         """
         if session_key not in self._config_overrides:
             self._config_overrides[session_key] = {}
@@ -301,5 +409,13 @@ class QueueManager:
         return True
 
     def get_config_override(self, session_key: str) -> dict:
-        """Return any stored config overrides for a session key."""
+        """Return any stored config overrides for a session key.
+
+        Args:
+            session_key (str): The session key to query.
+
+        Returns:
+            dict: A copy of the stored override dict, or an empty dict if no
+                overrides have been set.
+        """
         return dict(self._config_overrides.get(session_key, {}))

@@ -19,14 +19,33 @@ router = APIRouter()
 
 # In-memory node registry (in production, persist to disk/database)
 class NodeRegistry:
-    """Registry for managing connected nodes."""
-    
+    """Registry for managing connected nodes.
+
+    Maintains two collections: fully registered nodes and nodes that are
+    awaiting manual approval before they are allowed to participate.
+
+    Attributes:
+        nodes (Dict[str, Node]): Approved and active nodes keyed by node_id.
+        pending_approvals (Dict[str, Node]): Nodes awaiting approval keyed by node_id.
+    """
+
     def __init__(self):
+        """Initialise empty node and pending-approval registries."""
         self.nodes: Dict[str, "Node"] = {}
         self.pending_approvals: Dict[str, "Node"] = {}
     
     def add_node(self, node: "Node", require_approval: bool = True) -> bool:
-        """Add a node to the registry."""
+        """Add a node to the registry, optionally routing it through approval.
+
+        Args:
+            node (Node): The node to register.
+            require_approval (bool): When True the node is placed in
+                ``pending_approvals`` rather than ``nodes``. Defaults to True.
+
+        Returns:
+            bool: True when the node is immediately approved; False when it is
+                placed in the pending queue or already registered.
+        """
         if node.node_id in self.nodes:
             logger.warning(f"Node {node.node_id} already registered")
             return False
@@ -41,7 +60,14 @@ class NodeRegistry:
             return True
     
     def approve_node(self, node_id: str) -> bool:
-        """Approve a pending node."""
+        """Move a node from the pending queue into the active registry.
+
+        Args:
+            node_id (str): ID of the node to approve.
+
+        Returns:
+            bool: True if found and approved; False if not in the pending queue.
+        """
         if node_id not in self.pending_approvals:
             return False
         node = self.pending_approvals.pop(node_id)
@@ -50,7 +76,14 @@ class NodeRegistry:
         return True
     
     def reject_node(self, node_id: str) -> bool:
-        """Reject a pending node."""
+        """Remove a node from the pending approval queue without approving it.
+
+        Args:
+            node_id (str): ID of the node to reject.
+
+        Returns:
+            bool: True if found and removed; False if not in the pending queue.
+        """
         if node_id in self.pending_approvals:
             del self.pending_approvals[node_id]
             logger.info(f"Node {node_id} rejected")
@@ -58,7 +91,14 @@ class NodeRegistry:
         return False
     
     def remove_node(self, node_id: str) -> bool:
-        """Remove a node from the registry."""
+        """Remove an active node from the registry.
+
+        Args:
+            node_id (str): ID of the node to remove.
+
+        Returns:
+            bool: True if found and removed; False if not registered.
+        """
         if node_id in self.nodes:
             del self.nodes[node_id]
             logger.info(f"Node {node_id} removed")
@@ -66,23 +106,52 @@ class NodeRegistry:
         return False
     
     def get_node(self, node_id: str) -> Optional["Node"]:
-        """Get a node by ID."""
+        """Retrieve an active node by its ID.
+
+        Args:
+            node_id (str): The node's unique identifier.
+
+        Returns:
+            Optional[Node]: The Node object, or None if not found.
+        """
         return self.nodes.get(node_id)
     
     def is_registered(self, node_id: str) -> bool:
-        """Check if a node is registered."""
+        """Check if a node is in the active registry.
+
+        Args:
+            node_id (str): The node's unique identifier.
+
+        Returns:
+            bool: True if the node is registered and approved.
+        """
         return node_id in self.nodes
     
     def is_pending(self, node_id: str) -> bool:
-        """Check if a node is pending approval."""
+        """Check if a node is awaiting approval.
+
+        Args:
+            node_id (str): The node's unique identifier.
+
+        Returns:
+            bool: True if the node is in the pending approval queue.
+        """
         return node_id in self.pending_approvals
     
     def list_nodes(self) -> List["Node"]:
-        """List all registered nodes."""
+        """Return all approved and active nodes.
+
+        Returns:
+            List[Node]: All nodes currently in the active registry.
+        """
         return list(self.nodes.values())
     
     def list_pending(self) -> List["Node"]:
-        """List all pending nodes."""
+        """Return all nodes awaiting approval.
+
+        Returns:
+            List[Node]: All nodes currently in the pending approval queue.
+        """
         return list(self.pending_approvals.values())
 
 
@@ -92,7 +161,20 @@ registry = NodeRegistry()
 
 @dataclass
 class Node:
-    """Represents a connected node."""
+    """Represents a connected peer node.
+
+    Attributes:
+        node_id (str): Unique identifier for the node.
+        name (str): Human-readable name for the node.
+        host (str): Hostname or IP address of the node.
+        port (int): Port the node listens on.
+        status (str): Current status string (e.g. "online", "offline").
+        registered_at (datetime): When the node was first registered.
+        last_seen (datetime): Most recent contact timestamp.
+        capabilities (List[str]): Feature tags advertised by the node.
+        metadata (Dict[str, Any]): Arbitrary extra data from the node.
+    """
+
     node_id: str
     name: str
     host: str
@@ -102,9 +184,14 @@ class Node:
     last_seen: datetime = field(default_factory=datetime.now)
     capabilities: List[str] = field(default_factory=list)
     metadata: Dict[str, Any] = field(default_factory=dict)
-    
+
     def to_dict(self) -> Dict[str, Any]:
-        """Convert to dictionary."""
+        """Serialise the node to a camelCase JSON-friendly dictionary.
+
+        Returns:
+            Dict[str, Any]: Node fields with ISO-formatted timestamps and
+                camelCase key names suitable for API responses.
+        """
         return {
             "nodeId": self.node_id,
             "name": self.name,
@@ -156,7 +243,18 @@ class NodeMessageResponse(BaseModel):
 
 
 def verify_secret(secret_key: Optional[str], x_signature: Optional[str]) -> bool:
-    """Verify the secret key for authentication."""
+    """Verify the HMAC signature against the configured secret key.
+
+    Args:
+        secret_key (Optional[str]): The shared secret configured for this gateway.
+            When None, no verification is performed and True is returned.
+        x_signature (Optional[str]): The ``X-Signature`` header value from the
+            request. Must not be empty when ``secret_key`` is set.
+
+    Returns:
+        bool: True if the signature is valid or no secret is configured;
+            False when a secret is required but no signature is present.
+    """
     if not secret_key:
         return True  # No secret configured
     if not x_signature:
@@ -165,7 +263,14 @@ def verify_secret(secret_key: Optional[str], x_signature: Optional[str]) -> bool
 
 
 def get_current_node_id(x_node_id: Optional[str] = Header(None)) -> Optional[str]:
-    """Get current node ID from header."""
+    """Extract the calling node's ID from the ``X-Node-Id`` request header.
+
+    Args:
+        x_node_id (Optional[str]): Value of the ``X-Node-Id`` HTTP header.
+
+    Returns:
+        Optional[str]: The node ID string, or None if the header is absent.
+    """
     return x_node_id
 
 

@@ -31,14 +31,31 @@ _WatchEntry = Tuple[float, Callable[[], Awaitable[None]]]
 class FileWatcher:
     """Poll-based file watcher with debouncing.
 
-    Args:
-        poll_interval: Seconds between mtime checks (default 0.5).
-        debounce: Seconds a changed mtime must be stable before the
-                  callback fires (default 0.5).  This absorbs non-atomic
-                  editor saves.
+    Monitors a set of paths by polling their modification times at a
+    configurable interval.  When a stable change is detected (mtime unchanged
+    for the debounce window), the registered async callback is invoked.
+
+    Does not require external dependencies (inotify, watchdog, etc.) — pure
+    asyncio polling.
+
+    Attributes:
+        _poll_interval (float): Seconds between mtime checks.
+        _debounce (float): Seconds a changed mtime must remain stable before
+            the callback fires.
+        _watches (Dict[Path, _WatchEntry]): Registered paths and their callbacks.
+        _pending (Dict[Path, Tuple[float, float]]): Paths with detected but
+            not-yet-debounced changes.
+        _task (Optional[asyncio.Task]): The background polling task.
     """
 
     def __init__(self, poll_interval: float = 0.5, debounce: float = 0.5) -> None:
+        """Initialize the FileWatcher.
+
+        Args:
+            poll_interval (float): Seconds between mtime checks. Defaults to 0.5.
+            debounce (float): Seconds a changed mtime must be stable before the
+                callback fires.  Absorbs non-atomic editor saves. Defaults to 0.5.
+        """
         self._poll_interval = poll_interval
         self._debounce = debounce
         # path → (last-known-mtime, callback)
@@ -50,21 +67,37 @@ class FileWatcher:
     # ── Public API ────────────────────────────────────────────────────────────
 
     def watch(self, path: Path, callback: Callable[[], Awaitable[None]]) -> None:
-        """Register *path* to be watched.  *callback* is an async callable."""
+        """Register a path to be watched for changes.
+
+        The current mtime is recorded as the baseline; future changes are
+        detected relative to it.
+
+        Args:
+            path (Path): Filesystem path to monitor.
+            callback (Callable[[], Awaitable[None]]): Async callable invoked
+                when a stable change is detected.
+        """
         mtime = self._safe_mtime(path)
         self._watches[path] = (mtime, callback)
         logger.debug(f"Watching: {path}")
 
     def unwatch(self, path: Path) -> None:
-        """Stop watching *path*."""
+        """Stop watching a path and remove any pending debounce state.
+
+        Args:
+            path (Path): Filesystem path to stop monitoring.
+        """
         self._watches.pop(path, None)
         self._pending.pop(path, None)
 
     def acknowledge(self, path: Path) -> None:
-        """Update the stored mtime for *path* to its current on-disk value.
+        """Update the stored mtime for a path to suppress self-triggered reloads.
 
         Call this immediately after writing a watched file yourself so the
         watcher does not treat your own write as an external change.
+
+        Args:
+            path (Path): Path whose baseline mtime should be refreshed.
         """
         if path in self._watches:
             _, cb = self._watches[path]
@@ -72,7 +105,10 @@ class FileWatcher:
             self._pending.pop(path, None)
 
     async def start(self) -> None:
-        """Start the background polling task."""
+        """Start the background polling task.
+
+        Idempotent — does nothing if the task is already running.
+        """
         if self._task and not self._task.done():
             return
         self._task = asyncio.create_task(self._loop(), name="pyclaw-file-watcher")
@@ -96,12 +132,26 @@ class FileWatcher:
 
     @staticmethod
     def _safe_mtime(path: Path) -> float:
+        """Return the mtime for a path, or 0.0 if it does not exist or errors.
+
+        Args:
+            path (Path): Filesystem path to stat.
+
+        Returns:
+            float: Modification time as a Unix timestamp, or 0.0 on failure.
+        """
         try:
             return path.stat().st_mtime if path.exists() else 0.0
         except OSError:
             return 0.0
 
     async def _loop(self) -> None:
+        """Background polling loop that checks mtimes and fires callbacks.
+
+        Runs until cancelled.  For each watched path, detects mtime changes,
+        waits for the debounce window to expire, then calls the registered
+        callback.  Errors in callbacks are logged and do not stop the loop.
+        """
         while True:
             await asyncio.sleep(self._poll_interval)
             now = asyncio.get_event_loop().time()

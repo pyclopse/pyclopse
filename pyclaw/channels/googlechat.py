@@ -12,18 +12,39 @@ logger = logging.getLogger("pyclaw.channels.googlechat")
 
 
 class GoogleChatAdapter(ChannelAdapter):
-    """
-    Google Chat adapter using Google Chat REST API.
-    
-    Requires:
-    - Service account JSON credentials OR
-    - OAuth2 tokens (for user-level access)
-    - Google Chat API enabled in Google Cloud Console
-    
-    Docs: https://developers.google.com/hangouts/chat
+    """Google Chat adapter using the Google Chat REST API.
+
+    Supports service account credentials or direct OAuth2 access tokens for
+    authentication. Requires the Google Chat API to be enabled in Google Cloud
+    Console and ``httpx`` installed.
+
+    See: https://developers.google.com/hangouts/chat
+
+    Attributes:
+        service_account_json (Optional[str | dict]): Service account JSON
+            as a string or dict, used for server-to-server auth.
+        service_account_file (Optional[str]): Path to a service account JSON
+            file, used when ``service_account_json`` is not provided.
+        access_token (Optional[str]): Pre-obtained OAuth2 access token.
+        refresh_token (Optional[str]): OAuth2 refresh token for token renewal.
+        client_id (Optional[str]): OAuth2 client ID.
+        client_secret (Optional[str]): OAuth2 client secret.
+        bot_user (Optional[str]): Bot's user resource name for verification.
     """
 
     def __init__(self, config: Dict[str, Any]):
+        """Initialize the Google Chat adapter with API credentials.
+
+        Args:
+            config (Dict[str, Any]): Configuration dictionary. Expected keys:
+                ``service_account_json`` (str | dict): Service account JSON.
+                ``service_account_file`` (str): Path to service account file.
+                ``access_token`` (str): Pre-obtained OAuth2 access token.
+                ``refresh_token`` (str): OAuth2 refresh token.
+                ``client_id`` (str): OAuth2 client ID.
+                ``client_secret`` (str): OAuth2 client secret.
+                ``bot_user`` (str): Bot user resource name for verification.
+        """
         super().__init__(config)
         self.service_account_json = config.get("service_account_json")
         self.service_account_file = config.get("service_account_file")
@@ -34,22 +55,35 @@ class GoogleChatAdapter(ChannelAdapter):
         self.bot_user = config.get("bot_user")  # Bot's user ID
         self._session = None
         self._token = None
-    
+
     @property
     def channel_name(self) -> str:
+        """Return the channel name for this adapter.
+
+        Returns:
+            str: Always ``"googlechat"``.
+        """
         return "googlechat"
-    
+
     async def connect(self) -> None:
-        """Initialize the Google Chat API client."""
+        """Initialize the Google Chat API client and verify credentials.
+        Obtains an access token via service account or uses the configured
+        ``access_token`` directly. Creates an ``httpx.AsyncClient`` and
+        optionally verifies credentials by fetching the bot user profile.
+
+        Raises:
+            RuntimeError: If ``httpx`` is not installed or if authentication
+                or connection fails.
+        """
         try:
             import httpx
-            
+
             # Get access token
             if self.service_account_json:
                 self._token = await self._get_service_account_token()
             elif self.access_token:
                 self._token = self.access_token
-            
+
             self._session = httpx.AsyncClient(
                 base_url="https://chat.googleapis.com/v1",
                 headers={
@@ -58,18 +92,18 @@ class GoogleChatAdapter(ChannelAdapter):
                 },
                 timeout=30.0,
             )
-            
+
             # Verify by getting bot info
             if self.bot_user:
                 response = await self._session.get(f"/users/{self.bot_user}")
                 if response.status_code != 200:
                     raise RuntimeError(f"Google Chat API error: {response.text}")
-                
+
                 user_info = response.json()
                 logger.info(f"Connected to Google Chat as {user_info.get('name', 'bot')}")
             else:
                 logger.info("Connected to Google Chat")
-            
+
         except ImportError:
             raise RuntimeError(
                 "httpx not installed. "
@@ -77,9 +111,21 @@ class GoogleChatAdapter(ChannelAdapter):
             )
         except Exception as e:
             raise RuntimeError(f"Failed to connect to Google Chat: {e}")
-    
+
     async def _get_service_account_token(self) -> str:
-        """Get access token from service account."""
+        """Obtain a Google OAuth2 access token from service account credentials.
+
+        Constructs and signs a JWT using the service account private key, then
+        exchanges it for an access token at the Google token endpoint.
+
+        Returns:
+            str: A short-lived OAuth2 access token valid for one hour.
+
+        Raises:
+            RuntimeError: If ``google-auth`` or ``PyJWT`` are not installed.
+            ValueError: If no service account credentials are provided.
+            RuntimeError: If the token exchange request fails.
+        """
         try:
             import jwt
             from google.auth import transport
@@ -165,7 +211,10 @@ class GoogleChatAdapter(ChannelAdapter):
             return token_result["access_token"]
     
     async def disconnect(self) -> None:
-        """Disconnect from Google Chat."""
+        """Disconnect from Google Chat and release resources.
+
+        Closes the httpx session and clears the stored access token.
+        """
         if self._session:
             await self._session.aclose()
         self._session = None
@@ -178,7 +227,30 @@ class GoogleChatAdapter(ChannelAdapter):
         content: str,
         reply_to: Optional[str] = None,
     ) -> str:
-        """Send a message to a Google Chat space or user."""
+        """Send a text message to a Google Chat space or user.
+
+        Routes to the appropriate Google Chat API endpoint based on whether
+        ``target.group_id`` (space) or ``target.user_id`` (DM) is set.
+
+        Args:
+            target (MessageTarget): Destination. ``group_id`` is treated as a
+                space name (``spaces/xxx``); ``user_id`` is treated as a user
+                resource name (``users/xxx``). Prefixes are added automatically
+                if absent.
+            content (str): Text content to send.
+            reply_to (Optional[str]): Thread key for in-thread replies.
+                Defaults to None.
+
+        Returns:
+            str: Google Chat message resource name (e.g.
+                ``spaces/xxx/messages/yyy``), or ``"sent"`` if absent.
+
+        Raises:
+            RuntimeError: If the client is not connected or the API returns
+                an error.
+            ValueError: If neither ``target.user_id`` nor ``target.group_id``
+                is set.
+        """
         if not self._session:
             raise RuntimeError("Google Chat client not connected")
         
@@ -225,7 +297,25 @@ class GoogleChatAdapter(ChannelAdapter):
         target: MessageTarget,
         media: MediaAttachment,
     ) -> str:
-        """Send media to Google Chat."""
+        """Send media to a Google Chat space or user.
+
+        Sends URL-based media as a text message with the URL appended. Local
+        file uploads are not supported due to the complexity of the Google
+        Chat upload protocol.
+
+        Args:
+            target (MessageTarget): Destination space or user.
+            media (MediaAttachment): Media to send. Only ``url`` is supported.
+
+        Returns:
+            str: Google Chat message resource name of the sent message.
+
+        Raises:
+            NotImplementedError: If ``media.file_path`` is set (local file
+                upload is not implemented).
+            ValueError: If neither ``media.url`` nor ``media.file_path`` is
+                provided.
+        """
         if not self._session:
             raise RuntimeError("Google Chat client not connected")
         
@@ -250,7 +340,19 @@ class GoogleChatAdapter(ChannelAdapter):
         return await self.send_message(target_with_content, content)
     
     async def react(self, message_id: str, emoji: str) -> None:
-        """Add reaction to a message."""
+        """Add an emoji reaction to a Google Chat message.
+
+        Parses the message resource name to extract the space, then POSTs
+        a reaction. Failures are logged as warnings rather than raised.
+
+        Args:
+            message_id (str): Google Chat message resource name in the format
+                ``spaces/xxx/messages/yyy``.
+            emoji (str): Unicode emoji character to use as the reaction.
+
+        Raises:
+            RuntimeError: If the client is not connected.
+        """
         if not self._session:
             raise RuntimeError("Google Chat client not connected")
         
@@ -278,7 +380,19 @@ class GoogleChatAdapter(ChannelAdapter):
             logger.warning(f"Failed to add reaction: {response.text}")
     
     async def handle_webhook(self, payload: Dict[str, Any]) -> Optional[Message]:
-        """Handle incoming Google Chat webhook."""
+        """Parse and handle an incoming Google Chat webhook payload.
+
+        Handles ``MESSAGE``, ``ADDED_TO_SPACE``, and ``REMOVED_FROM_SPACE``
+        event types.
+
+        Args:
+            payload (Dict[str, Any]): Raw JSON webhook payload from Google Chat.
+
+        Returns:
+            Optional[Message]: Parsed message for ``MESSAGE``,
+                ``ADDED_TO_SPACE``, or ``REMOVED_FROM_SPACE`` events, or
+                ``None`` for unrecognized event types or parse errors.
+        """
         try:
             event_type = payload.get("type")
             
@@ -331,7 +445,12 @@ class GoogleChatAdapter(ChannelAdapter):
             return None
     
     async def _listen(self) -> None:
-        """Listen for messages (polling fallback)."""
+        """Polling fallback for Google Chat (minimal implementation).
+
+        Google Chat primarily uses webhooks for inbound messages. This method
+        sleeps in a loop as a placeholder. Full polling would require the
+        ``spaces.list`` and ``spaces.messages.list`` APIs.
+        """
         # Google Chat primarily uses webhooks, but we can poll for new messages
         # This requires the spaces.list and spaces.messages.list APIs
         while self._running:

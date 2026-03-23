@@ -14,7 +14,17 @@ router = APIRouter()
 
 # Request/Response models
 class AgentConfigUpdate(BaseModel):
-    """Agent configuration update."""
+    """Partial agent configuration update payload.
+
+    All fields are optional; only the fields present in the request body
+    are applied to the agent's current configuration.
+
+    Attributes:
+        model (Optional[str]): LLM model identifier to switch to.
+        temperature (Optional[float]): Sampling temperature override.
+        max_tokens (Optional[int]): Maximum output token limit override.
+        system_prompt (Optional[str]): Replacement system prompt text.
+    """
     model: Optional[str] = None
     temperature: Optional[float] = None
     max_tokens: Optional[int] = None
@@ -22,7 +32,15 @@ class AgentConfigUpdate(BaseModel):
 
 
 class AgentResponse(BaseModel):
-    """Agent information response."""
+    """Agent information response model.
+
+    Attributes:
+        id (str): Unique agent identifier.
+        name (str): Human-readable agent name.
+        model (str): Currently configured LLM model.
+        status (str): Operational status ("running" or "idle").
+        session_count (int): Number of active sessions for this agent.
+    """
     id: str
     name: str
     model: str
@@ -31,13 +49,27 @@ class AgentResponse(BaseModel):
 
 
 class SessionMessage(BaseModel):
-    """A message in a session."""
+    """A single message within a session conversation.
+
+    Attributes:
+        role (str): Speaker role — one of "system", "user", or "assistant".
+        content (str): Text content of the message.
+    """
     role: str  # system, user, assistant
     content: str
 
 
 class SendMessageRequest(BaseModel):
-    """Request to send a message to an agent's active session."""
+    """Request body for sending a message to an agent's active session.
+
+    Attributes:
+        content (str): The message text to send.
+        session_id (Optional[str]): Specific session ID to target. When omitted
+            the agent's current active session is used.
+        channel (str): Channel name for the message (default "internal").
+        sender (str): Display name of the sender (default "internal").
+        sender_id (str): Unique identifier for the sender (default "internal").
+    """
     content: str
     session_id: Optional[str] = None
     channel: str = "internal"
@@ -46,7 +78,14 @@ class SendMessageRequest(BaseModel):
 
 
 class MessageResponse(BaseModel):
-    """Response from sending a message."""
+    """Response returned after sending a message to an agent.
+
+    Attributes:
+        session_id (str): ID of the session the message was routed to.
+        message_id (str): Unique identifier assigned to this message.
+        content (str): Agent's reply text.
+        timestamp (str): ISO-formatted timestamp of the response.
+    """
     session_id: str
     message_id: str
     content: str
@@ -54,7 +93,15 @@ class MessageResponse(BaseModel):
 
 
 class SessionResponse(BaseModel):
-    """Session information."""
+    """Session information summary.
+
+    Attributes:
+        id (str): Unique session identifier.
+        agent_id (str): ID of the agent that owns this session.
+        created_at (str): ISO-formatted creation timestamp.
+        message_count (int): Number of messages exchanged in this session.
+        channel (Optional[str]): Channel the session is associated with.
+    """
     id: str
     agent_id: str
     created_at: str
@@ -64,7 +111,14 @@ class SessionResponse(BaseModel):
 
 # Helper dependency
 def get_gateway():
-    """Get the gateway instance."""
+    """Retrieve the global gateway instance via the app module.
+
+    Returns:
+        Any: The gateway instance.
+
+    Raises:
+        HTTPException: With status 503 if the gateway is not initialized.
+    """
     from pyclaw.api.app import get_gateway as _get_gateway
     return _get_gateway()
 
@@ -72,7 +126,15 @@ def get_gateway():
 # List all agents
 @router.get("/", response_model=Dict[str, Any])
 async def list_agents():
-    """List all available agents."""
+    """List all agents registered with the gateway.
+
+    Returns:
+        Dict[str, Any]: ``{"agents": [...]}`` where each entry contains
+            the agent's id, name, model, and status.
+
+    Raises:
+        HTTPException: With status 500 on unexpected errors.
+    """
     try:
         gateway = get_gateway()
         
@@ -98,7 +160,17 @@ async def list_agents():
 # Get agent info
 @router.get("/{agent_id}", response_model=AgentResponse)
 async def get_agent(agent_id: str):
-    """Get information about a specific agent."""
+    """Return detailed information about a specific agent.
+
+    Args:
+        agent_id (str): Unique identifier of the agent.
+
+    Returns:
+        AgentResponse: Agent details including model and status.
+
+    Raises:
+        HTTPException: 404 if the agent is not found; 500 on unexpected errors.
+    """
     try:
         gateway = get_gateway()
         
@@ -125,7 +197,21 @@ async def get_agent(agent_id: str):
 # Update agent config
 @router.patch("/{agent_id}", response_model=AgentResponse)
 async def update_agent(agent_id: str, config: AgentConfigUpdate):
-    """Update agent configuration."""
+    """Partially update an agent's runtime configuration.
+
+    Only fields present in the request body are applied; all others retain
+    their current values.
+
+    Args:
+        agent_id (str): Unique identifier of the agent.
+        config (AgentConfigUpdate): Fields to update.
+
+    Returns:
+        AgentResponse: Updated agent details.
+
+    Raises:
+        HTTPException: 404 if the agent is not found; 500 on unexpected errors.
+    """
     try:
         gateway = get_gateway()
         
@@ -162,7 +248,18 @@ async def update_agent(agent_id: str, config: AgentConfigUpdate):
 # Create/get session
 @router.post("/{agent_id}/sessions", response_model=SessionResponse)
 async def create_session(agent_id: str, channel: Optional[str] = None):
-    """Create a new session for an agent."""
+    """Create a new conversation session for the specified agent.
+
+    Args:
+        agent_id (str): Unique identifier of the agent.
+        channel (Optional[str]): Channel name to associate with the session.
+
+    Returns:
+        SessionResponse: Metadata about the newly created session.
+
+    Raises:
+        HTTPException: 404 if the agent is not found; 500 on unexpected errors.
+    """
     try:
         gateway = get_gateway()
         
@@ -197,7 +294,18 @@ async def create_session(agent_id: str, channel: Optional[str] = None):
 # List sessions for agent
 @router.get("/{agent_id}/sessions", response_model=Dict[str, Any])
 async def list_sessions(agent_id: str):
-    """List all sessions for an agent."""
+    """Return all sessions associated with the given agent.
+
+    Args:
+        agent_id (str): Unique identifier of the agent.
+
+    Returns:
+        Dict[str, Any]: ``{"sessions": [...]}`` with each session's id,
+            created_at, and message_count.
+
+    Raises:
+        HTTPException: 404 if the agent is not found; 500 on unexpected errors.
+    """
     try:
         gateway = get_gateway()
         
@@ -279,7 +387,19 @@ async def send_message(agent_id: str, request: SendMessageRequest):
 # Get session messages
 @router.get("/{agent_id}/sessions/{session_id}/messages", response_model=Dict[str, Any])
 async def get_session_messages(agent_id: str, session_id: str):
-    """Get messages from a session."""
+    """Retrieve all messages for a specific agent session.
+
+    Args:
+        agent_id (str): Unique identifier of the agent.
+        session_id (str): Unique identifier of the session.
+
+    Returns:
+        Dict[str, Any]: ``{"session_id": ..., "messages": [...]}`` with each
+            message's role and content.
+
+    Raises:
+        HTTPException: 404 if agent or session is not found; 500 on errors.
+    """
     try:
         gateway = get_gateway()
         

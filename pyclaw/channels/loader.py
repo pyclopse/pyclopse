@@ -38,23 +38,21 @@ _ENTRY_POINT_GROUP = "pyclaw.channels"
 # ---------------------------------------------------------------------------
 
 def _load_class(spec: str) -> Type[ChannelPlugin]:
-    """
-    Import and return a ChannelPlugin class from a ``"module:Class"`` string.
+    """Import and return a ChannelPlugin class from a ``"module:Class"`` string.
 
-    Parameters
-    ----------
-    spec:
-        Dotted module path and class name separated by ``:``, e.g.
-        ``"mypackage.discord:DiscordPlugin"``.
+    Args:
+        spec (str): Dotted module path and class name separated by ``:``,
+            e.g. ``"mypackage.discord:DiscordPlugin"``.
 
-    Raises
-    ------
-    ValueError
-        If *spec* is malformed.
-    ImportError
-        If the module cannot be imported.
-    TypeError
-        If the class is not a subclass of :class:`ChannelPlugin`.
+    Returns:
+        Type[ChannelPlugin]: The imported plugin class.
+
+    Raises:
+        ValueError: If ``spec`` does not contain a ``:`` separator.
+        ImportError: If the module cannot be imported or the class name is
+            not found in the module.
+        TypeError: If the resolved class is not a subclass of
+            :class:`ChannelPlugin`.
     """
     if ":" not in spec:
         raise ValueError(
@@ -76,16 +74,18 @@ def _load_class(spec: str) -> Type[ChannelPlugin]:
 
 
 def load_from_specs(specs: List[str]) -> List[ChannelPlugin]:
-    """
-    Instantiate channel plugins from a list of ``"module:Class"`` strings.
+    """Instantiate channel plugins from a list of ``"module:Class"`` strings.
 
-    Errors for individual specs are logged and skipped — the gateway should
-    not fail to start because one plugin spec is wrong.
+    Errors for individual specs are logged and skipped so that the gateway
+    does not fail to start because a single plugin spec is wrong.
 
-    Returns
-    -------
-    list[ChannelPlugin]:
-        Successfully loaded and instantiated plugin instances.
+    Args:
+        specs (List[str]): List of ``"module.path:ClassName"`` strings,
+            typically from ``plugins.channels`` in the config file.
+
+    Returns:
+        List[ChannelPlugin]: Successfully loaded and instantiated plugin
+            instances. Specs that fail to load are omitted.
     """
     plugins: List[ChannelPlugin] = []
     for spec in specs:
@@ -101,16 +101,15 @@ def load_from_specs(specs: List[str]) -> List[ChannelPlugin]:
 
 
 def discover_entry_points() -> List[ChannelPlugin]:
-    """
-    Discover channel plugins via ``importlib.metadata`` entry points.
+    """Discover channel plugins via ``importlib.metadata`` entry points.
 
     Any installed package that declares an entry point under the group
-    ``pyclaw.channels`` will be loaded.  Errors are logged and skipped.
+    ``pyclaw.channels`` will be loaded. Errors are logged and skipped so
+    that a broken entry point does not prevent other plugins from loading.
 
-    Returns
-    -------
-    list[ChannelPlugin]:
-        Successfully discovered and instantiated plugin instances.
+    Returns:
+        List[ChannelPlugin]: Successfully discovered and instantiated plugin
+            instances. Entry points that fail to load are omitted.
     """
     plugins: List[ChannelPlugin] = []
     try:
@@ -146,21 +145,19 @@ def discover_entry_points() -> List[ChannelPlugin]:
 
 
 def load_all(specs: List[str]) -> List[ChannelPlugin]:
-    """
-    Discover all channel plugins from entry points and explicit *specs*.
+    """Discover all channel plugins from entry points and explicit specs.
 
     Entry-point plugins are loaded first; explicit specs are appended.
-    Duplicate class names are de-duplicated (first occurrence wins).
+    Duplicate plugin classes are de-duplicated so that the same class cannot
+    appear twice (first occurrence wins).
 
-    Parameters
-    ----------
-    specs:
-        Explicit ``"module:Class"`` strings from ``plugins.channels`` config.
+    Args:
+        specs (List[str]): Explicit ``"module:Class"`` strings from the
+            ``plugins.channels`` section of the config file.
 
-    Returns
-    -------
-    list[ChannelPlugin]:
-        Deduplicated list of plugin instances, ready to be started.
+    Returns:
+        List[ChannelPlugin]: Deduplicated list of plugin instances ready to
+            be started by the gateway.
     """
     seen_classes: set = set()
     plugins: List[ChannelPlugin] = []

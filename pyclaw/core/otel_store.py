@@ -45,25 +45,58 @@ _lock = threading.Lock()
 
 
 class SpanStore:
-    """Thread-safe ring buffer of finished ReadableSpan objects."""
+    """Thread-safe ring buffer of finished OpenTelemetry ReadableSpan objects.
+
+    Backed by a collections.deque with a fixed maximum length so old spans
+    are automatically evicted when the buffer is full.
+
+    Attributes:
+        _spans (deque): The ring buffer holding span objects.
+        _lock (threading.Lock): Mutex protecting all deque access.
+    """
 
     def __init__(self, maxlen: int = MAX_SPANS) -> None:
+        """Initialize the SpanStore.
+
+        Args:
+            maxlen (int): Maximum number of spans to retain. Oldest spans are
+                evicted when the buffer is full. Defaults to MAX_SPANS (1000).
+        """
         self._spans: deque = deque(maxlen=maxlen)
         self._lock = threading.Lock()
 
     def add(self, spans: Sequence) -> None:
+        """Append a batch of finished spans to the ring buffer.
+
+        Args:
+            spans (Sequence): Iterable of ReadableSpan objects to store.
+        """
         with self._lock:
             self._spans.extend(spans)
 
     def recent(self, n: int = 200) -> list:
+        """Return the most recent n spans.
+
+        Args:
+            n (int): Maximum number of spans to return. Defaults to 200.
+
+        Returns:
+            list: Up to n ReadableSpan objects, newest last.
+        """
         with self._lock:
             return list(self._spans)[-n:]
 
     def clear(self) -> None:
+        """Remove all spans from the buffer."""
         with self._lock:
             self._spans.clear()
 
     def __len__(self) -> int:
+        """Return the number of spans currently in the buffer.
+
+        Returns:
+            int: Current span count.
+        """
         with self._lock:
             return len(self._spans)
 
@@ -72,12 +105,32 @@ class SpanStore:
 
 
 class _StoreExporter:
-    """Minimal SpanExporter that writes into a SpanStore."""
+    """Minimal SpanExporter that writes finished spans into a SpanStore.
+
+    Implements the opentelemetry-sdk SpanExporter interface so it can be
+    registered with a TracerProvider via SimpleSpanProcessor.
+
+    Attributes:
+        _store (SpanStore): The target ring buffer.
+    """
 
     def __init__(self, store: SpanStore) -> None:
+        """Initialize the exporter.
+
+        Args:
+            store (SpanStore): Ring buffer to receive exported spans.
+        """
         self._store = store
 
     def export(self, spans: Sequence) -> int:
+        """Export a batch of finished spans to the store.
+
+        Args:
+            spans (Sequence): ReadableSpan objects from the SDK processor.
+
+        Returns:
+            int: SpanExportResult.SUCCESS (0) on success, 1 on failure.
+        """
         try:
             from opentelemetry.sdk.trace.export import SpanExportResult
             self._store.add(spans)
@@ -86,9 +139,21 @@ class _StoreExporter:
             return 1  # FAILURE
 
     def shutdown(self) -> None:
+        """Perform any cleanup on exporter shutdown.
+
+        No-op for the in-process store exporter.
+        """
         pass
 
     def force_flush(self, timeout_millis: int = 30000) -> bool:
+        """Force-flush any buffered spans.
+
+        Args:
+            timeout_millis (int): Flush timeout in milliseconds. Ignored here.
+
+        Returns:
+            bool: Always True; the store writes synchronously.
+        """
         return True
 
 
@@ -129,7 +194,11 @@ def bootstrap() -> "SpanStore":
 
 
 def get_store() -> Optional[SpanStore]:
-    """Return the active SpanStore, or None if bootstrap() was never called."""
+    """Return the active SpanStore, or None if bootstrap() was never called.
+
+    Returns:
+        Optional[SpanStore]: The active store if bootstrapped, else None.
+    """
     return _store
 
 
@@ -137,7 +206,21 @@ def get_store() -> Optional[SpanStore]:
 
 
 def span_summary(span) -> dict:
-    """Extract a display-friendly dict from a ReadableSpan."""
+    """Extract a display-friendly dict from a ReadableSpan.
+
+    Converts raw OTel span data into a flat dict suitable for rendering in
+    the TUI Traces view.  All errors are caught and included as ``_err`` keys
+    so the caller never needs to handle exceptions from span parsing.
+
+    Args:
+        span: An opentelemetry ReadableSpan object.
+
+    Returns:
+        dict: Keys include ``name``, ``ts`` (HH:MM:SS), ``dur`` (human
+            duration string), ``dur_ms`` (float), ``in_toks``, ``out_toks``,
+            ``model``, ``status``, ``attrs`` (dict), ``trace_id``,
+            ``span_id``.  On error, also includes ``_err``.
+    """
     try:
         from datetime import datetime, timezone
 

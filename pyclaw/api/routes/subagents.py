@@ -11,6 +11,14 @@ logger = logging.getLogger("pyclaw.api.subagents")
 
 
 def _get_gateway():
+    """Retrieve the global gateway instance.
+
+    Returns:
+        Any: The gateway instance.
+
+    Raises:
+        HTTPException: With status 503 if the gateway is not initialized.
+    """
     from pyclaw.api.app import get_gateway
     return get_gateway()
 
@@ -20,6 +28,21 @@ def _get_gateway():
 # ---------------------------------------------------------------------------
 
 class SpawnSubagentRequest(BaseModel):
+    """Request body for spawning a background subagent.
+
+    Attributes:
+        agent (str): ID of the agent to run as a subagent.
+        task (str): Task description / prompt sent to the subagent.
+        model (Optional[str]): Model override for this subagent run.
+        timeout_seconds (int): Execution timeout in seconds. Defaults to 300.
+        prompt_preset (str): System prompt preset ("minimal", "full", etc.).
+            Defaults to "minimal".
+        instruction (Optional[str]): Additional instruction injected into the
+            system prompt.
+        spawned_by_session (Optional[str]): Session ID of the spawning agent.
+            When omitted, the agent's active session is resolved automatically.
+    """
+
     agent: str
     task: str
     model: Optional[str] = None
@@ -31,10 +54,22 @@ class SpawnSubagentRequest(BaseModel):
 
 
 class InterruptSubagentRequest(BaseModel):
+    """Request body for interrupting a subagent with a new task.
+
+    Attributes:
+        task (str): New task description to use when respawning the subagent.
+    """
+
     task: str
 
 
 class SendSubagentRequest(BaseModel):
+    """Request body for queueing a follow-up message for a running subagent.
+
+    Attributes:
+        message (str): Follow-up message text to queue for the subagent.
+    """
+
     message: str
 
 

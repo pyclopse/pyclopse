@@ -18,7 +18,18 @@ _REDACTED_KEYS = frozenset({
 
 
 def _redact(obj: Any, depth: int = 0) -> Any:
-    """Recursively redact sensitive keys from a dict/list structure."""
+    """Recursively redact sensitive keys from a dict/list structure.
+
+    Keys listed in ``_REDACTED_KEYS`` are replaced with ``"***REDACTED***"``
+    at any nesting level.
+
+    Args:
+        obj (Any): The data structure to walk (dict, list, or scalar).
+        depth (int): Current recursion depth; recursion stops at 10.
+
+    Returns:
+        Any: A new data structure with sensitive values replaced.
+    """
     if depth > 10:
         return obj
     if isinstance(obj, dict):
@@ -32,6 +43,14 @@ def _redact(obj: Any, depth: int = 0) -> Any:
 
 
 def _get_gateway():
+    """Retrieve the global gateway instance.
+
+    Returns:
+        Any: The gateway instance.
+
+    Raises:
+        HTTPException: With status 503 if the gateway is not initialized.
+    """
     from pyclaw.api.app import get_gateway
     return get_gateway()
 

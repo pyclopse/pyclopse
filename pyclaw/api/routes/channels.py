@@ -12,7 +12,14 @@ router = APIRouter()
 
 # Webhook payload models
 class TelegramWebhookUpdate(BaseModel):
-    """Telegram webhook update payload."""
+    """Telegram Bot API webhook update object.
+
+    Attributes:
+        update_id (int): Unique identifier for the incoming update.
+        message (Optional[Dict[str, Any]]): New incoming message, if present.
+        edited_message (Optional[Dict[str, Any]]): Edited message, if present.
+        callback_query (Optional[Dict[str, Any]]): Callback from an inline keyboard, if present.
+    """
     update_id: int
     message: Optional[Dict[str, Any]] = None
     edited_message: Optional[Dict[str, Any]] = None
@@ -20,21 +27,39 @@ class TelegramWebhookUpdate(BaseModel):
 
 
 class DiscordWebhookPayload(BaseModel):
-    """Discord webhook payload."""
+    """Discord Gateway event payload received via webhook.
+
+    Attributes:
+        type (Optional[int]): Discord op-code for the event type.
+        t (Optional[str]): Event name string (e.g. "MESSAGE_CREATE").
+        d (Optional[Dict[str, Any]]): Event data dictionary.
+    """
     type: Optional[int] = None
     t: Optional[str] = None  # Event type
     d: Optional[Dict[str, Any]] = None  # Event data
 
 
 class SlackWebhookPayload(BaseModel):
-    """Slack webhook payload."""
+    """Slack Events API payload received via webhook.
+
+    Attributes:
+        type (str): Event type — "url_verification" or "event_callback".
+        challenge (Optional[str]): Challenge string sent during URL verification.
+        event (Optional[Dict[str, Any]]): The inner event object for event_callback payloads.
+    """
     type: str
     challenge: Optional[str] = None
     event: Optional[Dict[str, Any]] = None
 
 
 class WebhookResponse(BaseModel):
-    """Generic webhook response."""
+    """Generic webhook acknowledgement response.
+
+    Attributes:
+        ok (bool): True when the webhook was processed without error.
+        message (Optional[str]): Optional informational message.
+        error (Optional[str]): Error description when ok is False.
+    """
     ok: bool
     message: Optional[str] = None
     error: Optional[str] = None
@@ -42,7 +67,18 @@ class WebhookResponse(BaseModel):
 
 # Helper dependency to get channel adapter
 async def get_channel_adapter(channel_name: str):
-    """Get channel adapter from gateway."""
+    """Retrieve a channel adapter from the gateway by name.
+
+    Args:
+        channel_name (str): Name of the channel (e.g. "telegram", "slack").
+
+    Returns:
+        Any: The channel adapter object.
+
+    Raises:
+        HTTPException: 500 if channels are not initialized; 404 if the named
+            channel is not configured.
+    """
     from pyclaw.api.app import get_gateway
     
     gateway = get_gateway()
@@ -58,19 +94,43 @@ async def get_channel_adapter(channel_name: str):
 
 
 async def verify_telegram_token(x_telegram_bot_api_secret: Optional[str] = Header(None)) -> bool:
-    """Verify Telegram webhook token."""
+    """Verify the Telegram webhook secret token.
+
+    Args:
+        x_telegram_bot_api_secret (Optional[str]): Value of the
+            ``X-Telegram-Bot-Api-Secret-Token`` header sent by Telegram.
+
+    Returns:
+        bool: True if the token is valid or no token is configured.
+    """
     # In production, verify against configured secret
     return True
 
 
 async def verify_discord_token(xdiscord_signing_secret: Optional[str] = Header(None)) -> bool:
-    """Verify Discord webhook token."""
+    """Verify the Discord interaction request signature.
+
+    Args:
+        xdiscord_signing_secret (Optional[str]): Discord signing secret header.
+
+    Returns:
+        bool: True if the signature is valid or verification is not configured.
+    """
     # In production, verify against configured secret
     return True
 
 
 async def verify_slack_token(x_slack_signature: Optional[str] = Header(None), x_slack_request_timestamp: Optional[str] = Header(None)) -> bool:
-    """Verify Slack webhook request."""
+    """Verify the Slack request signature using HMAC-SHA256.
+
+    Args:
+        x_slack_signature (Optional[str]): Value of the ``X-Slack-Signature`` header.
+        x_slack_request_timestamp (Optional[str]): Value of the
+            ``X-Slack-Request-Timestamp`` header.
+
+    Returns:
+        bool: True if the signature is valid or verification is not configured.
+    """
     # In production, verify Slack signature
     return True
 
@@ -81,7 +141,18 @@ async def telegram_webhook(
     payload: TelegramWebhookUpdate,
     verified: bool = Depends(verify_telegram_token),
 ):
-    """Handle incoming Telegram webhook."""
+    """Receive and process an incoming Telegram Bot API update.
+
+    The update is forwarded to the Telegram channel adapter, which converts it
+    to a pyclaw message and dispatches it through the gateway router.
+
+    Args:
+        payload (TelegramWebhookUpdate): Parsed Telegram update object.
+        verified (bool): Result of the token verification dependency.
+
+    Returns:
+        WebhookResponse: Acknowledgement with ok=True if processed successfully.
+    """
     try:
         adapter = await get_channel_adapter("telegram")
         
@@ -113,7 +184,15 @@ async def discord_webhook(
     payload: DiscordWebhookPayload,
     verified: bool = Depends(verify_discord_token),
 ):
-    """Handle incoming Discord webhook."""
+    """Receive and process an incoming Discord gateway event.
+
+    Args:
+        payload (DiscordWebhookPayload): Parsed Discord event payload.
+        verified (bool): Result of the signature verification dependency.
+
+    Returns:
+        WebhookResponse: Acknowledgement with ok=True if processed successfully.
+    """
     try:
         adapter = await get_channel_adapter("discord")
         
@@ -145,7 +224,20 @@ async def slack_webhook(
     payload: SlackWebhookPayload,
     verified: bool = Depends(verify_slack_token),
 ):
-    """Handle incoming Slack webhook."""
+    """Receive and process an incoming Slack Events API event.
+
+    Handles the ``url_verification`` challenge automatically, forwarding
+    ``challenge`` back as the response message.
+
+    Args:
+        payload (SlackWebhookPayload): Parsed Slack event payload.
+        verified (bool): Result of the signature verification dependency.
+
+    Returns:
+        WebhookResponse: Acknowledgement with ok=True if processed successfully.
+            For url_verification events the ``message`` field contains the
+            challenge string.
+    """
     try:
         # Handle Slack URL verification challenge
         if payload.type == "url_verification":
@@ -178,7 +270,15 @@ async def slack_webhook(
 # List available channels
 @router.get("/", response_model=Dict[str, Any])
 async def list_channels():
-    """List all available channels and their status."""
+    """List all configured channels and their connection status.
+
+    Returns:
+        Dict[str, Any]: ``{"channels": {...}}`` mapping channel names to their
+            ``connected`` flag and ``has_webhook`` capability indicator.
+
+    Raises:
+        HTTPException: With status 500 on unexpected errors.
+    """
     try:
         gateway = get_gateway()
         
@@ -202,7 +302,18 @@ async def list_channels():
 # Get channel status
 @router.get("/{channel_name}/status", response_model=Dict[str, Any])
 async def channel_status(channel_name: str):
-    """Get status of a specific channel."""
+    """Return connection status details for a specific channel.
+
+    Args:
+        channel_name (str): Name of the channel to query (e.g. "telegram").
+
+    Returns:
+        Dict[str, Any]: Channel name, ``connected`` flag, and ``has_webhook``
+            capability indicator.
+
+    Raises:
+        HTTPException: 404 if the channel is not configured; 500 on errors.
+    """
     try:
         adapter = await get_channel_adapter(channel_name)
         

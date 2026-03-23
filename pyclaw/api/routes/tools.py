@@ -11,13 +11,26 @@ router = APIRouter()
 
 
 def _get_gateway():
+    """Retrieve the global gateway instance.
+
+    Returns:
+        Gateway: The active gateway instance.
+
+    Raises:
+        HTTPException: With status 503 if the gateway is not initialized.
+    """
     from pyclaw.api.app import get_gateway
     return get_gateway()
 
 
 @router.get("/", response_model=Dict[str, Any])
 async def get_tools():
-    """Return the MCP servers configured per agent."""
+    """Return the MCP servers configured per agent.
+
+    Returns:
+        Dict[str, Any]: ``{"agents": [...], "total_agents": int}`` where each
+            entry describes one agent's MCP server list and tool profile.
+    """
     gateway = _get_gateway()
     config = gateway.config
 
@@ -43,7 +56,14 @@ async def get_tools():
 
 @router.get("/debug", response_model=Dict[str, Any])
 async def get_debug():
-    """Return live FastAgent runner state for all agents — useful for troubleshooting."""
+    """Return live FastAgent runner state for all agents — useful for troubleshooting.
+
+    Returns:
+        Dict[str, Any]: ``{"agents": {...}}`` mapping agent IDs to debug dicts
+            that include display name, running state, base runner info, and
+            per-session runner details. Returns ``{"error": ..., "agents": {}}``
+            if the agent manager has not been initialised.
+    """
     gateway = _get_gateway()
     agent_manager = getattr(gateway, "_agent_manager", None)
     if agent_manager is None:
@@ -57,6 +77,17 @@ async def get_debug():
         session_runners = getattr(agent, "_session_runners", {}) or {}
 
         def _runner_info(runner) -> Dict[str, Any]:
+            """Serialise an AgentRunner instance to a debug-friendly dict.
+
+            Args:
+                runner: An AgentRunner instance, or None if not yet created.
+
+            Returns:
+                Dict[str, Any]: Runner metadata including initialisation state,
+                    agent name, model, MCP server list, history path, and the
+                    names of any FastAgent agents registered on the runner's app.
+                    Returns ``{"initialised": False}`` when runner is None.
+            """
             if runner is None:
                 return {"initialised": False}
             fa_agent_names: List[str] = []

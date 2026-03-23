@@ -13,29 +13,58 @@ logger = logging.getLogger("pyclaw.channels.slack")
 
 
 class SlackAdapter(ChannelAdapter):
-    """Slack bot adapter using slack-sdk."""
-    
+    """Slack bot adapter using slack-sdk.
+
+    Supports webhook-based message reception. Requires the ``slack-sdk``
+    package.
+
+    Attributes:
+        bot_token (Optional[str]): Slack bot OAuth token (``xoxb-...``).
+        signing_secret (Optional[str]): Slack signing secret used to verify
+            incoming webhook requests.
+    """
+
     def __init__(self, config: Dict[str, Any]):
+        """Initialize the Slack adapter with bot configuration.
+
+        Args:
+            config (Dict[str, Any]): Configuration dictionary. Expected keys:
+                ``bot_token`` (str): Slack bot OAuth token.
+                ``signing_secret`` (str): Slack signing secret for request
+                    verification.
+        """
         super().__init__(config)
         self.bot_token = config.get("bot_token")
         self.signing_secret = config.get("signing_secret")
         self._client = None
-    
+
     @property
     def channel_name(self) -> str:
+        """Return the channel name for this adapter.
+
+        Returns:
+            str: Always ``"slack"``.
+        """
         return "slack"
-    
+
     async def connect(self) -> None:
-        """Initialize the Slack client."""
+        """Initialize and verify the Slack client connection.
+        Creates a Slack ``WebClient`` and verifies the token by calling
+        ``auth_test()``.
+
+        Raises:
+            RuntimeError: If ``slack-sdk`` is not installed or if
+                authentication fails.
+        """
         try:
             from slack_sdk import WebClient
-            
+
             self._client = WebClient(token=self.bot_token)
-            
+
             # Verify token by getting auth info
             auth = await self._client.auth_test()
             logger.info(f"Connected to Slack as @{auth['user']}")
-            
+
         except ImportError:
             raise RuntimeError(
                 "slack-sdk not installed. "
@@ -43,19 +72,37 @@ class SlackAdapter(ChannelAdapter):
             )
         except Exception as e:
             raise RuntimeError(f"Failed to connect to Slack: {e}")
-    
+
     async def disconnect(self) -> None:
-        """Disconnect the Slack client."""
+        """Disconnect the Slack client and release resources.
+        Clears the client reference to allow garbage collection.
+        """
         self._client = None
         logger.info("Disconnected from Slack")
-    
+
     async def send_message(
         self,
         target: MessageTarget,
         content: str,
         reply_to: Optional[str] = None,
     ) -> str:
-        """Send a message to a Slack channel."""
+        """Send a text message to a Slack channel.
+
+        Args:
+            target (MessageTarget): Destination. Uses ``target.channel_id``
+                or ``target.group_id`` as the Slack channel ID.
+            content (str): Text content to send.
+            reply_to (Optional[str]): Thread timestamp to reply in-thread.
+                Defaults to None.
+
+        Returns:
+            str: Slack message timestamp (``ts``) of the sent message.
+
+        Raises:
+            RuntimeError: If the Slack client is not connected.
+            ValueError: If neither ``target.channel_id`` nor
+                ``target.group_id`` is set.
+        """
         if not self._client:
             raise RuntimeError("Slack client not connected")
         
@@ -79,7 +126,27 @@ class SlackAdapter(ChannelAdapter):
         target: MessageTarget,
         media: MediaAttachment,
     ) -> str:
-        """Send media to a Slack channel."""
+        """Send a media attachment to a Slack channel.
+
+        Uploads a local file using ``files_upload``, or posts a message
+        with an image attachment using ``chat_postMessage`` when only a URL
+        is provided.
+
+        Args:
+            target (MessageTarget): Destination channel. Uses
+                ``target.channel_id`` or ``target.group_id``.
+            media (MediaAttachment): Media to send. Either ``file_path`` or
+                ``url`` must be set.
+
+        Returns:
+            str: Slack message timestamp (``ts``) of the sent message, or
+                an empty string if the response does not include one.
+
+        Raises:
+            RuntimeError: If the Slack client is not connected.
+            ValueError: If no channel ID is set or if neither ``media.file_path``
+                nor ``media.url`` is provided.
+        """
         if not self._client:
             raise RuntimeError("Slack client not connected")
         
@@ -106,7 +173,20 @@ class SlackAdapter(ChannelAdapter):
         return response.get("ts", "")
     
     async def react(self, message_id: str, emoji: str) -> None:
-        """Add reaction to a message."""
+        """Add an emoji reaction to a Slack message.
+
+        Normalizes the emoji to a bare name (strips surrounding colons) and
+        calls ``reactions_add``.
+
+        Args:
+            message_id (str): Slack message timestamp to react to.
+            emoji (str): Emoji name with or without surrounding colons, e.g.
+                ``"thumbsup"`` or ``":thumbsup:"``.
+
+        Raises:
+            RuntimeError: If the Slack client is not connected.
+            ValueError: If ``channel_id`` is not set in the adapter config.
+        """
         if not self._client:
             raise RuntimeError("Slack client not connected")
         
@@ -127,7 +207,19 @@ class SlackAdapter(ChannelAdapter):
         )
     
     async def handle_webhook(self, payload: Dict[str, Any]) -> Optional[Message]:
-        """Handle incoming Slack webhook."""
+        """Parse and handle an incoming Slack Events API webhook payload.
+
+        Handles ``event_callback`` payloads containing ``message`` events.
+        Silently ignores URL verification challenges, bot messages, non-message
+        events, and messages without text.
+
+        Args:
+            payload (Dict[str, Any]): Raw JSON webhook payload from Slack.
+
+        Returns:
+            Optional[Message]: Parsed message, or ``None`` if the payload
+                should be ignored.
+        """
         try:
             # Handle URL verification challenge
             if payload.get("type") == "url_verification":
@@ -171,7 +263,22 @@ class SlackAdapter(ChannelAdapter):
             return None
     
     def verify_signature(self, payload: str, timestamp: str, signature: str) -> bool:
-        """Verify Slack request signature."""
+        """Verify a Slack request signature using HMAC-SHA256.
+
+        Computes the expected signature from the signing secret and compares
+        it to the provided signature using a constant-time comparison to
+        prevent timing attacks.
+
+        Args:
+            payload (str): Raw request body as a string.
+            timestamp (str): Value of the ``X-Slack-Request-Timestamp`` header.
+            signature (str): Value of the ``X-Slack-Signature`` header
+                (format: ``v0=<hex>``).
+
+        Returns:
+            bool: ``True`` if the signature is valid, ``False`` otherwise or
+                if no signing secret is configured.
+        """
         if not self.signing_secret:
             return False
         
@@ -190,7 +297,12 @@ class SlackAdapter(ChannelAdapter):
         return hmac.compare_digest(expected_signature, signature)
     
     async def _listen(self) -> None:
-        """Listen for updates (polling fallback)."""
+        """No-op polling fallback for Slack.
+
+        Slack uses webhooks for inbound messages. This method is a no-op
+        placeholder. In production, configure the Slack Events API to deliver
+        messages via ``handle_webhook``.
+        """
         # This is a fallback for when webhooks aren't used
         # In production, webhooks are preferred
         pass

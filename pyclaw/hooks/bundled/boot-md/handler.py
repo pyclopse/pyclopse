@@ -22,7 +22,21 @@ _BOOT_CANDIDATES = [
 _GATEWAY_BASE = os.environ.get("PYCLAW_GATEWAY_URL", "http://localhost:8080")
 
 
-def main():
+def main() -> None:
+    """Entry point for the boot-md hook handler subprocess.
+
+    Reads a JSON event context from stdin, locates the first existing BOOT.md
+    candidate file (``~/.pyclaw/BOOT.md`` then ``~/BOOT.md``), and POSTs its
+    contents to the gateway REST API as a system message for the agent named
+    in the context.
+
+    The function exits with code 0 on success or when no BOOT.md exists.
+    It exits with code 1 and writes to stderr if JSON parsing fails or if the
+    HTTP POST to the gateway fails.
+
+    Raises:
+        SystemExit: Always — exits 0 on success/no-op, exits 1 on error.
+    """
     raw = sys.stdin.read()
     try:
         ctx = json.loads(raw)

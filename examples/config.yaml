@@ -49,6 +49,8 @@ gateway:
   log_level: "info"
   cors_origins:
     - "*"
+  # a2a:
+  #   enabled: false           # enable A2A (Agent-to-Agent) protocol endpoints
 
 # ─────────────────────────────────────────────
 # Security
@@ -206,6 +208,16 @@ agents:
     # reasoning_split separates thinking from response in streaming (MiniMax extension)
     request_params:
       reasoning_split: true
+    # MCP servers this agent can use.
+    # Built-in names: pyclaw (all tools + self-knowledge), fetch, time, filesystem, chrome-devtools
+    mcpServers:
+      - pyclaw
+      - fetch
+      - time
+      - filesystem
+    # a2a:
+    #   enabled: true            # expose this agent via A2A protocol endpoints
+    #   sessionMode: shared      # shared (default) | isolated
 
   minimax_m1:
     name: "MiniMax M1"
@@ -217,6 +229,12 @@ agents:
       enabled: false
     request_params:
       reasoning_split: true
+    mcpServers:
+      - pyclaw
+      - self
+      - fetch
+      - time
+      - filesystem
 
 # ─────────────────────────────────────────────
 # Jobs (cron)

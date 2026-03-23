@@ -11,32 +11,60 @@ logger = logging.getLogger("pyclaw.channels.telegram")
 
 
 class TelegramAdapter(ChannelAdapter):
-    """Telegram bot adapter using python-telegram-bot."""
-    
+    """Telegram bot adapter using python-telegram-bot.
+
+    Supports both webhook-based and polling-based message reception. Requires
+    the ``python-telegram-bot`` package.
+
+    Attributes:
+        token (Optional[str]): Telegram bot token from BotFather.
+        allowed_users (set): Set of allowed Telegram user IDs. If non-empty,
+            messages from users not in this set are silently ignored.
+    """
+
     def __init__(self, config: Dict[str, Any]):
+        """Initialize the Telegram adapter with bot configuration.
+
+        Args:
+            config (Dict[str, Any]): Configuration dictionary. Expected keys:
+                ``bot_token`` (str): Telegram bot token.
+                ``allowed_users`` (list): Optional list of allowed user IDs.
+        """
         super().__init__(config)
         self.token = config.get("bot_token")
         self.allowed_users = set(config.get("allowed_users", []))
         self._bot = None
         self._application = None
         self._update_queue: asyncio.Queue = asyncio.Queue()
-    
+
     @property
     def channel_name(self) -> str:
+        """Return the channel name for this adapter.
+
+        Returns:
+            str: Always ``"telegram"``.
+        """
         return "telegram"
-    
+
     async def connect(self) -> None:
-        """Initialize the Telegram bot."""
+        """Initialize and verify the Telegram bot connection.
+        Creates the ``Bot`` instance and verifies the token by calling
+        ``get_me()``.
+
+        Raises:
+            RuntimeError: If ``python-telegram-bot`` is not installed or
+                if authentication fails.
+        """
         try:
             from telegram import Bot
             from telegram.error import TelegramError
-            
+
             self._bot = Bot(token=self.token)
-            
+
             # Verify bot token by getting bot info
             me = await self._bot.get_me()
             logger.info(f"Connected to Telegram as @{me.username}")
-            
+
         except ImportError:
             raise RuntimeError(
                 "python-telegram-bot not installed. "
@@ -44,21 +72,39 @@ class TelegramAdapter(ChannelAdapter):
             )
         except Exception as e:
             raise RuntimeError(f"Failed to connect to Telegram: {e}")
-    
+
     async def disconnect(self) -> None:
-        """Disconnect the Telegram bot."""
+        """Disconnect the Telegram bot and release resources.
+        Stops the application if running, then clears the bot instance.
+        """
         if self._application:
             await self._application.stop()
         self._bot = None
         logger.info("Disconnected from Telegram")
-    
+
     async def send_message(
         self,
         target: MessageTarget,
         content: str,
         reply_to: Optional[str] = None,
     ) -> str:
-        """Send a message to a Telegram chat."""
+        """Send a text message to a Telegram chat.
+
+        Args:
+            target (MessageTarget): Destination. Uses ``target.user_id`` or
+                ``target.group_id`` as the Telegram ``chat_id``.
+            content (str): Text content to send.
+            reply_to (Optional[str]): Message ID to reply to. If ``None``,
+                ``target.message_id`` is used as a fallback. Defaults to None.
+
+        Returns:
+            str: Telegram message ID of the sent message as a string.
+
+        Raises:
+            RuntimeError: If the bot is not connected.
+            ValueError: If neither ``target.user_id`` nor ``target.group_id``
+                is set.
+        """
         if not self._bot:
             raise RuntimeError("Telegram bot not connected")
         
@@ -82,7 +128,27 @@ class TelegramAdapter(ChannelAdapter):
         target: MessageTarget,
         media: MediaAttachment,
     ) -> str:
-        """Send media to a Telegram chat."""
+        """Send a media attachment to a Telegram chat.
+
+        Selects the appropriate Telegram API method (``send_photo``,
+        ``send_video``, or ``send_document``) based on ``media.mime_type``.
+        Supports both local file paths and public URLs.
+
+        Args:
+            target (MessageTarget): Destination chat. Uses ``target.user_id``
+                or ``target.group_id`` as the Telegram ``chat_id``.
+            media (MediaAttachment): Media to send. Either ``file_path`` or
+                ``url`` must be set.
+
+        Returns:
+            str: Telegram message ID of the sent message as a string.
+
+        Raises:
+            RuntimeError: If the bot is not connected.
+            ValueError: If neither ``target.user_id`` nor ``target.group_id``
+                is set, or if neither ``media.file_path`` nor ``media.url``
+                is provided.
+        """
         if not self._bot:
             raise RuntimeError("Telegram bot not connected")
         
@@ -136,7 +202,17 @@ class TelegramAdapter(ChannelAdapter):
         return str(message.message_id)
     
     async def react(self, message_id: str, emoji: str) -> None:
-        """Add reaction to a message."""
+        """Add an emoji reaction to a Telegram message.
+
+        Uses ``set_message_reaction`` from the Telegram Bot API.
+
+        Args:
+            message_id (str): Telegram message ID to react to.
+            emoji (str): Unicode emoji character to use as the reaction.
+
+        Raises:
+            RuntimeError: If the bot is not connected.
+        """
         if not self._bot:
             raise RuntimeError("Telegram bot not connected")
         
@@ -148,7 +224,20 @@ class TelegramAdapter(ChannelAdapter):
         )
     
     async def handle_webhook(self, payload: Dict[str, Any]) -> Optional[Message]:
-        """Handle incoming Telegram webhook."""
+        """Parse and handle an incoming Telegram webhook payload.
+
+        Deserializes the raw JSON payload into a Telegram ``Update`` object,
+        filters out messages from unauthorized users, and returns a
+        :class:`~pyclaw.channels.base.Message`.
+
+        Args:
+            payload (Dict[str, Any]): Raw JSON webhook payload from Telegram.
+
+        Returns:
+            Optional[Message]: Parsed message, or ``None`` if the update
+                contains no message, is from an unauthorized user, or cannot
+                be parsed.
+        """
         try:
             from telegram import Update
             
@@ -184,7 +273,13 @@ class TelegramAdapter(ChannelAdapter):
             return None
     
     async def _listen(self) -> None:
-        """Listen for updates (polling fallback)."""
+        """Poll the Telegram ``getUpdates`` endpoint for new messages.
+
+        This is a fallback for environments where webhooks cannot be used.
+        In production, webhooks are preferred. Runs until ``_running`` is set
+        to ``False`` or the task is cancelled. On error, waits 5 seconds
+        before retrying.
+        """
         # This is a fallback for when webhooks aren't used
         # In production, webhooks are preferred
         offset = None
@@ -210,7 +305,18 @@ class TelegramAdapter(ChannelAdapter):
                 await asyncio.sleep(5)
     
     async def _parse_update(self, update: Any) -> Optional[Message]:
-        """Parse a Telegram update into a Message."""
+        """Parse a Telegram ``Update`` object into a :class:`Message`.
+
+        Filters out updates that are not ``Update`` instances, updates with
+        no message, and messages from users not in ``allowed_users``.
+
+        Args:
+            update (Any): A ``telegram.Update`` object from the polling loop.
+
+        Returns:
+            Optional[Message]: Parsed message, or ``None`` if the update
+                should be ignored.
+        """
         from telegram import Update
         
         if not isinstance(update, Update) or not update.message:

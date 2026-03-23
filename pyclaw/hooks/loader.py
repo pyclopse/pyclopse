@@ -19,7 +19,24 @@ _BUNDLED_DIR = Path(__file__).parent / "bundled"
 
 @dataclass
 class HookInfo:
-    """Metadata parsed from a HOOK.md file."""
+    """Metadata parsed from a hook's HOOK.md frontmatter file.
+
+    Attributes:
+        name (str): Unique hook name derived from the YAML ``name`` field or
+            the parent directory name.
+        description (str): Human-readable description of what the hook does.
+        version (str): Version string from the HOOK.md frontmatter.
+        events (List[str]): List of event names this hook subscribes to.
+        hook_md (Path): Absolute path to the HOOK.md file.
+        handler_path (Optional[Path]): Absolute path to the handler script.
+            None if the file is missing or not declared.
+        requirements (Dict[str, Any]): Optional requirements dict from frontmatter
+            (e.g., config keys the hook needs). Defaults to empty dict.
+        source (str): Origin label — "bundled", "managed", or "workspace".
+            Defaults to "managed".
+        enabled (bool): Whether the hook should be registered. Defaults to True.
+    """
+
     name: str
     description: str
     version: str
@@ -66,6 +83,16 @@ class HookLoader:
         config_dir: str = "~/.pyclaw",
         extra_dirs: Optional[List[str]] = None,
     ) -> None:
+        """Initialise the HookLoader with search directories.
+
+        Args:
+            config_dir (str): Path to the pyclaw config directory. The managed
+                hooks sub-directory (``{config_dir}/hooks``) is automatically
+                included in the search path. Defaults to "~/.pyclaw".
+            extra_dirs (Optional[List[str]]): Additional hook search paths
+                (workspace hooks). These override bundled and managed hooks on
+                name collision. Defaults to None.
+        """
         self._config_dir = Path(config_dir).expanduser()
         self._extra_dirs = [Path(d).expanduser() for d in (extra_dirs or [])]
 
@@ -97,14 +124,34 @@ class HookLoader:
         return list(found.values())
 
     def _search_dirs(self):
-        """Yield (path, label) tuples in ascending override priority."""
+        """Yield (path, label) tuples in ascending override priority.
+
+        Yields bundled hooks first, then managed hooks, then any extra
+        (workspace) dirs. Later entries win on name collision in ``discover()``.
+
+        Yields:
+            Tuple[Path, str]: (directory path, source label string) pairs.
+        """
         yield _BUNDLED_DIR, "bundled"
         yield self._config_dir / "hooks", "managed"
         for d in self._extra_dirs:
             yield d, "workspace"
 
     def _parse_hook_md(self, hook_md: Path, source: str) -> Optional[HookInfo]:
-        """Parse a HOOK.md file and return a HookInfo, or None on error."""
+        """Parse a HOOK.md file and return a HookInfo instance, or None on error.
+
+        Reads and splits the YAML frontmatter from the Markdown body, validates
+        required fields, and resolves the handler script path relative to the
+        hook directory.
+
+        Args:
+            hook_md (Path): Absolute path to the HOOK.md file to parse.
+            source (str): Source label string ("bundled", "managed", "workspace").
+
+        Returns:
+            Optional[HookInfo]: Populated HookInfo on success, or None if the
+                file cannot be read, has no frontmatter, or has a YAML parse error.
+        """
         try:
             raw = hook_md.read_text(encoding="utf-8")
         except OSError as exc:
@@ -206,6 +253,15 @@ class HookLoader:
 # ------------------------------------------------------------------ #
 
 def source_label(info: HookInfo) -> str:
+    """Return the source label string for a HookInfo instance.
+
+    Args:
+        info (HookInfo): The hook info whose source label is requested.
+
+    Returns:
+        str: The ``source`` attribute of the HookInfo (e.g., "bundled",
+            "managed", or "workspace").
+    """
     return info.source
 
 
@@ -238,6 +294,22 @@ def _make_subprocess_handler(info: HookInfo) -> Callable:
     name = info.name
 
     async def _handler(context: Dict[str, Any]) -> Any:
+        """Invoke the hook script as a subprocess with JSON context on stdin.
+
+        Serialises ``context`` to JSON, writes it to the process stdin, and
+        waits up to 30 seconds for the process to complete. Non-zero exit codes
+        and timeouts are logged as errors. For interceptable events the handler
+        parses stdout as JSON and returns the result; for notification events
+        stdout is ignored and None is returned.
+
+        Args:
+            context (Dict[str, Any]): Event context dictionary passed to the
+                handler script via stdin.
+
+        Returns:
+            Any: Parsed JSON from stdout if the script produces valid JSON output
+                and exits with code 0; None otherwise.
+        """
         payload = json.dumps(context).encode()
         try:
             proc = await asyncio.create_subprocess_exec(

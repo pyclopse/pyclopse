@@ -21,6 +21,9 @@ from pyclaw.core.queue import QueueManager
 def _parse_job_token(response: str) -> tuple[str, str]:
     """Detect a delivery token at the start of a job response.
 
+    Tokens control how the job result is delivered to the report_to_agent
+    session.  The token (if present) is stripped from the returned content.
+
     Returns ``(token, content)`` where *token* is one of:
 
     - ``'NO_REPLY'``  — full response is ≤ 100 chars and starts with ``NO_REPLY``
@@ -29,6 +32,13 @@ def _parse_job_token(response: str) -> tuple[str, str]:
 
     *content* is the response with the token prefix stripped (or the full
     response when there is no token or for ``NO_REPLY``).
+
+    Args:
+        response (str): Raw response string from the agent job run.
+
+    Returns:
+        tuple[str, str]: ``(token, content)`` where token is the delivery
+            directive (empty string means verbatim) and content is the payload.
     """
     stripped = response.strip()
     if stripped.upper().startswith("NO_REPLY") and len(stripped) <= 100:

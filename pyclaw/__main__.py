@@ -360,7 +360,7 @@ async def run_gateway(
     print("Press Ctrl+C to stop...")
 
     try:
-        # Keep running until interrupted; both servers run as background tasks
+        # Keep running until interrupted; all servers run as background tasks
         while True:
             await asyncio.sleep(3600)
     except (KeyboardInterrupt, asyncio.CancelledError):

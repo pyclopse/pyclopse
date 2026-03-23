@@ -12,18 +12,42 @@ logger = logging.getLogger("pyclaw.channels.signal")
 
 
 class SignalAdapter(ChannelAdapter):
-    """
-    Signal messenger adapter using signal-cli.
-    
-    Requires signal-cli to be installed and configured.
-    Install: https://github.com/AsamK/signal-cli
-    
-    Can use either:
-    1. signal-cli daemon mode (REST API)
-    2. subprocess calls (simpler but slower)
+    """Signal messenger adapter using signal-cli.
+
+    Supports two backends:
+
+    1. **Daemon mode** — connects to a running ``signal-cli`` REST API daemon
+       (faster, recommended for production).
+    2. **Subprocess mode** — spawns ``signal-cli`` directly for each
+       operation (simpler but slower).
+
+    Requires ``signal-cli`` to be installed and a Signal account registered.
+    See: https://github.com/AsamK/signal-cli
+
+    Attributes:
+        phone_number (Optional[str]): Registered Signal phone number in
+            E.164 format (e.g. ``"+15551234567"``).
+        signal_cli_path (str): Path to the ``signal-cli`` binary. Defaults
+            to ``"signal-cli"``.
+        use_daemon (bool): Whether to use the daemon REST API. Defaults to
+            ``False``.
+        daemon_url (str): Base URL of the signal-cli daemon REST API.
+            Defaults to ``"http://localhost:8080"``.
     """
 
     def __init__(self, config: Dict[str, Any]):
+        """Initialize the Signal adapter with backend configuration.
+
+        Args:
+            config (Dict[str, Any]): Configuration dictionary. Expected keys:
+                ``phone_number`` (str): Registered Signal phone number.
+                ``signal_cli_path`` (str): Path to signal-cli binary.
+                    Defaults to ``"signal-cli"``.
+                ``use_daemon`` (bool): Use daemon REST API. Defaults to
+                    ``False``.
+                ``daemon_url`` (str): Daemon base URL. Defaults to
+                    ``"http://localhost:8080"``.
+        """
         super().__init__(config)
         self.phone_number = config.get("phone_number")
         self.signal_cli_path = config.get("signal_cli_path", "signal-cli")
@@ -34,10 +58,23 @@ class SignalAdapter(ChannelAdapter):
 
     @property
     def channel_name(self) -> str:
+        """Return the channel name for this adapter.
+
+        Returns:
+            str: Always ``"signal"``.
+        """
         return "signal"
 
     async def connect(self) -> None:
-        """Initialize the Signal client."""
+        """Initialize the Signal backend connection.
+        In daemon mode, creates an httpx session and checks the daemon
+        health endpoint. In subprocess mode, verifies the ``signal-cli``
+        binary is available by running ``signal-cli --version``.
+
+        Raises:
+            RuntimeError: If ``httpx`` is not installed, the daemon is not
+                reachable, or ``signal-cli`` is not found.
+        """
         try:
             import httpx
 
@@ -73,7 +110,12 @@ class SignalAdapter(ChannelAdapter):
             raise RuntimeError(f"Failed to connect to Signal: {e}")
 
     async def disconnect(self) -> None:
-        """Disconnect the Signal client."""
+        """Disconnect the Signal client and release resources.
+
+        Closes the httpx session if in daemon mode, and terminates the
+        subprocess if one is running. Waits up to 5 seconds for the process
+        to exit before forcibly killing it.
+        """
         if self._session:
             await self._session.aclose()
         self._session = None
@@ -94,7 +136,28 @@ class SignalAdapter(ChannelAdapter):
         content: str,
         reply_to: Optional[str] = None,
     ) -> str:
-        """Send a message to a Signal user."""
+        """Send a text message to a Signal user.
+
+        Uses the daemon REST API when ``use_daemon`` is ``True``, otherwise
+        invokes ``signal-cli`` in a subprocess.
+
+        Args:
+            target (MessageTarget): Destination. Uses ``target.user_id`` as
+                the recipient phone number in E.164 format. A leading ``+``
+                is added automatically if missing.
+            content (str): Text content to send.
+            reply_to (Optional[str]): Message timestamp to quote. Defaults to
+                None.
+
+        Returns:
+            str: Message timestamp returned by the daemon, or a millisecond
+                epoch timestamp string in subprocess mode.
+
+        Raises:
+            ValueError: If ``target.user_id`` is not set.
+            RuntimeError: If the daemon returns an error or ``signal-cli``
+                exits with a non-zero code.
+        """
         if not target.user_id:
             raise ValueError("No target user_id (phone number) provided")
 
@@ -156,7 +219,27 @@ class SignalAdapter(ChannelAdapter):
         target: MessageTarget,
         media: MediaAttachment,
     ) -> str:
-        """Send media to a Signal user."""
+        """Send a media attachment to a Signal user.
+
+        Downloads URL-based media to a temporary file before sending.
+        Uses the daemon multipart API or ``signal-cli --attachment``.
+
+        Args:
+            target (MessageTarget): Destination. Uses ``target.user_id`` as
+                the recipient phone number.
+            media (MediaAttachment): Media to send. Either ``file_path`` or
+                ``url`` must be set.
+
+        Returns:
+            str: Millisecond epoch timestamp string representing the send
+                time (approximation).
+
+        Raises:
+            ValueError: If ``target.user_id`` is not set, or if neither
+                ``media.file_path`` nor ``media.url`` is provided.
+            RuntimeError: If the daemon returns an error or ``signal-cli``
+                exits with a non-zero code.
+        """
         if not target.user_id:
             raise ValueError("No target user_id (phone number) provided")
 
@@ -225,7 +308,19 @@ class SignalAdapter(ChannelAdapter):
             return str(int(datetime.now().timestamp() * 1000))
 
     async def react(self, message_id: str, emoji: str) -> None:
-        """Add reaction to a message."""
+        """Add an emoji reaction to a Signal message.
+
+        Uses the daemon ``/v1/reactions`` endpoint in daemon mode, or the
+        ``signal-cli react`` subcommand in subprocess mode. The
+        ``message_id`` is expected to be in the format
+        ``{author_phone}_{timestamp}`` for daemon mode.
+
+        Args:
+            message_id (str): Compound ID in the format
+                ``{author}_{timestamp}`` for daemon mode, or just a timestamp
+                for subprocess mode.
+            emoji (str): Unicode emoji character to react with.
+        """
         if self.use_daemon and self._session:
             # Use daemon API
             payload = {
@@ -266,7 +361,20 @@ class SignalAdapter(ChannelAdapter):
                 logger.warning(f"Failed to send Signal reaction: {stderr.decode()}")
 
     async def handle_webhook(self, payload: Dict[str, Any]) -> Optional[Message]:
-        """Handle incoming Signal message (from daemon)."""
+        """Parse and handle an incoming Signal message from the daemon.
+
+        Expects a signal-cli daemon envelope payload with ``type`` set to
+        ``"dataMessage"``. Skips messages sent from the bot's own number.
+        Falls back to an attachment description if no text is present.
+
+        Args:
+            payload (Dict[str, Any]): Raw JSON envelope payload delivered by
+                the signal-cli daemon.
+
+        Returns:
+            Optional[Message]: Parsed message, or ``None`` if the envelope
+                is not a data message, is from self, or cannot be parsed.
+        """
         try:
             # Handle envelope
             envelope = payload
@@ -323,5 +431,9 @@ class SignalAdapter(ChannelAdapter):
             return None
 
     async def _listen(self) -> None:
-        """Signal uses daemon or subprocess, polling not needed."""
+        """No-op listener for Signal.
+
+        Signal message delivery uses the daemon webhook or subprocess mode.
+        Polling is not needed and this method is a no-op placeholder.
+        """
         pass

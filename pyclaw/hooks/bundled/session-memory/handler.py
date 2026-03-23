@@ -16,7 +16,27 @@ from datetime import datetime
 from pathlib import Path
 
 
-def main():
+def main() -> None:
+    """Entry point for the session-memory hook handler subprocess.
+
+    Reads a JSON event context from stdin containing the agent name, session
+    ID, and conversation history. Constructs a summary memory entry and writes
+    it to the agent's ``FileMemoryBackend`` using the key
+    ``session:{agent}:{session_id}``.
+
+    Exits silently with code 0 if the session history is empty (nothing to
+    save). Exits with code 1 and writes to stderr if JSON parsing fails or if
+    the memory write operation raises an exception.
+
+    The context dict is expected to contain:
+        ``agent`` (str): Agent name (defaults to "default").
+        ``session_id`` (str): Session identifier (defaults to "unknown").
+        ``data.history`` (list): List of conversation message dicts.
+        ``event`` (str): The event name that triggered this hook.
+
+    Raises:
+        SystemExit: Always — exits 0 on success/no-op, exits 1 on error.
+    """
     raw = sys.stdin.read()
     try:
         ctx = json.loads(raw)

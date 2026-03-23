@@ -36,12 +36,32 @@ DEFAULT_CONFIG_PATHS = [
 
 
 def expand_path(path: str) -> Path:
-    """Expand ~ and environment variables in path."""
+    """Expand ~ and environment variables in a path string.
+
+    Args:
+        path (str): Path string potentially containing ``~`` or ``$VAR``
+            tokens.
+
+    Returns:
+        Path: Fully resolved :class:`pathlib.Path` with all expansions applied.
+    """
     return Path(os.path.expandvars(os.path.expanduser(path)))
 
 
 def load_yaml(file_path: Union[str, Path]) -> Dict[str, Any]:
-    """Load YAML file and return as dict."""
+    """Load a YAML file and return its contents as a dictionary.
+
+    Args:
+        file_path (Union[str, Path]): Path to the YAML file to read. ``~`` and
+            environment variables are expanded.
+
+    Returns:
+        Dict[str, Any]: Parsed YAML contents, or an empty dict if the file is
+            empty.
+
+    Raises:
+        FileNotFoundError: If the file does not exist at the resolved path.
+    """
     path = expand_path(str(file_path))
     if not path.exists():
         raise FileNotFoundError(f"Config file not found: {path}")
@@ -51,7 +71,14 @@ def load_yaml(file_path: Union[str, Path]) -> Dict[str, Any]:
 
 
 def save_yaml(data: Dict[str, Any], file_path: Union[str, Path]) -> None:
-    """Save dict as YAML file."""
+    """Serialise a dictionary to a YAML file, creating parent directories if needed.
+
+    Args:
+        data (Dict[str, Any]): Data to serialise.
+        file_path (Union[str, Path]): Destination file path. ``~`` and
+            environment variables are expanded. Parent directories are created
+            automatically.
+    """
     path = expand_path(str(file_path))
     path.parent.mkdir(parents=True, exist_ok=True)
     
@@ -93,7 +120,16 @@ def load_secrets_registry(config_path: Optional[Union[str, Path]] = None) -> Dic
 
 
 def find_config_file(search_paths: Optional[list] = None) -> Optional[Path]:
-    """Find config file in search paths."""
+    """Find the first existing config file from a list of candidate paths.
+
+    Args:
+        search_paths (Optional[list]): Ordered list of path strings to check.
+            Defaults to :data:`DEFAULT_CONFIG_PATHS` when omitted.
+
+    Returns:
+        Optional[Path]: The resolved :class:`pathlib.Path` of the first
+            existing file found, or ``None`` if none of the candidates exist.
+    """
     paths = search_paths or DEFAULT_CONFIG_PATHS
     for path_str in paths:
         path = expand_path(path_str)
@@ -103,15 +139,40 @@ def find_config_file(search_paths: Optional[list] = None) -> Optional[Path]:
 
 
 class ConfigLoader:
-    """Loads and manages pyclaw configuration."""
+    """Loads and manages pyclaw configuration.
+
+    Attributes:
+        config_path (Optional[Path]): Resolved path supplied at construction
+            time, or ``None`` if no explicit path was given.
+    """
 
     def __init__(self, config_path: Optional[Union[str, Path]] = None):
+        """Initialise the loader with an optional explicit config path.
+
+        Args:
+            config_path (Optional[Union[str, Path]]): Path to the YAML config
+                file. ``~`` and environment variables are expanded. When
+                omitted, :meth:`load` will search :data:`DEFAULT_CONFIG_PATHS`
+                automatically.
+        """
         # Convert to Path object for consistency
         self.config_path = expand_path(config_path) if config_path else None
         self._config: Optional[Config] = None
-    
+
     def load(self, config_path: Optional[Union[str, Path]] = None) -> Config:
-        """Load configuration from YAML file."""
+        """Load configuration from a YAML file and apply secret resolution.
+
+        Searches :data:`DEFAULT_CONFIG_PATHS` when no path is provided and
+        none was given at construction time. Falls back to a default
+        :class:`Config` if no file is found anywhere.
+
+        Args:
+            config_path (Optional[Union[str, Path]]): Override path for this
+                call only. Takes precedence over the constructor path.
+
+        Returns:
+            Config: Fully validated and secret-resolved configuration object.
+        """
         path = config_path or self.config_path
         
         if path is None:
@@ -137,7 +198,16 @@ class ConfigLoader:
         return self._config
     
     def save(self, config_path: Optional[Union[str, Path]] = None) -> None:
-        """Save current configuration to YAML file."""
+        """Serialise the currently loaded configuration to a YAML file.
+
+        Args:
+            config_path (Optional[Union[str, Path]]): Destination path for
+                this call. Falls back to the constructor path, then to
+                ``~/.pyclaw/config.yaml``.
+
+        Raises:
+            RuntimeError: If no configuration has been loaded yet.
+        """
         if self._config is None:
             raise RuntimeError("No configuration loaded")
         
@@ -152,14 +222,28 @@ class ConfigLoader:
     
     @property
     def config(self) -> Config:
-        """Get current configuration."""
+        """Return the currently loaded configuration, loading it first if needed.
+
+        Returns:
+            Config: The active :class:`Config` instance.
+        """
         if self._config is None:
             self.load()
         return self._config
 
 
 def create_default_config(path: Union[str, Path] = "~/.pyclaw/config.yaml") -> Config:
-    """Create a default config file and return Config object."""
+    """Create a default config file on disk and return the corresponding Config object.
+
+    Parent directories are created automatically if they do not already exist.
+
+    Args:
+        path (Union[str, Path]): Destination path for the new config file.
+            Defaults to ``~/.pyclaw/config.yaml``.
+
+    Returns:
+        Config: The default :class:`Config` instance that was written to disk.
+    """
     config = Config()
     
     # Ensure directory exists
@@ -175,6 +259,15 @@ def create_default_config(path: Union[str, Path] = "~/.pyclaw/config.yaml") -> C
 
 # Convenience function
 def load_config(config_path: Optional[Union[str, Path]] = None) -> Config:
-    """Load configuration from file."""
+    """Convenience wrapper: create a :class:`ConfigLoader` and load configuration.
+
+    Args:
+        config_path (Optional[Union[str, Path]]): Explicit path to the YAML
+            config file. When omitted, :data:`DEFAULT_CONFIG_PATHS` are
+            searched.
+
+    Returns:
+        Config: The loaded and validated :class:`Config` instance.
+    """
     loader = ConfigLoader(config_path)
     return loader.load()

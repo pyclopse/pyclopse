@@ -12,17 +12,42 @@ logger = logging.getLogger("pyclaw.channels.imessage")
 
 
 class IMessageAdapter(ChannelAdapter):
-    """
-    Apple iMessage adapter using imsg CLI or bluebubbles.
-    
+    """Apple iMessage adapter using the imsg CLI or a BlueBubbles server.
+
     Requires one of:
-    1. imsg CLI installed (https://github.com/jakewatkins/imsg)
-    2. BlueBubbles server (https://bluebubbles.app)
-    
-    This adapter works on macOS and requires the Messages app.
+
+    1. ``imsg`` CLI installed — https://github.com/jakewatkins/imsg
+    2. BlueBubbles server running — https://bluebubbles.app
+
+    This adapter only works on macOS and requires the Messages app to be
+    configured with an Apple ID.
+
+    Attributes:
+        imsg_path (str): Path to the ``imsg`` binary. Defaults to ``"imsg"``.
+        db_path (Optional[str]): Path to the Messages ``chat.db`` SQLite file.
+        service (str): Service type, e.g. ``"iMessage"`` or ``"SMS"``.
+        region (str): Region code. Defaults to ``"US"``.
+        use_bluebubbles (bool): Whether to use BlueBubbles instead of imsg.
+        bluebubbles_url (str): Base URL of the BlueBubbles server.
+        bluebubbles_api_key (Optional[str]): API key for BlueBubbles auth.
     """
 
     def __init__(self, config: Dict[str, Any]):
+        """Initialize the iMessage adapter with backend configuration.
+
+        Args:
+            config (Dict[str, Any]): Configuration dictionary. Expected keys:
+                ``imsg_path`` (str): Path to imsg binary. Defaults to
+                    ``"imsg"``.
+                ``db_path`` (str): Path to Messages chat.db.
+                ``service`` (str): Service type. Defaults to ``"iMessage"``.
+                ``region`` (str): Region code. Defaults to ``"US"``.
+                ``use_bluebubbles`` (bool): Use BlueBubbles API instead of
+                    imsg. Defaults to ``False``.
+                ``bluebubbles_url`` (str): BlueBubbles server URL. Defaults to
+                    ``"http://localhost:1234"``.
+                ``bluebubbles_api_key`` (str): BlueBubbles API key.
+        """
         super().__init__(config)
         self.imsg_path = config.get("imsg_path", "imsg")
         self.db_path = config.get("db_path")  # Path to chat.db
@@ -32,13 +57,26 @@ class IMessageAdapter(ChannelAdapter):
         self.bluebubbles_url = config.get("bluebubbles_url", "http://localhost:1234")
         self.bluebubbles_api_key = config.get("bluebubbles_api_key")
         self._session = None
-    
+
     @property
     def channel_name(self) -> str:
+        """Return the channel name for this adapter.
+
+        Returns:
+            str: Always ``"imessage"``.
+        """
         return "imessage"
-    
+
     async def connect(self) -> None:
-        """Initialize the iMessage client."""
+        """Initialize the iMessage backend connection.
+        When ``use_bluebubbles`` is ``True``, creates an httpx session and
+        verifies the BlueBubbles server health endpoint. Otherwise, verifies
+        the ``imsg`` binary is available.
+
+        Raises:
+            RuntimeError: If ``httpx`` is not installed, the BlueBubbles
+                server is not responding, or ``imsg`` is not found.
+        """
         try:
             if self.use_bluebubbles:
                 import httpx
@@ -61,9 +99,9 @@ class IMessageAdapter(ChannelAdapter):
                 await result.communicate()
                 if result.returncode != 0:
                     raise RuntimeError("imsg not found. Install from https://github.com/jakewatkins/imsg")
-            
+
             logger.info(f"Connected to iMessage")
-            
+
         except ImportError:
             raise RuntimeError(
                 "httpx not installed. "
@@ -71,9 +109,12 @@ class IMessageAdapter(ChannelAdapter):
             )
         except Exception as e:
             raise RuntimeError(f"Failed to connect to iMessage: {e}")
-    
+
     async def disconnect(self) -> None:
-        """Disconnect from iMessage."""
+        """Disconnect from iMessage and release resources.
+
+        Closes the BlueBubbles httpx session if one is open.
+        """
         if self._session:
             await self._session.aclose()
         self._session = None
@@ -85,7 +126,25 @@ class IMessageAdapter(ChannelAdapter):
         content: str,
         reply_to: Optional[str] = None,
     ) -> str:
-        """Send a message to an iMessage recipient."""
+        """Send a text message to an iMessage recipient.
+
+        Delegates to either :meth:`_send_via_bluebubbles` or
+        :meth:`_send_via_imsg` depending on the configured backend.
+
+        Args:
+            target (MessageTarget): Destination. Uses ``target.user_id`` as
+                the recipient phone number or email address.
+            content (str): Text content to send.
+            reply_to (Optional[str]): Message GUID to quote/reply to.
+                Defaults to None.
+
+        Returns:
+            str: Message GUID returned by the backend, or ``"sent"`` if
+                unavailable.
+
+        Raises:
+            ValueError: If ``target.user_id`` is not set.
+        """
         to = target.user_id
         if not to:
             raise ValueError("No target user_id provided")
@@ -97,8 +156,25 @@ class IMessageAdapter(ChannelAdapter):
         # Handle imsg CLI
         return await self._send_via_imsg(to, content, reply_to)
     
-    async def _send_viasg(self, to_im: str, content: str, reply_to: Optional[str] = None) -> str:
-        """Send message via imsg CLI."""
+    async def _send_via_imsg(self, to: str, content: str, reply_to: Optional[str] = None) -> str:
+        """Send a text message via the imsg CLI.
+
+        Spawns an imsg subprocess, passes the content via stdin, and returns
+        the message GUID printed to stdout on success.
+
+        Args:
+            to (str): Recipient phone number or email address.
+            content (str): Text content to send.
+            reply_to (Optional[str]): Unused — imsg does not support quoting.
+                Defaults to None.
+
+        Returns:
+            str: Message GUID from imsg output, or ``"sent"`` if no output.
+
+        Raises:
+            RuntimeError: If imsg exits with a non-zero return code.
+            RuntimeError: If the imsg binary is not found.
+        """
         cmd = [self.imsg_path, "send", "-"]
         
         if self.db_path:
@@ -132,7 +208,22 @@ class IMessageAdapter(ChannelAdapter):
             raise RuntimeError("imsg not found. Install from https://github.com/jakewatkins/imsg")
     
     async def _send_via_bluebubbles(self, to: str, content: str, reply_to: Optional[str] = None) -> str:
-        """Send message via BlueBubbles API."""
+        """Send a text message via the BlueBubbles REST API.
+
+        Args:
+            to (str): Recipient phone number or email address.
+            content (str): Text content to send.
+            reply_to (Optional[str]): Message GUID to quote in the reply.
+                Defaults to None.
+
+        Returns:
+            str: Message GUID returned by BlueBubbles, or ``"sent"`` if
+                absent from the response.
+
+        Raises:
+            RuntimeError: If the BlueBubbles client is not connected or if
+                the API returns a non-200 status.
+        """
         if not self._session:
             raise RuntimeError("BlueBubbles client not connected")
         
@@ -158,7 +249,22 @@ class IMessageAdapter(ChannelAdapter):
         target: MessageTarget,
         media: MediaAttachment,
     ) -> str:
-        """Send media via iMessage."""
+        """Send a media attachment via iMessage.
+
+        Delegates to :meth:`_send_media_bluebubbles` or
+        :meth:`_send_media_imsg` depending on the configured backend.
+
+        Args:
+            target (MessageTarget): Destination. Uses ``target.user_id`` as
+                the recipient phone number or email address.
+            media (MediaAttachment): Media to send. ``file_path`` must be set.
+
+        Returns:
+            str: Message GUID or ``"sent"``.
+
+        Raises:
+            ValueError: If ``target.user_id`` is not set.
+        """
         to = target.user_id
         if not to:
             raise ValueError("No target user_id provided")
@@ -170,7 +276,21 @@ class IMessageAdapter(ChannelAdapter):
         return await self._send_media_imsg(to, media)
     
     async def _send_media_imsg(self, to: str, media: MediaAttachment) -> str:
-        """Send media via imsg CLI."""
+        """Send a media attachment via the imsg CLI using the ``-a`` flag.
+
+        Args:
+            to (str): Recipient phone number or email address.
+            media (MediaAttachment): Media to send. ``file_path`` must be set.
+                URL media is not supported and raises ``NotImplementedError``.
+
+        Returns:
+            str: Always ``"sent"`` on success.
+
+        Raises:
+            NotImplementedError: If only ``media.url`` is provided.
+            RuntimeError: If imsg exits with a non-zero return code or is not
+                found.
+        """
         file_path = media.file_path
         if not file_path and media.url:
             # Would need to download first
@@ -203,7 +323,22 @@ class IMessageAdapter(ChannelAdapter):
             raise RuntimeError("imsg not found")
     
     async def _send_media_bluebubbles(self, to: str, media: MediaAttachment) -> str:
-        """Send media via BlueBubbles API."""
+        """Send a media attachment via the BlueBubbles REST API.
+
+        Uploads the file as a multipart form POST and includes an optional
+        caption as message text.
+
+        Args:
+            to (str): Recipient phone number or email address.
+            media (MediaAttachment): Media to send. ``file_path`` must be set.
+
+        Returns:
+            str: Message GUID from BlueBubbles, or ``"sent"`` if absent.
+
+        Raises:
+            RuntimeError: If the BlueBubbles client is not connected or if
+                the API returns a non-200 status.
+        """
         if not self._session:
             raise RuntimeError("BlueBubbles client not connected")
         
@@ -232,12 +367,31 @@ class IMessageAdapter(ChannelAdapter):
         return result.get("guid", "sent")
     
     async def react(self, message_id: str, emoji: str) -> None:
-        """Add reaction to a message."""
+        """Add an emoji reaction to an iMessage message (not fully implemented).
+
+        iMessage reactions require AppleScript or BlueBubbles and are not
+        currently implemented. The call is silently ignored with a debug log.
+
+        Args:
+            message_id (str): Message GUID to react to.
+            emoji (str): Emoji to use as the reaction.
+        """
         # iMessage reactions are complex - would need to use AppleScript or bluebubbles
         logger.debug(f"iMessage reactions not fully implemented, ignoring: {emoji}")
     
     async def handle_webhook(self, payload: Dict[str, Any]) -> Optional[Message]:
-        """Handle incoming webhook (from BlueBubbles)."""
+        """Parse and handle an incoming BlueBubbles webhook payload.
+
+        BlueBubbles delivers incoming iMessages as webhook POSTs. The payload
+        may have a nested ``data.message`` structure or be flat.
+
+        Args:
+            payload (Dict[str, Any]): Raw JSON webhook payload from
+                BlueBubbles.
+
+        Returns:
+            Optional[Message]: Parsed message, or ``None`` on parse error.
+        """
         try:
             # BlueBubbles sends messages as webhook
             if "data" in payload:
@@ -265,7 +419,13 @@ class IMessageAdapter(ChannelAdapter):
             return None
     
     async def _listen(self) -> None:
-        """Listen for messages (polling or long-poll)."""
+        """Poll for new iMessages via BlueBubbles or sleep as a no-op fallback.
+
+        When ``use_bluebubbles`` is ``True``, polls the BlueBubbles
+        ``/api/v1/chat/latest`` endpoint with a 60-second timeout. Otherwise,
+        sleeps in a loop since imsg does not support listening. In production,
+        configure BlueBubbles webhooks for real-time delivery instead.
+        """
         if self.use_bluebubbles:
             # BlueBubbles supports long-polling
             while self._running:

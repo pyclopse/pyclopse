@@ -66,18 +66,23 @@ _TAGS_RE = re.compile(r"^Tags:\s*(.+)$", re.MULTILINE | re.IGNORECASE)
 
 
 class FileMemoryBackend(MemoryBackend):
-    """
-    Per-agent file-based memory backend using markdown daily journals.
+    """Per-agent file-based memory backend using markdown daily journals.
 
-    Parameters
-    ----------
-    base_dir:
-        The agent's root directory (e.g. ``~/.pyclaw/agents/myagent``).
-        ``MEMORY.md`` lives here; daily journal files live in ``memory/``.
-    embedding_backend:
-        Optional :class:`~pyclaw.memory.embeddings.EmbeddingBackend`.  When
-        provided, :meth:`write` indexes the entry and :meth:`search` ranks
-        results by cosine similarity instead of keyword frequency.
+    Each agent gets its own directory under ``~/.pyclaw/agents/{agent_name}/``.
+    ``MEMORY.md`` is the curated file injected into sessions; daily journal
+    files are written by memory tools and live in ``memory/``.
+
+    When an optional ``EmbeddingBackend`` is provided, write operations also
+    update ``memory/vectors.json`` and search uses cosine-similarity ranking
+    instead of keyword frequency.
+
+    Attributes:
+        _base (Path): Root directory for this agent's data.
+        _daily_dir (Path): Directory containing daily journal ``.md`` files
+            and the optional ``vectors.json`` index.
+        _embedding_backend (Optional[EmbeddingBackend]): Embedding provider
+            used for vector indexing and similarity search, or None if
+            embeddings are disabled.
     """
 
     def __init__(
@@ -85,6 +90,15 @@ class FileMemoryBackend(MemoryBackend):
         base_dir: str,
         embedding_backend: Optional["EmbeddingBackend"] = None,
     ) -> None:
+        """Initialise the backend for a specific agent directory.
+
+        Args:
+            base_dir (str): The agent's root directory, e.g.
+                ``~/.pyclaw/agents/myagent``.  The ``memory/`` subdirectory
+                is created automatically if it does not exist.
+            embedding_backend (Optional[EmbeddingBackend]): Embedding provider
+                for vector indexing.  Defaults to None (keyword search only).
+        """
         self._base = Path(base_dir).expanduser()
         self._daily_dir = self._base / "memory"
         self._daily_dir.mkdir(parents=True, exist_ok=True)
@@ -92,10 +106,21 @@ class FileMemoryBackend(MemoryBackend):
 
     @property
     def _vector_index_path(self) -> Path:
+        """Path to the ``vectors.json`` embedding index file.
+
+        Returns:
+            Path: Absolute path to ``{daily_dir}/vectors.json``.
+        """
         return self._daily_dir / "vectors.json"
 
     def _load_vectors(self) -> Dict[str, List[float]]:
-        """Load the vector index from disk; return empty dict if absent."""
+        """Load the vector index from disk; return empty dict if absent.
+
+        Returns:
+            Dict[str, List[float]]: Mapping of memory key to its embedding
+                vector, or an empty dict if the index does not exist or
+                cannot be parsed.
+        """
         if not self._vector_index_path.exists():
             return {}
         try:
@@ -105,7 +130,15 @@ class FileMemoryBackend(MemoryBackend):
             return {}
 
     def _save_vectors(self, index: Dict[str, List[float]]) -> None:
-        """Atomically write the vector index to disk."""
+        """Atomically write the vector index to disk.
+
+        Uses a ``.tmp`` intermediate file and an atomic rename so that a
+        crash mid-write does not corrupt the existing index.
+
+        Args:
+            index (Dict[str, List[float]]): The complete vector index to
+                persist, mapping each memory key to its embedding vector.
+        """
         try:
             tmp = self._vector_index_path.with_suffix(".tmp")
             tmp.write_text(json.dumps(index), encoding="utf-8")
@@ -119,11 +152,20 @@ class FileMemoryBackend(MemoryBackend):
 
     @property
     def curated_path(self) -> Path:
-        """Path to the per-agent MEMORY.md file."""
+        """Path to the per-agent MEMORY.md file.
+
+        Returns:
+            Path: Absolute path to ``{base_dir}/MEMORY.md``.
+        """
         return self._base / "MEMORY.md"
 
     def read_curated(self) -> Optional[str]:
-        """Return the contents of MEMORY.md, or None if it doesn't exist."""
+        """Return the contents of MEMORY.md, or None if it doesn't exist.
+
+        Returns:
+            Optional[str]: Full text content of MEMORY.md, or None if the
+                file has not yet been created.
+        """
         if self.curated_path.exists():
             return self.curated_path.read_text(encoding="utf-8")
         return None
@@ -133,7 +175,20 @@ class FileMemoryBackend(MemoryBackend):
     # ------------------------------------------------------------------ #
 
     async def read(self, key: str) -> Optional[Dict[str, Any]]:
-        """Return the most recent entry for *key* (newest daily file first)."""
+        """Return the most recent entry for *key* (newest daily file first).
+
+        Daily files are scanned in reverse chronological order; the first
+        match is returned.
+
+        Args:
+            key (str): The memory key to look up.
+
+        Returns:
+            Optional[Dict[str, Any]]: A dict with keys ``"key"``,
+                ``"content"``, ``"tags"``, and ``"date"`` (the YYYY-MM-DD
+                stem of the file in which the entry was found), or None if
+                the key does not exist in any daily file.
+        """
         for path in self._daily_files():
             entries = self._parse_daily(path)
             if key in entries:
@@ -151,6 +206,15 @@ class FileMemoryBackend(MemoryBackend):
 
         If an embedding backend is configured, the entry content is also
         embedded and stored in the vector index.
+
+        Args:
+            key (str): The memory key to write.
+            value (Dict[str, Any]): Must contain a ``"content"`` key
+                (str).  Optionally includes a ``"tags"`` key (list of str
+                or a comma-separated string).
+
+        Returns:
+            bool: Always True (write errors are logged but not re-raised).
         """
         content = value.get("content", "")
         tags = value.get("tags") or []
@@ -170,7 +234,17 @@ class FileMemoryBackend(MemoryBackend):
         return True
 
     async def delete(self, key: str) -> bool:
-        """Remove *key* from its most recent daily file and the vector index."""
+        """Remove *key* from its most recent daily file and the vector index.
+
+        Scans daily files newest-first; removes the first occurrence found.
+        Also removes the corresponding entry from ``vectors.json`` if present.
+
+        Args:
+            key (str): The memory key to delete.
+
+        Returns:
+            bool: True if the key was found and removed, False if not found.
+        """
         found = False
         for path in self._daily_files():
             entries = self._parse_daily(path)
@@ -197,8 +271,7 @@ class FileMemoryBackend(MemoryBackend):
         limit: int = 10,
         **kwargs: Any,
     ) -> List[Dict[str, Any]]:
-        """
-        Search across MEMORY.md and all daily files.
+        """Search across MEMORY.md and all daily files.
 
         When an embedding backend is configured the query is embedded and
         results are ranked by cosine similarity.  Entries that have not yet
@@ -207,13 +280,37 @@ class FileMemoryBackend(MemoryBackend):
 
         Falls back to keyword frequency scoring when no embedding backend is
         set.
+
+        Args:
+            query (str): Search query string.
+            limit (int): Maximum number of results to return. Defaults to 10.
+            **kwargs (Any): Unused; accepted for interface compatibility.
+
+        Returns:
+            List[Dict[str, Any]]: Up to *limit* matching entry dicts, ordered
+                by relevance (most relevant first).  Each dict contains
+                ``"key"``, ``"content"``, ``"tags"``, and ``"date"``.
         """
         if self._embedding_backend is not None:
             return await self._vector_search(query, limit)
         return await self._keyword_search(query, limit)
 
     async def _vector_search(self, query: str, limit: int) -> List[Dict[str, Any]]:
-        """Embedding-based search via cosine similarity."""
+        """Embedding-based search via cosine similarity.
+
+        Embeds *query* using the configured embedding backend, then ranks all
+        known entries by their cosine similarity to the query vector.  Entries
+        without an index entry score 0.  Falls back to keyword search if the
+        embedding call fails.
+
+        Args:
+            query (str): The search query to embed and compare.
+            limit (int): Maximum number of results to return.
+
+        Returns:
+            List[Dict[str, Any]]: Up to *limit* entry dicts ordered by
+                descending cosine similarity.
+        """
         try:
             query_vecs = await self._embedding_backend.embed([query])  # type: ignore[union-attr]
             query_vec = query_vecs[0]
@@ -253,7 +350,20 @@ class FileMemoryBackend(MemoryBackend):
         return candidates[:limit]
 
     async def _keyword_search(self, query: str, limit: int) -> List[Dict[str, Any]]:
-        """Keyword frequency search (original implementation)."""
+        """Keyword frequency search across MEMORY.md and all daily files.
+
+        Splits *query* into tokens and counts occurrences (case-insensitive)
+        in the concatenation of each entry's key and content.  Entries with
+        a score of zero are excluded.
+
+        Args:
+            query (str): Whitespace-separated keyword query.
+            limit (int): Maximum number of results to return.
+
+        Returns:
+            List[Dict[str, Any]]: Up to *limit* matching entry dicts ordered
+                by descending keyword frequency score.
+        """
         tokens = [t.lower() for t in query.split() if t]
         if not tokens:
             return []
@@ -290,19 +400,22 @@ class FileMemoryBackend(MemoryBackend):
         return candidates[:limit]
 
     async def reindex(self, batch_size: int = 32) -> Dict[str, Any]:
-        """
-        Re-embed all entries across all daily files and rebuild vectors.json.
+        """Re-embed all entries across all daily files and rebuild vectors.json.
 
         Useful after enabling embeddings on an existing memory directory, or
         after switching embedding models.  Entries are sent to the embedding
         backend in batches of *batch_size* to avoid rate-limit issues.
 
-        Returns a summary dict::
-
-            {"indexed": 12, "skipped": 0, "errors": 2}
-
         If no embedding backend is configured, returns immediately with all
         counts at zero.
+
+        Args:
+            batch_size (int): Number of entries to embed per API call.
+                Defaults to 32.
+
+        Returns:
+            Dict[str, Any]: Summary with keys ``"indexed"`` (int),
+                ``"skipped"`` (int, always 0), and ``"errors"`` (int).
         """
         if self._embedding_backend is None:
             return {"indexed": 0, "skipped": 0, "errors": 0}
@@ -342,7 +455,16 @@ class FileMemoryBackend(MemoryBackend):
         return {"indexed": indexed, "skipped": 0, "errors": errors}
 
     async def list(self, prefix: str = "") -> List[str]:
-        """List all keys across all daily files (deduplicated, newest wins)."""
+        """List all keys across all daily files (deduplicated, newest wins).
+
+        Args:
+            prefix (str): Optional key prefix filter. Defaults to ``""``
+                (return all keys).
+
+        Returns:
+            List[str]: Deduplicated list of memory keys, in insertion order
+                (newest daily file first).
+        """
         seen: dict[str, None] = {}
         for path in self._daily_files():
             for key in self._parse_daily(path):
@@ -355,7 +477,20 @@ class FileMemoryBackend(MemoryBackend):
     # ------------------------------------------------------------------ #
 
     def _parse_daily(self, path: Path) -> Dict[str, Dict[str, Any]]:
-        """Parse a daily (or MEMORY.md) file into ``{key: {content, tags}}``."""
+        """Parse a daily (or MEMORY.md) file into ``{key: {content, tags}}``.
+
+        Splits the file on ``## heading`` markers.  Each heading becomes a
+        key; the text below it (stripped of the trailing ``---`` separator
+        and any ``Tags:`` line) becomes the content.
+
+        Args:
+            path (Path): Path to the markdown file to parse.
+
+        Returns:
+            Dict[str, Dict[str, Any]]: Mapping of key string to a dict with
+                ``"content"`` (str) and ``"tags"`` (List[str]).  Returns an
+                empty dict if the file cannot be read.
+        """
         try:
             text = path.read_text(encoding="utf-8")
         except OSError:
@@ -380,7 +515,18 @@ class FileMemoryBackend(MemoryBackend):
     # ------------------------------------------------------------------ #
 
     def _upsert(self, path: Path, key: str, content: str, tags: List[str]) -> None:
-        """Create or update a section in *path*."""
+        """Create or update a section in *path*.
+
+        If the file does not yet exist it is created with a header line.
+        If a section for *key* already exists it is replaced in-place;
+        otherwise the formatted section is appended.
+
+        Args:
+            path (Path): Target daily file to write into.
+            key (str): The section heading / memory key.
+            content (str): Body text for the section.
+            tags (List[str]): Tag strings to append as a ``Tags:`` line.
+        """
         if not path.exists():
             path.write_text(self._file_header(path.stem), encoding="utf-8")
 
@@ -399,7 +545,15 @@ class FileMemoryBackend(MemoryBackend):
         path.write_text(new_text, encoding="utf-8")
 
     def _remove_section(self, path: Path, key: str) -> None:
-        """Remove the section for *key* from *path*."""
+        """Remove the section for *key* from *path*.
+
+        Uses a multiline regex to match from the heading through to the next
+        heading or end-of-file and replaces the match with an empty string.
+
+        Args:
+            path (Path): The daily file to modify.
+            key (str): The section heading / memory key to remove.
+        """
         text = path.read_text(encoding="utf-8")
         pattern = re.compile(
             rf"^## {re.escape(key)}\n.*?(?=^## |\Z)",
@@ -413,18 +567,51 @@ class FileMemoryBackend(MemoryBackend):
     # ------------------------------------------------------------------ #
 
     def _today_path(self) -> Path:
+        """Return the path to today's daily journal file.
+
+        Returns:
+            Path: ``{daily_dir}/YYYY-MM-DD.md`` for today's local date.
+        """
         return self._daily_dir / f"{now().strftime('%Y-%m-%d')}.md"
 
     def _daily_files(self) -> List[Path]:
-        """Return daily ``.md`` files sorted newest-first."""
+        """Return daily ``.md`` files sorted newest-first.
+
+        Only files whose names match the ``YYYY-MM-DD.md`` pattern are
+        included; ``vectors.json`` and other files are excluded.
+
+        Returns:
+            List[Path]: Daily journal file paths sorted in reverse
+                chronological order (newest first).
+        """
         return sorted(self._daily_dir.glob("????-??-??.md"), reverse=True)
 
     @staticmethod
     def _file_header(stem: str) -> str:
+        """Generate the header line for a new daily file.
+
+        Args:
+            stem (str): The filename stem (YYYY-MM-DD) to use in the header.
+
+        Returns:
+            str: A markdown H1 header string followed by a blank line.
+        """
         return f"# Memory — {stem}\n\n"
 
     @staticmethod
     def _format_section(key: str, content: str, tags: List[str]) -> str:
+        """Format a single memory section in the daily-journal markdown format.
+
+        Args:
+            key (str): The section heading / memory key.
+            content (str): Body text for the section.
+            tags (List[str]): Tag strings appended as a ``Tags:`` line when
+                non-empty.
+
+        Returns:
+            str: Formatted markdown section string ending with a ``---``
+                separator and trailing newlines.
+        """
         body = content.strip()
         if tags:
             body += f"\n\nTags: {', '.join(tags)}"
@@ -432,6 +619,14 @@ class FileMemoryBackend(MemoryBackend):
 
     @staticmethod
     def _score(tokens: List[str], text: str) -> int:
-        """Count how many query tokens appear in *text* (case-insensitive)."""
+        """Count how many query tokens appear in *text* (case-insensitive).
+
+        Args:
+            tokens (List[str]): Lowercase query tokens to search for.
+            text (str): The text to search within (compared case-insensitively).
+
+        Returns:
+            int: Total occurrence count of all tokens across *text*.
+        """
         lower = text.lower()
         return sum(lower.count(t) for t in tokens)

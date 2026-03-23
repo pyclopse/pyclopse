@@ -50,17 +50,40 @@ MINIMAL_BOOTSTRAP_FILES = [
 
 
 def get_agent_dir(agent_name: str, config_dir: str = "~/.pyclaw") -> Path:
-    """Get the agent's directory."""
+    """Return the filesystem path for an agent's bootstrap directory.
+
+    Args:
+        agent_name (str): Agent identifier used as the directory name.
+        config_dir (str): Base config directory. Defaults to "~/.pyclaw".
+
+    Returns:
+        Path: Absolute path to ``<config_dir>/agents/<agent_name>/``.
+    """
     return Path(config_dir).expanduser() / "agents" / agent_name
 
 
 def get_workspace_dir(config_dir: str = "~/.pyclaw") -> Path:
-    """Get the workspace directory."""
+    """Return the filesystem path for the shared workspace directory.
+
+    Args:
+        config_dir (str): Base config directory. Defaults to "~/.pyclaw".
+
+    Returns:
+        Path: Absolute path to ``<config_dir>/workspace/``.
+    """
     return Path(config_dir).expanduser() / "workspace"
 
 
 def read_bootstrap_file(filepath: Path) -> Optional[str]:
-    """Read a bootstrap file if it exists."""
+    """Read a bootstrap file and return its stripped text content.
+
+    Args:
+        filepath (Path): Path to the file to read.
+
+    Returns:
+        Optional[str]: File content (stripped), or None if the file does not
+            exist, is empty, or cannot be read.
+    """
     if filepath.exists():
         try:
             content = filepath.read_text().strip()
@@ -78,18 +101,26 @@ def build_system_prompt(
     is_subagent: bool = False,
     extra_skill_dirs: Optional[list] = None,
 ) -> str:
-    """
-    Build system prompt from agent files - matching OpenClaw's approach.
-    
+    """Build a system prompt by assembling the agent's bootstrap files.
+
+    Reads the agent's directory for BOOTSTRAP_FILES (or MINIMAL_BOOTSTRAP_FILES
+    when is_subagent=True), constructs a structured prompt with a Project Context
+    section, and optionally appends a lean ``<available_skills>`` XML block.
+
     Args:
-        agent_name: Name of the agent
-        config_dir: Base config directory
-        default_prompt: Fallback prompt if no files exist
-        include_memory: Whether to include MEMORY.md
-        is_subagent: If True, use minimal bootstrap (for subagents/cron)
-    
+        agent_name (str): Agent identifier; used to locate the agent directory.
+        config_dir (str): Base config directory. Defaults to "~/.pyclaw".
+        default_prompt (Optional[str]): Fallback prompt used when no agent files
+            are found. Defaults to "You are a helpful AI assistant." when None.
+        include_memory (bool): Whether to include MEMORY.md / memory.md.
+            Defaults to True.
+        is_subagent (bool): If True, uses MINIMAL_BOOTSTRAP_FILES (smaller set)
+            and skips skill injection. Defaults to False.
+        extra_skill_dirs (Optional[list]): Additional directories to search for
+            skills beyond the standard locations. Defaults to None.
+
     Returns:
-        Complete system prompt string
+        str: The assembled system prompt string.
     """
     agent_dir = get_agent_dir(agent_name, config_dir)
     
@@ -198,9 +229,23 @@ def build_job_prompt(
 ) -> str:
     """Build a system prompt for a job run based on AgentRun include_* flags.
 
-    Reads bootstrap files according to the resolved flags on *agent_run*, then
-    appends ``agent_run.instruction`` if set.  Works with any prompt_preset
-    (full / minimal / task) plus any per-field overrides.
+    Reads each bootstrap file only when its corresponding ``include_*`` flag on
+    *agent_run* is True.  Appends ``agent_run.instruction`` if set, and any
+    ``agent_run.include_files`` paths.  Works with any prompt_preset (full /
+    minimal / task) plus per-field overrides.
+
+    Args:
+        agent_name (str): Agent identifier used to locate bootstrap files.
+        config_dir (str): Base config directory. Defaults to "~/.pyclaw".
+        agent_run (Any): An AgentRun-like object with ``include_*`` boolean
+            fields (e.g. ``include_personality``, ``include_memory``) and an
+            optional ``instruction`` string. Defaults to None.
+        extra_dirs (Optional[list]): Additional skill directories to search.
+            Defaults to None.
+
+    Returns:
+        str: The assembled job system prompt, or "You are a helpful AI assistant."
+            if no content was produced.
     """
     agent_dir = get_agent_dir(agent_name, config_dir)
 
@@ -304,7 +349,19 @@ def build_minimal_system_prompt(
     agent_name: str,
     config_dir: str = "~/.pyclaw",
 ) -> str:
-    """Build minimal system prompt for subagents (matching OpenClaw's minimal mode)."""
+    """Build a minimal system prompt for subagent and cron sessions.
+
+    Uses MINIMAL_BOOTSTRAP_FILES (AGENTS.md, TOOLS.md, SOUL.md, IDENTITY.md,
+    USER.md) and excludes MEMORY.md and skill injection to keep the prompt
+    small.
+
+    Args:
+        agent_name (str): Agent identifier.
+        config_dir (str): Base config directory. Defaults to "~/.pyclaw".
+
+    Returns:
+        str: Assembled minimal system prompt string.
+    """
     return build_system_prompt(
         agent_name=agent_name,
         config_dir=config_dir,
@@ -314,7 +371,16 @@ def build_minimal_system_prompt(
 
 
 def get_agent_file_path(agent_name: str, filename: str, config_dir: str = "~/.pyclaw") -> Optional[Path]:
-    """Get path to a specific agent file."""
+    """Return the path to a specific file in an agent's directory if it exists.
+
+    Args:
+        agent_name (str): Agent identifier.
+        filename (str): Filename to locate (e.g. "SOUL.md").
+        config_dir (str): Base config directory. Defaults to "~/.pyclaw".
+
+    Returns:
+        Optional[Path]: Absolute path to the file, or None if it does not exist.
+    """
     filepath = get_agent_dir(agent_name, config_dir) / filename
     if filepath.exists():
         return filepath
@@ -322,7 +388,16 @@ def get_agent_file_path(agent_name: str, filename: str, config_dir: str = "~/.py
 
 
 def list_agent_files(agent_name: str, config_dir: str = "~/.pyclaw") -> list[str]:
-    """List all files in agent directory."""
+    """List all files in an agent's bootstrap directory.
+
+    Args:
+        agent_name (str): Agent identifier.
+        config_dir (str): Base config directory. Defaults to "~/.pyclaw".
+
+    Returns:
+        list[str]: Filenames (not full paths) in the agent directory, or an
+            empty list if the directory does not exist.
+    """
     agent_dir = get_agent_dir(agent_name, config_dir)
     if agent_dir.exists():
         return [f.name for f in agent_dir.iterdir() if f.is_file()]
@@ -330,16 +405,31 @@ def list_agent_files(agent_name: str, config_dir: str = "~/.pyclaw") -> list[str
 
 
 def _get_templates_dir() -> Path:
-    """Return the path to the bundled templates directory."""
+    """Return the path to the bundled agent template directory.
+
+    Templates live alongside this module file and are copied to new agent
+    directories by ensure_agent_files().
+
+    Returns:
+        Path: Absolute path to the ``templates/`` directory next to this module.
+    """
     return Path(__file__).parent / "templates"
 
 
 def ensure_agent_files(agent_name: str, config_dir: str = "~/.pyclaw") -> dict[str, Path]:
-    """
-    Ensure bootstrap files exist for an agent.
-    Creates default templates if they don't exist.
+    """Ensure bootstrap files exist for an agent, creating defaults from templates.
 
-    Returns dict of filename -> filepath for existing/created files.
+    Creates the agent directory if it does not exist.  For each standard
+    bootstrap file, copies the bundled template if no file is present; otherwise
+    leaves existing files untouched.
+
+    Args:
+        agent_name (str): Agent identifier used as the directory name.
+        config_dir (str): Base config directory. Defaults to "~/.pyclaw".
+
+    Returns:
+        dict[str, Path]: Mapping of filename to absolute path for every file
+            that exists or was created successfully.
     """
     agent_dir = get_agent_dir(agent_name, config_dir)
     agent_dir.mkdir(parents=True, exist_ok=True)

@@ -479,7 +479,19 @@ class TelegramConfig(BaseModel):
     bots: Dict[str, TelegramBotConfig] = Field(default_factory=dict)
 
     def effective_config_for_bot(self, name: str) -> TelegramBotConfig:
-        """Return a fully-resolved config for the named bot, inheriting parent defaults."""
+        """Return a fully-resolved config for the named bot, inheriting parent defaults.
+
+        Fields that are ``None`` on the named bot entry are filled in from the
+        parent ``TelegramConfig`` values so that callers always receive a complete
+        configuration object.
+
+        Args:
+            name (str): Key into ``self.bots`` identifying the bot to resolve.
+
+        Returns:
+            TelegramBotConfig: A new instance with all optional fields populated
+                from parent defaults where the bot-specific value was absent.
+        """
         bot = self.bots[name]
         return TelegramBotConfig.model_validate({
             "botToken": bot.bot_token,

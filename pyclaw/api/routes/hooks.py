@@ -11,6 +11,14 @@ router = APIRouter()
 
 
 def _get_gateway():
+    """Retrieve the global gateway instance.
+
+    Returns:
+        Any: The gateway instance.
+
+    Raises:
+        HTTPException: With status 503 if the gateway is not initialized.
+    """
     from pyclaw.api.app import get_gateway
     return get_gateway()
 
