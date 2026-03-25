@@ -18,6 +18,10 @@ JobScheduler._loop()
                                              active_session; they bypass that system entirely
                 → agent.handle_message()   — runs through FastAgent
                 → evict_session_runner()   — cleanup for isolated sessions
+                → strip_thinking_tags()    — ALWAYS strips <thinking>/<think> blocks
+                                             from job results before any delivery;
+                                             this is unconditional — show_thinking on
+                                             the agent has no effect for job outputs
                 → _deliver_to_session()    — if report_to_agent is set, delivers result
                                              to the named agent's current active channel
 ```
@@ -98,7 +102,7 @@ Executes via `asyncio.create_subprocess_shell`. Stdout/stderr captured and deliv
 
 The agent receives `message` as the user turn. The system prompt is assembled at runtime from the `include_*` flags (see [Prompt Control](#prompt-control) below).
 
-**`report_to_agent`** — if set to another agent's ID, the job result is delivered into that agent's current active session and channel after completion. This lets one agent's job output surface in another agent's conversation thread without manual routing. Example: `"report_to_agent": "niggy"` — Ritchie's TradingScan result gets posted into whatever channel Niggy is currently active on.
+**`report_to_agent`** — if set to another agent's ID, the job result is delivered into that agent's current active session and channel after completion. Thinking tags (`<thinking>` / `<think>`) are always stripped from the result before delivery, regardless of the agent's `show_thinking` setting — job outputs are never a place for raw reasoning to leak into another agent's context. This lets one agent's job output surface in another agent's conversation thread without manual routing. Example: `"report_to_agent": "niggy"` — Ritchie's TradingScan result gets posted into whatever channel Niggy is currently active on.
 
 Job sessions themselves never become the running agent's `active_session` — they are always ephemeral and bypass the active-session pointer system. See [sessions.md](sessions.md) for the full session model.
 

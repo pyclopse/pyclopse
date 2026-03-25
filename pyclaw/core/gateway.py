@@ -548,7 +548,10 @@ class Gateway:
     def _collect_model_limits(providers_cfg: Any) -> Dict[str, int]:
         """Collect per-model concurrency limits from all configured providers."""
         limits: Dict[str, int] = {}
-        for provider in vars(providers_cfg).values():
+        all_providers = list(vars(providers_cfg).values()) + list(
+            (getattr(providers_cfg, "model_extra", None) or {}).values()
+        )
+        for provider in all_providers:
             if provider is None:
                 continue
             models = getattr(provider, "models", None)
@@ -560,14 +563,18 @@ class Gateway:
         return limits
 
     async def _init_concurrency(self) -> None:
-        """Initialize per-model concurrency manager from config."""
+        """Initialize per-model concurrency manager and usage monitors from config."""
         from pyclaw.core.concurrency import init_manager
+        from pyclaw.core.usage import init_registry
         cc = self.config.concurrency
         model_limits = self._collect_model_limits(self.config.providers)
         init_manager(model_limits=model_limits, default=cc.default)
         self._logger.info(
             f"Concurrency manager: default={cc.default}, models={model_limits or '{}'}"
         )
+        # Start usage monitors for providers that have usage: configured
+        registry = init_registry(self.config.providers)
+        await registry.start_all()
 
     async def _init_security(self) -> None:
         """Initialize security subsystem."""
@@ -894,8 +901,9 @@ class Gateway:
                 if session is None:
                     return {"success": False, "error": "Could not create job session"}
 
-                # Inject job prompt and ephemeral flag into session context
+                # Inject job prompt, priority and ephemeral flag into session context
                 session.context["instruction_override"] = job_instruction
+                session.context["_priority"] = getattr(job, "priority", "normal")
                 if session_mode == "isolated":
                     session.context["no_history"] = True
 
@@ -927,6 +935,11 @@ class Gateway:
                             await self._deliver_to_spawning_session(job, agent_run, response, prefix="↩️")
                         except Exception as _qe:
                             self._logger.error(f"subagent follow-up failed: {_qe}")
+
+                # Always strip thinking tags from job results before delivery
+                if response:
+                    from pyclaw.agents.runner import strip_thinking_tags
+                    response = strip_thinking_tags(response)
 
                 # Deliver result: report_to_session takes priority over report_to_agent
                 report_session_id = getattr(agent_run, "report_to_session", None)
@@ -1590,6 +1603,10 @@ class Gateway:
             history_path=session.history_path,
         )
 
+        # Prepend vault memory context if vault is active for this agent
+        object.__setattr__(agent, "_last_recall_facts", None)
+        text = await agent._prepend_vault_context(text, "telegram", session_id=session.id)
+
         # Send typing indicator immediately so the user sees activity
         try:
             await bot.send_chat_action(chat_id=chat_id, action="typing")
@@ -1717,6 +1734,17 @@ class Gateway:
             if not final_text:
                 return
 
+            # Append show_recall block if enabled (not part of session history)
+            _before_recall = len(final_text)
+            final_text = agent._append_recall_block(final_text)
+            self._logger.info(
+                "show_recall: agent=%s last_recall_facts=%s text_len_before=%d text_len_after=%d",
+                agent.id,
+                len(agent._last_recall_facts) if agent._last_recall_facts else None,
+                _before_recall,
+                len(final_text),
+            )
+
             send_kwargs: Dict[str, Any] = {"text": final_text}
             if parse_mode:
                 send_kwargs["parse_mode"] = parse_mode
@@ -1747,6 +1775,9 @@ class Gateway:
                     await bot.send_message(chat_id=chat_id, text=debug_text[:2000])
                 except Exception:
                     pass
+
+            # Fire background vault ingestion for this turn
+            agent._schedule_vault_ingest(session, "telegram", text, clean_response)
 
             # Update session activity
             session.touch(count_delta=2)
@@ -2364,6 +2395,10 @@ class Gateway:
             except Exception as exc:
                 self._logger.warning(f"Channel plugin '{name}' stop error: {exc}")
 
+        # Stop usage monitors
+        from pyclaw.core.usage import get_registry
+        await get_registry().stop_all()
+
         # Stop MCP and API servers
         await self.stop_mcp_server()
         await self.stop_api_server()
@@ -2745,6 +2780,20 @@ class Gateway:
                 "old": {"default": old_cc.default, "models": old_limits},
                 "new": {"default": new_cc.default, "models": new_limits},
             }
+
+        # Usage monitors — reinitialize if provider config changed
+        try:
+            from pyclaw.core.usage import init_registry, get_registry
+            old_providers_dump = old_config.providers.model_dump() if old_config.providers else {}
+            new_providers_dump = new_cfg.providers.model_dump() if new_cfg.providers else {}
+            if old_providers_dump != new_providers_dump:
+                await get_registry().stop_all()
+                new_registry = init_registry(new_cfg.providers)
+                await new_registry.start_all()
+                changed["usage_monitors"] = "reinitialized"
+                self._logger.info("Usage monitors reinitialized after provider config change")
+        except Exception as _ue:
+            self._logger.warning(f"Usage monitor reload failed: {_ue}")
 
         # Agent config changes — update runners in-place
         _am = getattr(self, "_agent_manager", None)

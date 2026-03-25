@@ -20,6 +20,8 @@ import logging
 from contextlib import asynccontextmanager
 from typing import AsyncIterator, Dict, Optional
 
+from pyclaw.core.usage import ThrottledError, get_registry
+
 logger = logging.getLogger("pyclaw.concurrency")
 
 # Default if neither config nor per-model limit is set
@@ -117,7 +119,7 @@ class ModelConcurrencyManager:
         return self._semaphores[model]
 
     @asynccontextmanager
-    async def acquire(self, model: str) -> AsyncIterator[None]:
+    async def acquire(self, model: str, priority: str = "critical") -> AsyncIterator[None]:
         """Async context manager that acquires a concurrency slot for a model.
 
         Blocks until a slot is available, yields control to the caller, then
@@ -126,12 +128,26 @@ class ModelConcurrencyManager:
             async with concurrency.acquire("MiniMax-M2.5"):
                 response = await llm_call(...)
 
+            # background task — throttled when provider usage is high:
+            async with concurrency.acquire("zai/glm-4.7", priority="background"):
+                response = await llm_call(...)
+
         Args:
             model (str): Model identifier to acquire a slot for.
+            priority (str): Request priority — ``"critical"`` (chat, never
+                throttled), ``"normal"`` (jobs), or ``"background"`` (vault
+                ingestion).  Defaults to ``"critical"``.
+
+        Raises:
+            ThrottledError: If the provider usage exceeds the configured
+                threshold for *priority* (non-critical only).
 
         Yields:
             None: Control is yielded while the slot is held.
         """
+        # Usage check before waiting for the concurrency slot
+        get_registry().check(model, priority)
+
         sem = self.semaphore_for(model)
         waiting = sem._value == 0  # type: ignore[attr-defined]
         if waiting:

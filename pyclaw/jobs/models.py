@@ -316,6 +316,11 @@ class Job(BaseModel):
     description: Optional[str] = None
     enabled: bool = True
     tags: List[str] = Field(default_factory=list)
+    # Request priority for throttling — critical/normal/background.
+    # "normal" (default) is throttled when provider usage >= throttle.normal.
+    # "background" is throttled at the lower throttle.background threshold.
+    # "critical" is never throttled (reserved for real-time chat messages).
+    priority: str = "normal"
 
     # What to run
     run: JobRunType

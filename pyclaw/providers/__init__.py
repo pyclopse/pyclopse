@@ -152,9 +152,10 @@ def create_provider(provider_type: str, config: Dict[str, Any]) -> Provider:
     elif provider_type == "fastagent":
         from .fastagent import FastAgentProvider
         return FastAgentProvider(config)
-    elif provider_type == "minimax":
-        from .minimax import MiniMaxProvider
-        return MiniMaxProvider(config)
+    elif provider_type == "minimax" or config.get("fastagent_provider"):
+        # Any OpenAI-compatible provider (minimax, zai, groq, etc.)
+        from .generic import GenericProvider
+        return GenericProvider(config)
     else:
         raise ValueError(f"Unknown provider type: {provider_type}")
 

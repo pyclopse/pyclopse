@@ -440,6 +440,21 @@ async def sessions_history(session_id: str, max_messages: int = 20) -> str:
 # memory tools
 # ---------------------------------------------------------------------------
 
+def _agent_has_vault(agent_name: Optional[str]) -> bool:
+    """Return True if the named agent has vault memory initialised."""
+    if not agent_name:
+        return False
+    try:
+        from pyclaw.api.app import get_gateway
+        gw = get_gateway()
+        if gw is None:
+            return False
+        agent = gw._agent_manager.get_agent(agent_name)
+        return agent is not None and getattr(agent, "_vault_store", None) is not None
+    except Exception:
+        return False
+
+
 def _agent_memory_service(agent_name: Optional[str] = None):
     """Return a memory accessor for the given agent.
 
@@ -516,6 +531,8 @@ async def memory_search(ctx: Context, query: str, limit: int = 10) -> str:
     try:
         headers = get_http_headers()
         agent_name = headers.get("x-agent-name") if headers else None
+        if _agent_has_vault(agent_name):
+            return "[MEMORY] This agent uses vault memory. Memory is injected automatically into every prompt. Use vault_search for explicit lookups."
         backend = _agent_memory_service(agent_name)
         results = await backend.search(query, limit=limit)
         if not results:
@@ -548,6 +565,8 @@ async def memory_get(ctx: Context, key: str) -> str:
     try:
         headers = get_http_headers()
         agent_name = headers.get("x-agent-name") if headers else None
+        if _agent_has_vault(agent_name):
+            return "[MEMORY] This agent uses vault memory. Use vault_search for explicit lookups."
         backend = _agent_memory_service(agent_name)
         entry = await backend.read(key)
         if entry is None:
@@ -603,6 +622,8 @@ async def memory_store(ctx: Context, key: str, value: str, tags: Optional[str] =
     try:
         headers = get_http_headers()
         agent_name = headers.get("x-agent-name") if headers else None
+        if _agent_has_vault(agent_name):
+            return "[MEMORY] This agent uses vault memory. Facts are extracted automatically from conversations. Use vault_store to add a fact directly."
         backend = _agent_memory_service(agent_name)
         tag_list = [t.strip() for t in tags.split(",")] if tags else []
         await backend.write(key, {"content": value, "tags": tag_list})
@@ -626,6 +647,8 @@ async def memory_delete(ctx: Context, key: str) -> str:
     try:
         headers = get_http_headers()
         agent_name = headers.get("x-agent-name") if headers else None
+        if _agent_has_vault(agent_name):
+            return "[MEMORY] This agent uses vault memory. Use vault tools to manage facts."
         backend = _agent_memory_service(agent_name)
         deleted = await backend.delete(key)
         if deleted:
@@ -650,6 +673,8 @@ async def memory_list(ctx: Context, prefix: str = "") -> str:
     try:
         headers = get_http_headers()
         agent_name = headers.get("x-agent-name") if headers else None
+        if _agent_has_vault(agent_name):
+            return "[MEMORY] This agent uses vault memory. Use vault_list to list facts."
         backend = _agent_memory_service(agent_name)
         keys = await backend.list(prefix=prefix)
         if not keys:
@@ -2460,6 +2485,263 @@ def self_source(module: str) -> str:
         self_source('hooks/registry.py')
     """
     return _get_self_loader().source(module)
+
+
+# ---------------------------------------------------------------------------
+# Vault memory tools
+# ---------------------------------------------------------------------------
+
+
+def _resolve_agent_name() -> str:
+    """Resolve the calling agent name from header, env, or raise."""
+    name = ""
+    try:
+        headers = get_http_headers()
+        name = (headers.get("x-agent-name") or "") if headers else ""
+    except Exception:
+        pass
+    name = name or os.environ.get("PYCLAW_AGENT_NAME", "")
+    if not name:
+        raise RuntimeError(
+            "Cannot access vault: no agent name available. "
+            "X-Agent-Name header missing from MCP request."
+        )
+    return name
+
+
+def _get_live_vault(agent_name: Optional[str] = None):
+    """Return the live Agent object for vault access.
+
+    Uses the same vault instances (store, search, assembler, ingestion) that
+    the agent uses for automatic context injection — ensuring tool calls use
+    identical ranking, filtering, and search backends.
+
+    Raises:
+        RuntimeError: If the agent or its vault is not initialised.
+    """
+    name = agent_name or _resolve_agent_name()
+    try:
+        from pyclaw.api.app import get_gateway
+        gw = get_gateway()
+        if gw is not None and gw._agent_manager is not None:
+            agent = gw._agent_manager.get_agent(name)
+            if agent is not None and getattr(agent, "_vault_store", None) is not None:
+                return agent
+    except Exception:
+        pass
+    raise RuntimeError(
+        f"Vault not available for agent {name!r}. "
+        "The vault may not have finished initialising — try again in a moment."
+    )
+
+
+@mcp.tool()
+async def vault_search(query: str, limit: int = 15) -> str:
+    """Search vault memory for facts relevant to a query.
+
+    NOTE: Relevant memory facts are ALREADY automatically injected into your
+    context before every message — you do not need to call this for routine
+    lookups.  Use vault_search only when you want to do explicit memory
+    research beyond what was injected, e.g. when exploring a topic in depth
+    or verifying what the vault knows about something specific.
+
+    Uses the same ranking, search backend (QMD hybrid or keyword), and
+    confidence filtering as automatic injection.
+
+    Args:
+        query: Natural-language or keyword search query.
+        limit: Maximum number of facts to return (default 15, max 30).
+
+    Example:
+        vault_search("database preferences")
+        vault_search("architecture decisions made this year", limit=5)
+    """
+    try:
+        agent = _get_live_vault()
+    except RuntimeError as e:
+        return f"[VAULT] {e}"
+
+    try:
+        from pyclaw.memory.vault.retrieval import infer_profile
+        vault_cfg = getattr(agent.config, "vault", None)
+        search_cfg = vault_cfg.search if vault_cfg else None
+        profile = infer_profile(query)
+        ctx = await agent._vault_assembler.assemble(
+            query=query,
+            profile=profile,
+            limit=min(limit, 30),
+            min_confidence=search_cfg.confidence_threshold if search_cfg else 0.5,
+            min_relevance_score=search_cfg.min_relevance_score if search_cfg else 0.0,
+            graph_hops=search_cfg.graph_hops if search_cfg else 2,
+        )
+        if not ctx.facts:
+            return "[VAULT] No matching facts found."
+        lines = [f"Vault facts ({len(ctx.facts)} results):"]
+        for f in ctx.facts:
+            line = f"  [{f.id}] ({f.type}/{f.state.value}) {f.claim}"
+            if f.contrastive:
+                line += f" — {f.contrastive}"
+            lines.append(line)
+        return "\n".join(lines)
+    except Exception as e:
+        return f"[VAULT ERROR] {e}"
+
+
+@mcp.tool()
+def vault_facts_list(type_filter: str = "", state_filter: str = "all") -> str:
+    """Browse all vault memory facts for the current agent.
+
+    NOTE: Memory is injected automatically — this tool is for auditing and
+    browsing the vault contents, not for routine memory lookup.
+
+    Args:
+        type_filter: Filter by memory type, e.g. "preference", "decision",
+            "lesson". Empty string returns all types.
+        state_filter: Lifecycle state: "provisional", "crystallized",
+            "superseded", "archived", or "all" (default).
+
+    Example:
+        vault_facts_list()
+        vault_facts_list(type_filter="decision")
+        vault_facts_list(state_filter="provisional")
+    """
+    try:
+        agent = _get_live_vault()
+    except RuntimeError as e:
+        return f"[VAULT] {e}"
+
+    try:
+        from pyclaw.memory.vault.models import VaultFactState
+        states = None
+        types = None
+        include_archive = False
+        if type_filter:
+            types = {type_filter}
+        if state_filter and state_filter != "all":
+            try:
+                states = {VaultFactState(state_filter)}
+                if state_filter == "archived":
+                    include_archive = True
+            except ValueError:
+                return f"[VAULT] Unknown state: {state_filter!r}. Use: provisional, crystallized, superseded, archived, all"
+
+        facts = agent._vault_store.list_facts(states=states, types=types, include_archive=include_archive)
+        if not facts:
+            return "[VAULT] No facts found."
+        lines = [f"Vault facts ({len(facts)}):"]
+        for f in facts:
+            line = f"  [{f.id}] ({f.type}/{f.state.value}) conf={f.confidence:.2f} {f.claim}"
+            if f.contrastive:
+                line += f" — {f.contrastive}"
+            lines.append(line)
+        return "\n".join(lines)
+    except Exception as e:
+        return f"[VAULT ERROR] {e}"
+
+
+@mcp.tool()
+async def vault_bulk_ingest(
+    include_sessions: bool = True,
+    include_memory: bool = True,
+) -> str:
+    """Bulk-ingest session history and memory files into the vault.
+
+    Walks all session history files and memory markdown files for the current
+    agent and extracts facts using the configured extraction agent (LLM or
+    regex fallback — whichever is set up for this agent).  Safe to re-run —
+    already-processed files are skipped via cursor tracking.
+
+    Args:
+        include_sessions: Ingest FA session history files (default True).
+        include_memory: Ingest memory markdown files (default True).
+
+    Example:
+        vault_bulk_ingest()
+        vault_bulk_ingest(include_sessions=False)   # memory files only
+    """
+    try:
+        agent = _get_live_vault()
+        agent_name = _resolve_agent_name()
+    except RuntimeError as e:
+        return f"[VAULT] {e}"
+
+    try:
+        from pathlib import Path as _Path
+        from pyclaw.memory.vault.bulk import BulkIngestor
+
+        config_dir = os.environ.get("PYCLAW_CONFIG_DIR", "~/.pyclaw")
+        agent_dir = _Path(config_dir).expanduser() / "agents" / agent_name
+
+        lines: list[str] = []
+
+        async def _progress(msg: str) -> None:
+            lines.append(msg)
+
+        ingestor = BulkIngestor(
+            agent_dir=agent_dir,
+            ingestion_handler=agent._vault_ingestion,
+            progress_callback=_progress,
+        )
+        stats = await ingestor.run(
+            include_sessions=include_sessions,
+            include_memory=include_memory,
+        )
+        return "\n".join(lines) if lines else stats.summary()
+
+    except Exception as e:
+        return f"[VAULT ERROR] {e}"
+
+
+@mcp.tool()
+async def vault_fact_store(
+    claim: str,
+    type: str = "fact",
+    contrastive: str = "",
+    confidence: float = 0.9,
+    body: str = "",
+) -> str:
+    """Manually store a new fact in vault memory.
+
+    NOTE: Facts are normally extracted automatically from conversations.
+    Use this only to explicitly record something important that was not
+    captured automatically, e.g. a decision made outside a conversation.
+
+    The fact is stored as provisional and indexed immediately into the active
+    search backend so it is available for injection on the next message.
+
+    Args:
+        claim: One atomic fact statement, e.g. "Prefers PostgreSQL over SQLite".
+        type: Memory type — preference, fact, decision, lesson, commitment,
+            person, hypothesis. Defaults to "fact".
+        contrastive: Optional "X over Y because Z" rationale.
+        confidence: Confidence score 0.0–1.0. Defaults to 0.9.
+        body: Optional narrative context or notes.
+
+    Example:
+        vault_fact_store("Prefers tabs over spaces", type="preference")
+        vault_fact_store("Project uses PostgreSQL", type="decision",
+                         contrastive="PostgreSQL over SQLite — scale requirements")
+    """
+    try:
+        agent = _get_live_vault()
+    except RuntimeError as e:
+        return f"[VAULT] {e}"
+
+    try:
+        from pyclaw.memory.vault.models import VaultFact, VaultFactState
+        fact = VaultFact(
+            claim=claim,
+            type=type,
+            state=VaultFactState.PROVISIONAL,
+            contrastive=contrastive or None,
+            confidence=max(0.0, min(1.0, confidence)),
+            body=body or None,
+        )
+        agent._vault_store.write_fact(fact)
+        await agent._vault_search.index_fact(fact)
+        return f"[VAULT] Stored [{fact.id}] ({type}): {claim}"
+    except Exception as e:
+        return f"[VAULT ERROR] {e}"
 
 
 # ---------------------------------------------------------------------------

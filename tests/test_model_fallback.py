@@ -121,7 +121,7 @@ async def test_fallback_tried_on_primary_error():
     runners = [primary_runner, fallback_runner]
     runner_idx = [0]
 
-    def get_runner(session_id, model_override=None, history_path=None, instruction_override=None):
+    def get_runner(session_id, model_override=None, history_path=None, instruction_override=None, priority="critical"):
         r = runners[runner_idx[0]]
         runner_idx[0] = min(runner_idx[0] + 1, len(runners) - 1)
         return r
@@ -148,7 +148,7 @@ async def test_fallback_notice_includes_tried_model():
     runners = [primary_runner, fallback_runner]
     runner_idx = [0]
 
-    def get_runner(session_id, model_override=None, history_path=None, instruction_override=None):
+    def get_runner(session_id, model_override=None, history_path=None, instruction_override=None, priority="critical"):
         r = runners[runner_idx[0]]
         runner_idx[0] = min(runner_idx[0] + 1, len(runners) - 1)
         return r
@@ -174,7 +174,7 @@ async def test_fallback_index_saved_to_session_context():
     runners = [primary_runner, fallback_runner]
     runner_idx = [0]
 
-    def get_runner(session_id, model_override=None, history_path=None, instruction_override=None):
+    def get_runner(session_id, model_override=None, history_path=None, instruction_override=None, priority="critical"):
         r = runners[runner_idx[0]]
         runner_idx[0] = min(runner_idx[0] + 1, len(runners) - 1)
         return r
@@ -198,7 +198,7 @@ async def test_all_fallbacks_exhausted_raises():
         r.run = AsyncMock(side_effect=RuntimeError("unavailable"))
         return r
 
-    def get_runner(session_id, model_override=None, history_path=None, instruction_override=None):
+    def get_runner(session_id, model_override=None, history_path=None, instruction_override=None, priority="critical"):
         return make_failing_runner()
 
     with patch.object(agent, "_get_session_runner", side_effect=get_runner), \
@@ -217,7 +217,7 @@ async def test_subsequent_messages_use_active_fallback():
 
     captured_overrides = []
 
-    def get_runner(session_id, model_override=None, history_path=None, instruction_override=None):
+    def get_runner(session_id, model_override=None, history_path=None, instruction_override=None, priority="critical"):
         captured_overrides.append(model_override)
         r = AsyncMock()
         r.run = AsyncMock(return_value="fallback reply")
@@ -248,7 +248,7 @@ async def test_fallback_chain_uses_user_model_override_as_primary():
     runner_map = {0: primary_runner, 1: fallback_runner}
     call_count = [0]
 
-    def get_runner(session_id, model_override=None, history_path=None, instruction_override=None):
+    def get_runner(session_id, model_override=None, history_path=None, instruction_override=None, priority="critical"):
         overrides_seen.append(model_override)
         r = runner_map[call_count[0]]
         call_count[0] += 1

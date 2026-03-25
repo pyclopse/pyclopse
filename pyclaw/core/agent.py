@@ -2,6 +2,7 @@
 
 import asyncio
 import logging
+import re
 from dataclasses import dataclass, field
 from pyclaw.utils.time import now
 from typing import Any, Awaitable, Callable, Dict, List, Optional
@@ -82,10 +83,30 @@ class Agent:
     _tasks: List[asyncio.Task] = field(default_factory=list)
     _logger: logging.Logger = field(init=False)
 
+    # Vault memory (lazy-initialized in start())
+    _vault_store: Optional[Any] = field(default=None, init=False)
+    _vault_cursor: Optional[Any] = field(default=None, init=False)
+    _vault_search: Optional[Any] = field(default=None, init=False)
+    _vault_registry: Optional[Any] = field(default=None, init=False)
+    _vault_assembler: Optional[Any] = field(default=None, init=False)
+    _vault_ingestion: Optional[Any] = field(default=None, init=False)
+    _vault_lifecycle: Optional[Any] = field(default=None, init=False)
+    _last_recall_facts: Optional[Any] = field(default=None, init=False)
+    _session_seen_facts: Dict[str, Any] = field(default_factory=dict, init=False)
+
     def __post_init__(self):
         """Post-initialization: set up logger and initialize FastAgent if configured."""
         object.__setattr__(self, "_logger", logging.getLogger(f"pyclaw.agent.{self.id}"))
         object.__setattr__(self, "_session_runners", {})
+        object.__setattr__(self, "_vault_store", None)
+        object.__setattr__(self, "_vault_cursor", None)
+        object.__setattr__(self, "_vault_search", None)
+        object.__setattr__(self, "_vault_registry", None)
+        object.__setattr__(self, "_vault_assembler", None)
+        object.__setattr__(self, "_vault_ingestion", None)
+        object.__setattr__(self, "_vault_lifecycle", None)
+        object.__setattr__(self, "_last_recall_facts", None)
+        object.__setattr__(self, "_session_seen_facts", {})
 
         # Initialize FastAgent if available and configured
         if FASTAGENT_AVAILABLE and self._should_use_fastagent():
@@ -164,6 +185,13 @@ class Agent:
             if hasattr(self, "provider") and self.provider:
                 provider_api_key = getattr(self.provider, "api_key", None)
                 provider_base_url = getattr(self.provider, "api_url", None)
+            # If no explicit provider, extract credentials from the config for this model's provider
+            if not provider_api_key and not provider_base_url and "/" in (self.config.model or ""):
+                _pname = self.config.model.split("/", 1)[0]
+                _pcfg = _get_provider_cfg(self.pyclaw_config, _pname)
+                if _pcfg:
+                    provider_api_key = getattr(_pcfg, "api_key", None)
+                    provider_base_url = getattr(_pcfg, "api_url", None) or getattr(_pcfg, "base_url", None)
 
             workflow_type = getattr(self.config, "workflow", None)
             mcp_servers = getattr(self.config, "mcp_servers", None) or []
@@ -273,12 +301,110 @@ class Agent:
         except Exception as e:
             self._logger.error(f"Failed to initialize FastAgent: {e}", exc_info=True)
 
+    def _init_vault(self) -> None:
+        """Initialise the vault memory subsystem for this agent.
+
+        Reads vault config from ``self.config.vault``.  If vault is disabled
+        (``vault=None`` or ``vault.enabled=False``) does nothing.  On success
+        the agent's ``_vault_*`` attributes are populated and subsequent calls
+        to ``_prepend_vault_context`` / ``_ingest_turn`` become active.
+        """
+        vault_cfg = getattr(self.config, "vault", None)
+        if vault_cfg is None or not vault_cfg.enabled:
+            return
+
+        try:
+            from pathlib import Path
+            from pyclaw.core.prompt_builder import get_agent_dir
+            from pyclaw.memory.vault.store import VaultStore
+            from pyclaw.memory.vault.cursor import CursorStore
+            from pyclaw.memory.vault.search import create_search_backend
+            from pyclaw.memory.vault.registry import TypeSchemaRegistry
+            from pyclaw.memory.vault.retrieval import ContextAssembler
+            from pyclaw.memory.vault.ingestion import IngestionHandler
+            from pyclaw.memory.vault.agent import FastAgentMemoryAgent, RegexMemoryAgent
+
+            # Resolve vault directory
+            if vault_cfg.path:
+                vault_dir = Path(vault_cfg.path).expanduser()
+            else:
+                vault_dir = get_agent_dir(self.id, self.config_dir) / "vault"
+            vault_dir.mkdir(parents=True, exist_ok=True)
+
+            store = VaultStore(vault_dir)
+            cursor = CursorStore(vault_dir)
+
+            registry = TypeSchemaRegistry()
+            for type_cfg in vault_cfg.types:
+                registry.register(
+                    name=type_cfg.name,
+                    description=type_cfg.description,
+                    keywords=type_cfg.keywords,
+                    fields={k: v.model_dump() for k, v in type_cfg.fields.items()},
+                )
+
+            # Auto-detect QMD; use hybrid if available, keyword-only otherwise
+            qmd_collection = getattr(vault_cfg.search, "qmd_collection", None) or f"{self.id}-vault"
+            qmd_path = getattr(vault_cfg.search, "qmd_path", None) or "qmd"
+            search = create_search_backend(store, collection=qmd_collection, qmd_path=qmd_path)
+            assembler = ContextAssembler(store, search, vault_dir)
+
+            # Use LLM extraction agent if a model is configured; regex fallback otherwise
+            extraction_model = vault_cfg.agent.model or ""
+            if extraction_model:
+                mem_agent = FastAgentMemoryAgent(
+                    model=extraction_model,
+                    pyclaw_config=self.pyclaw_config,
+                    max_tokens=vault_cfg.agent.max_tokens,
+                )
+            else:
+                mem_agent = RegexMemoryAgent()
+            ingestion = IngestionHandler(
+                vault_dir=vault_dir,
+                store=store,
+                cursor=cursor,
+                search=search,
+                registry=registry,
+                agent=mem_agent,
+            )
+
+            object.__setattr__(self, "_vault_store", store)
+            object.__setattr__(self, "_vault_cursor", cursor)
+            object.__setattr__(self, "_vault_search", search)
+            from pyclaw.memory.vault.lifecycle import LifecycleManager
+            lifecycle = LifecycleManager(vault_dir=vault_dir, store=store)
+
+            object.__setattr__(self, "_vault_registry", registry)
+            object.__setattr__(self, "_vault_assembler", assembler)
+            object.__setattr__(self, "_vault_ingestion", ingestion)
+            object.__setattr__(self, "_vault_lifecycle", lifecycle)
+
+            import logging as _logging
+            extraction_label = extraction_model or "regex"
+            search_label = type(search).__name__
+            _logging.getLogger("pyclaw.vault").info(
+                "Vault memory initialised for agent %s at %s (model=%s, search=%s)",
+                self.id,
+                vault_dir,
+                extraction_label,
+                search_label,
+            )
+
+        except Exception:
+            import logging as _logging
+            _logging.getLogger("pyclaw.vault").error(
+                "Failed to initialise vault memory for agent %s — continuing without it",
+                self.id,
+                exc_info=True,
+            )
+
     def _get_session_runner(
         self,
         session_id: str,
         model_override: Optional[str] = None,
         history_path: Optional[Any] = None,
         instruction_override: Optional[str] = None,
+        priority: str = "critical",
     ) -> Any:
         """Get or create a dedicated AgentRunner for a session.
 
@@ -307,7 +433,11 @@ class Agent:
             raise RuntimeError(
                 f"Agent {self.name} has no FastAgent runner configured"
             )
-        if session_id not in self._session_runners:
+        if session_id in self._session_runners:
+            # Update priority on cached runner in case it changed (e.g. job vs chat)
+            if priority != "critical":
+                self._session_runners[session_id].priority = priority
+        else:
             from pyclaw.agents.runner import AgentRunner
             base = self.fast_agent_runner
             effective_model = model_override or base.model
@@ -350,11 +480,12 @@ class Agent:
                 max_samples=getattr(base, "max_samples", 50),
                 match_strategy=getattr(base, "match_strategy", "exact"),
                 red_flag_max_length=getattr(base, "red_flag_max_length", None),
+                priority=priority,
             )
             self._session_runners[session_id] = runner
             self._logger.debug(
                 f"Created session runner for session {session_id[:8]} "
-                f"(model={effective_model})"
+                f"(model={effective_model}, priority={priority})"
             )
         return self._session_runners[session_id]
 
@@ -375,6 +506,7 @@ class Agent:
             except Exception:
                 pass
             self._logger.debug(f"Evicted session runner for {session_id[:8]}")
+        self._session_seen_facts.pop(session_id, None)
 
     async def start(self) -> None:
         """Start the agent and initialize the base FastAgent runner.
@@ -389,6 +521,80 @@ class Agent:
         if self.fast_agent_runner:
             await self.fast_agent_runner.initialize()
 
+        # Initialize vault memory subsystem
+        self._init_vault()
+
+        # Start continuous vault ingestion worker if vault is configured
+        if self._vault_ingestion is not None:
+            task = asyncio.create_task(self._vault_worker(), name=f"vault-worker-{self.id}")
+            self._tasks.append(task)
+
+    async def _vault_worker(self) -> None:
+        """Continuously ingest new session history and memory files into vault.
+
+        Runs a BulkIngestor loop forever.  When there is nothing new to process
+        the worker sleeps 60 seconds before checking again.  The cursor ensures
+        already-processed content is never re-sent to the extraction model.
+
+        Lifecycle maintenance (crystallization, tier compression, anti-memory
+        reaping) runs once per hour (every 60 sleep cycles).
+
+        Cancelled automatically on agent stop via ``_tasks``.
+        """
+        from pathlib import Path
+        from pyclaw.core.prompt_builder import get_agent_dir
+        from pyclaw.memory.vault.bulk import BulkIngestor
+
+        agent_dir = Path(get_agent_dir(self.id, self.config_dir))
+        logger = self._logger.getChild("vault_worker")
+        logger.info("Vault worker started")
+
+        lifecycle_cycle = 0
+        LIFECYCLE_EVERY = 60  # run lifecycle every 60 cycles = ~1 hour
+
+        while True:
+            try:
+                ingestor = BulkIngestor(
+                    agent_dir=agent_dir,
+                    ingestion_handler=self._vault_ingestion,
+                )
+                stats = await ingestor.run(include_sessions=True, include_memory=True)
+                if stats.facts_extracted:
+                    logger.info(
+                        "Vault worker: %d fact(s) extracted this pass "
+                        "(%d sessions, %d documents)",
+                        stats.facts_extracted,
+                        stats.sessions_processed,
+                        stats.documents_processed,
+                    )
+            except asyncio.CancelledError:
+                raise
+            except Exception:
+                logger.exception("Vault worker error — will retry in 60s")
+
+            # Run lifecycle maintenance once per hour
+            lifecycle_cycle += 1
+            if lifecycle_cycle >= LIFECYCLE_EVERY and self._vault_lifecycle is not None:
+                lifecycle_cycle = 0
+                try:
+                    lc_stats = self._vault_lifecycle.run_all()
+                    if any(v > 0 for v in vars(lc_stats).values() if isinstance(v, int)):
+                        logger.info(
+                            "Vault lifecycle: crystallized=%d forgotten=%d "
+                            "compressed=%d reaped=%d hypotheses_promoted=%d",
+                            lc_stats.crystallized,
+                            lc_stats.forgotten,
+                            lc_stats.compressed,
+                            lc_stats.reaped,
+                            lc_stats.hypotheses_promoted,
+                        )
+                except asyncio.CancelledError:
+                    raise
+                except Exception:
+                    logger.exception("Vault lifecycle error — will retry next cycle")
+
+            await asyncio.sleep(60)
+
     async def stop(self) -> None:
         """Stop the agent, cleaning up all session runners and the base runner.
 
@@ -398,10 +604,12 @@ class Agent:
         """
         self.is_running = False
 
-        # Cancel pending tasks
+        # Cancel pending tasks and wait for them to finish
         for task in self._tasks:
             if not task.done():
                 task.cancel()
+        if self._tasks:
+            await asyncio.gather(*self._tasks, return_exceptions=True)
         self._tasks.clear()
 
         # Close all session runners (releases FastAgent MCP connections)
@@ -416,6 +624,13 @@ class Agent:
         if self.fast_agent_runner:
             try:
                 await self.fast_agent_runner.cleanup()
+            except Exception:
+                pass
+
+        # Clean up vault memory agent runner
+        if self._vault_ingestion is not None:
+            try:
+                await self._vault_ingestion._agent.cleanup()
             except Exception:
                 pass
 
@@ -503,6 +718,7 @@ class Agent:
         """
         instruction_override = session.context.get("instruction_override")
         history_path = None if session.context.get("no_history") else session.history_path
+        priority: str = session.context.get("_priority", "critical")
 
         # Build the full candidate list: [user-override or primary] + fallbacks
         explicit_override = session.context.get("model_override")
@@ -523,10 +739,18 @@ class Agent:
             model_override=effective_model if (fallback_index > 0 or explicit_override) else None,
             history_path=history_path,
             instruction_override=instruction_override,
+            priority=priority,
         )
 
+        channel = session.context.get("channel", "")
+        object.__setattr__(self, "_last_recall_facts", None)
+        enriched_prompt = await self._prepend_vault_context(prompt, channel, session_id=session.id)
+
         try:
-            return await runner.run(prompt)
+            response = await runner.run(enriched_prompt)
+            # Fire background vault ingestion (non-blocking)
+            self._schedule_vault_ingest(session, channel, prompt, response)
+            return self._append_recall_block(response)
 
         except Exception as exc:
             if fallback_index >= len(all_models) - 1:
@@ -547,10 +771,224 @@ class Agent:
                 model_override=next_model,
                 history_path=history_path,
                 instruction_override=instruction_override,
+                priority=priority,
             )
-            result = await runner.run(prompt)
+            result = await runner.run(enriched_prompt)
+            self._schedule_vault_ingest(session, channel, prompt, result)
             notice = f"↪️ Model Fallback: {next_model} (tried {effective_model}; {reason})"
-            return f"{notice}\n\n{result}"
+            return self._append_recall_block(f"{notice}\n\n{result}")
+
+    def _append_recall_block(self, response: str) -> str:
+        """If show_recall is enabled, append a recall block listing injected facts."""
+        vault_cfg = getattr(self.config, "vault", None)
+        show_recall = getattr(vault_cfg, "show_recall", False) if vault_cfg else False
+        facts = self._last_recall_facts
+        self._logger.info(
+            "_append_recall_block: vault_cfg=%s show_recall=%s facts=%s",
+            vault_cfg is not None, show_recall, len(facts) if facts else None,
+        )
+        if not vault_cfg or not show_recall:
+            return response
+        if not facts:
+            return response
+        sorted_facts = sorted(facts, key=lambda f: f.confidence, reverse=True)
+        lines = ["\n\n---\n📎 *Recalled memories used for this response:*"]
+        for fact in sorted_facts:
+            lines.append(f"• [{fact.type}] {fact.claim} *(confidence: {fact.confidence:.2f})*")
+        result = response + "\n".join(lines)
+        self._logger.info("_append_recall_block: appended %d facts to response", len(facts))
+        return result
+
+    # Short conversational messages that carry no semantic signal for retrieval
+    _RECALL_SKIP_WORDS: frozenset = frozenset({
+        "test", "hi", "hey", "hello", "ok", "okay", "yes", "no", "nope", "yep",
+        "sure", "thanks", "thx", "ty", "np", "lol", "haha", "k", "cool", "nice",
+        "great", "good", "bad", "hmm", "hm", "ah", "oh", "ugh", "wow", "yup",
+        "nah", "bye", "later", "quit", "stop", "go", "ping", "pong",
+    })
+
+    async def _prepend_vault_context(self, prompt: str, channel: str, session_id: str = "") -> str:
+        """Prepend relevant vault memory context to the prompt, if vault is active.
+
+        Skips injection when:
+        - vault is not initialised
+        - channel is in the skip list (job, a2a)
+        - channel is not in the agent's allowed channels list
+        - query has fewer words than min_query_words
+        - query is a single known conversational stopword
+        - assembler returns no facts
+
+        Args:
+            prompt: Raw user prompt.
+            channel: Inbound channel name (e.g. "telegram", "tui", "job").
+
+        Returns:
+            Prompt string, optionally prefixed with a ``<memory>`` XML block.
+            If show_recall is enabled, also appends a ``<recall>`` block after
+            the response (handled by the caller via return value inspection).
+        """
+        if self._vault_assembler is None:
+            return prompt
+
+        _SKIP = {"job", "a2a"}
+        if channel in _SKIP:
+            return prompt
+
+        vault_cfg = getattr(self.config, "vault", None)
+        if vault_cfg is not None:
+            allowed = vault_cfg.agent.channels
+            if allowed and channel not in allowed:
+                return prompt
+
+        # Word count guard — skip injection for very short / conversational queries
+        search_cfg = vault_cfg.search if vault_cfg else None
+        min_words = search_cfg.min_query_words if search_cfg else 3
+        words = prompt.strip().split()
+        if len(words) < min_words:
+            # Also allow single-word queries that are NOT conversational stopwords
+            if len(words) != 1 or words[0].lower() in self._RECALL_SKIP_WORDS:
+                self._logger.debug(
+                    "Vault context skipped: query %r too short (%d words < %d)",
+                    prompt[:60], len(words), min_words,
+                )
+                return prompt
+
+        try:
+            from pyclaw.memory.vault.retrieval import infer_profile
+            profile = infer_profile(prompt)
+            injection_limit = search_cfg.injection_limit if search_cfg else 5
+            seen: set = self._session_seen_facts.get(session_id, set()) if session_id else set()
+
+            # Trigger detection: adjust score multiplier based on query intent.
+            # Questions and explicit recall signals make it easier to inject (×1.0).
+            # Task commands with no question signal raise the bar (×0.75 on all scores).
+            _WH_WORDS = frozenset({
+                "what", "who", "where", "when", "why", "how", "which",
+                "tell", "explain", "describe", "remember", "remind",
+                "know", "summarize", "list", "show",
+            })
+            prompt_lower = prompt.lower()
+            prompt_words = set(re.split(r"\W+", prompt_lower))
+            _COMMAND_VERBS = frozenset({
+                "fix", "write", "create", "build", "add", "remove", "update",
+                "implement", "delete", "run", "deploy", "refactor", "test",
+                "generate", "edit", "change", "move", "rename", "install",
+            })
+            has_question = "?" in prompt
+            has_wh_word = bool(prompt_words & _WH_WORDS)
+            first_word = prompt_lower.split()[0].rstrip("?,:") if prompt_lower.split() else ""
+            is_command = first_word in _COMMAND_VERBS and not has_question and not has_wh_word
+
+            if has_question or has_wh_word:
+                score_multiplier = 1.0   # clear information request — normal threshold
+            elif is_command:
+                score_multiplier = 0.75  # task command — raise effective bar
+            else:
+                score_multiplier = 0.9   # ambiguous statement — slight raise
+
+            ctx = await self._vault_assembler.assemble(
+                query=prompt,
+                profile=profile,
+                limit=injection_limit,
+                min_confidence=search_cfg.confidence_threshold if search_cfg else 0.5,
+                min_relevance_score=search_cfg.min_relevance_score if search_cfg else 0.0,
+                graph_hops=search_cfg.graph_hops if search_cfg else 2,
+                score_multiplier=score_multiplier,
+            )
+            if not ctx.facts:
+                self._logger.debug("Vault context: no matching facts for query")
+                return prompt
+
+            # Filter out facts already injected in this session, then cap at injection_limit
+            new_facts = [f for f in ctx.facts if f.id not in seen][:injection_limit]
+            if not new_facts:
+                self._logger.debug("Vault context: all matching facts already seen in session")
+                return prompt
+
+            # Record newly injected fact IDs in the session cache
+            if session_id:
+                seen.update(f.id for f in new_facts)
+                self._session_seen_facts[session_id] = seen
+
+            lines = ["<memory>"]
+            for fact in new_facts:
+                line = f"  <fact type=\"{fact.type}\">{fact.claim}"
+                if fact.contrastive:
+                    line += f" ({fact.contrastive})"
+                line += "</fact>"
+                lines.append(line)
+            lines.append("</memory>")
+            memory_block = "\n".join(lines)
+            self._logger.info(
+                "Vault context injected: %d new fact(s) for query %r (%d already seen in session)",
+                len(new_facts), prompt[:60], len(seen) - len(new_facts),
+            )
+
+            # Store injected facts on instance so handle_message can append show_recall block
+            object.__setattr__(self, "_last_recall_facts", new_facts)
+
+            return f"{memory_block}\n\n{prompt}"
+
+        except Exception:
+            self._logger.warning("Vault context injection failed", exc_info=True)
+            return prompt
+
+    def _schedule_vault_ingest(
+        self,
+        session: Any,
+        channel: str,
+        user_prompt: str,
+        assistant_response: str,
+    ) -> None:
+        """Schedule a background vault ingestion task (fire-and-forget).
+
+        Skips scheduling when vault ingestion is not configured or the channel
+        doesn't qualify.  Errors in the background task are logged but never
+        propagate to the caller.
+
+        Args:
+            session: The active Session.
+            channel: Inbound channel name.
+            user_prompt: The raw user message text.
+            assistant_response: The agent's response text.
+        """
+        if self._vault_ingestion is None:
+            return
+
+        _SKIP = {"job", "a2a"}
+        if channel in _SKIP:
+            return
+
+        vault_cfg = getattr(self.config, "vault", None)
+        if vault_cfg is not None:
+            if not vault_cfg.agent.enabled:
+                return
+            allowed = vault_cfg.agent.channels
+            if allowed and channel not in allowed:
+                return
+
+        messages = [
+            {"role": "user", "content": user_prompt},
+            {"role": "assistant", "content": assistant_response},
+        ]
+        message_count = session.context.get("_vault_message_count", 0)
+        message_range = (message_count, message_count + 2)
+        session.context["_vault_message_count"] = message_count + 2
+
+        async def _ingest() -> None:
+            try:
+                await self._vault_ingestion.ingest_conversation_turn(
+                    session_id=session.id,
+                    messages=messages,
+                    message_range=message_range,
+                    channel=channel,
+                )
+            except Exception:
+                self._logger.debug("Vault ingestion failed", exc_info=True)
+
+        task = asyncio.create_task(_ingest())
+        self._tasks.append(task)
+        task.add_done_callback(lambda t: self._tasks.remove(t) if t in self._tasks else None)
 
     async def execute_tool(
         self,
@@ -626,6 +1064,17 @@ class Agent:
         self._logger.info(f"Updated config: {updates}")
 
 
+def _get_provider_cfg(pyclaw_config: Any, provider_name: str) -> Any:
+    """Return the provider config for *provider_name*, checking both named fields and model_extra."""
+    providers = getattr(pyclaw_config, "providers", None) if pyclaw_config else None
+    if providers is None:
+        return None
+    cfg = getattr(providers, provider_name, None)
+    if cfg is None and hasattr(providers, "model_extra"):
+        cfg = (providers.model_extra or {}).get(provider_name)
+    return cfg
+
+
 def _translate_to_fa_model(raw_model: str, pyclaw_config: Any) -> str:
     """Translate a pyclaw model string to a FastAgent model string.
 
@@ -653,11 +1102,8 @@ def _translate_to_fa_model(raw_model: str, pyclaw_config: Any) -> str:
         return raw_model
 
     provider_name, model_name = raw_model.split("/", 1)
-    providers = getattr(pyclaw_config, "providers", None) if pyclaw_config else None
-    if providers is None:
-        return raw_model
 
-    provider_cfg = getattr(providers, provider_name, None)
+    provider_cfg = _get_provider_cfg(pyclaw_config, provider_name)
     if provider_cfg is None:
         return raw_model
 

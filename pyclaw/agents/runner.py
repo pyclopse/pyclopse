@@ -460,6 +460,7 @@ class AgentRunner:
         text_verbosity: Optional[str] = None,
         service_tier: Optional[str] = None,
         pyclaw_config: Optional[Any] = None,
+        priority: str = "critical",
     ):
         """Initialize an AgentRunner with all agent and workflow configuration.
 
@@ -515,7 +516,7 @@ class AgentRunner:
         # Extra request params from config (provider-specific + FA params)
         self.request_params: Dict[str, Any] = request_params or {}
         # servers = list of MCP server names from fastagent.config.yaml
-        self.servers: List[str] = servers or list(_DEFAULT_SERVERS)
+        self.servers: List[str] = list(_DEFAULT_SERVERS) if servers is None else servers
         self.tools_config = tools_config or {}
         # When False, <thinking>…</thinking> blocks are stripped before returning
         self.show_thinking = show_thinking
@@ -567,6 +568,9 @@ class AgentRunner:
         self.max_samples: int = max_samples
         self.match_strategy: str = match_strategy
         self.red_flag_max_length: Optional[int] = red_flag_max_length
+        # Request priority — controls usage-based throttling.
+        # "critical" = chat (never throttled), "normal" = jobs, "background" = vault/bulk ingest
+        self.priority: str = priority
 
     async def _load_history(self) -> None:
         """Load history from disk into the FastAgent agent (once per lifetime).
@@ -795,16 +799,28 @@ class AgentRunner:
                 if p_google and getattr(p_google, "api_key", None):
                     provider_kwargs["google"] = GoogleSettings(api_key=p_google.api_key)
 
-                # Any provider mapped to FA's "generic" block (e.g. MiniMax)
-                for _attr in ("minimax", "fastagent"):
-                    _p = getattr(providers, _attr, None)
-                    if _p and getattr(_p, "fastagent_provider", None) == "generic":
-                        _base_url = getattr(_p, "api_url", None) or getattr(_p, "base_url", None)
-                        provider_kwargs["generic"] = GenericSettings(
-                            api_key=getattr(_p, "api_key", None),
-                            base_url=_base_url,
-                        )
-                        break
+                # Generic provider — use per-runner api_key/base_url if available
+                # (set by agent.py from the specific provider config for this model),
+                # otherwise fall back to searching all providers for any generic one.
+                if "generic." in self.model and (self.api_key or self.base_url):
+                    provider_kwargs["generic"] = GenericSettings(
+                        api_key=self.api_key,
+                        base_url=self.base_url,
+                    )
+                elif "generic." in self.model:
+                    _all_providers = {
+                        name: getattr(providers, name, None)
+                        for name in ("minimax", "fastagent", "openai", "anthropic", "google")
+                    }
+                    _all_providers.update(providers.model_extra or {})
+                    for _p in _all_providers.values():
+                        if _p and getattr(_p, "fastagent_provider", None) == "generic":
+                            _base_url = getattr(_p, "api_url", None) or getattr(_p, "base_url", None)
+                            provider_kwargs["generic"] = GenericSettings(
+                                api_key=getattr(_p, "api_key", None),
+                                base_url=_base_url,
+                            )
+                            break
         elif "generic." in self.model and (self.api_key or self.base_url):
             # No pyclaw_config — fall back to individual api_key/base_url fields
             provider_kwargs["generic"] = GenericSettings(
@@ -1103,9 +1119,9 @@ class AgentRunner:
             _completed = False
             _agent_logger.info("%s [TURN] prompt: %s", _p, prompt[:500] + ("…" if len(prompt) > 500 else ""))
             try:
-                # Enforce per-model concurrency limit
+                # Enforce per-model concurrency limit (usage-throttle check included)
                 from pyclaw.core.concurrency import get_manager
-                async with get_manager().acquire(self.model):
+                async with get_manager().acquire(self.model, self.priority):
                     result = await self._app.send(prompt)
                 response = str(result)
 
@@ -1155,9 +1171,9 @@ class AgentRunner:
             _completed = False
             _agent_logger.info("%s [STREAM] prompt: %s", _p, prompt[:500] + ("…" if len(prompt) > 500 else ""))
             try:
-                # Enforce per-model concurrency limit (same as run())
+                # Enforce per-model concurrency limit (usage-throttle check included)
                 from pyclaw.core.concurrency import get_manager
-                async with get_manager().acquire(self.model):
+                async with get_manager().acquire(self.model, self.priority):
                     async for item in self._run_stream_inner(prompt):
                         yield item
                 _completed = True

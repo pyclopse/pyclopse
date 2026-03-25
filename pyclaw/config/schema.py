@@ -1,10 +1,11 @@
 """Configuration schema definitions using Pydantic."""
 
-from pydantic import BaseModel, Field, ConfigDict, AliasChoices
+from pydantic import BaseModel, Field, ConfigDict, AliasChoices, model_validator
 from typing import Optional, List, Dict, Any
 from enum import Enum
 
 from pyclaw.secrets.models import SecretsConfig
+from pyclaw.memory.vault.config import VaultConfig as _VaultConfig
 
 
 class QueueMode(str, Enum):
@@ -222,22 +223,133 @@ class ModelConfig(BaseModel):
     concurrency: int = 3
 
 
-class MiniMaxProviderConfig(ProviderConfig):
-    """MiniMax provider configuration."""
+class UsageThrottleConfig(BaseModel):
+    """Usage-based throttle thresholds (% used).
+
+    When usage reaches the threshold for a priority level, new requests at
+    that priority are blocked.  ``critical`` (chat) is never throttled.
+
+    Example::
+
+        throttle:
+          background: 70   # pause vault ingestion at 70 % used
+          normal: 90       # pause scheduled jobs at 90 % used
+    """
+    background: int = 70
+    normal: int = 90
+
+
+class UsageConfig(BaseModel):
+    """Provider usage monitoring configuration.
+
+    Polls the provider's usage endpoint on a configurable interval and
+    throttles requests based on configurable percentage thresholds.
+
+    All fields except ``endpoint`` are optional.  If ``api_key`` is omitted,
+    the parent provider's ``api_key`` is used.
+
+    Example (z.ai)::
+
+        usage:
+          enabled: true
+          endpoint: "https://api.z.ai/v1/usage"
+          used_path: "used"
+          total_path: "total"
+          check_interval: 300
+          throttle:
+            background: 70
+            normal: 90
+
+    Example (MiniMax with extra query param)::
+
+        usage:
+          enabled: true
+          endpoint: "https://platform.minimax.io/v1/api/openplatform/coding_plan/remains"
+          params:
+            GroupId: "1234567890"
+          total_path: "model_remains.0.current_interval_total_count"
+          remaining_path: "model_remains.0.current_interval_usage_count"
+    """
+    enabled: bool = True
+    endpoint: str
+    # Auth token — uses the provider's api_key if omitted.
+    # Supports ${SECRET_NAME} syntax (resolved at load time).
+    api_key: Optional[str] = Field(
+        default=None,
+        validation_alias=AliasChoices("api_key", "apiKey"),
+    )
+    # Extra query parameters passed to the endpoint
+    params: Dict[str, str] = Field(default_factory=dict)
+    # Polling interval in seconds (default: 5 minutes)
+    check_interval: int = Field(
+        default=300,
+        validation_alias=AliasChoices("check_interval", "checkInterval"),
+    )
+
+    # Response parsing — provide one of:
+    #   percent_path                     → direct 0-100 percentage
+    #   total_path + remaining_path      → (total - remaining) / total × 100
+    #   total_path + used_path           → used / total × 100
+    # Dot-notation; integer segments treated as list indices.
+    percent_path: Optional[str] = Field(
+        default=None,
+        validation_alias=AliasChoices("percent_path", "percentPath"),
+    )
+    total_path: Optional[str] = Field(
+        default=None,
+        validation_alias=AliasChoices("total_path", "totalPath"),
+    )
+    used_path: Optional[str] = Field(
+        default=None,
+        validation_alias=AliasChoices("used_path", "usedPath"),
+    )
+    remaining_path: Optional[str] = Field(
+        default=None,
+        validation_alias=AliasChoices("remaining_path", "remainingPath"),
+    )
+
+    throttle: UsageThrottleConfig = Field(default_factory=UsageThrottleConfig)
+
+
+class GenericProviderConfig(ProviderConfig):
+    """Configuration for any OpenAI-compatible provider endpoint."""
     api_url: Optional[str] = Field(
         default=None,
         validation_alias=AliasChoices("api_url", "apiUrl", "base_url", "baseUrl"),
     )
     models: Dict[str, ModelConfig] = Field(default_factory=dict)
+    # Optional usage monitoring — omit to disable
+    usage: Optional[UsageConfig] = None
+
+
+# Backwards-compatible alias
+MiniMaxProviderConfig = GenericProviderConfig
 
 
 class ProvidersConfig(BaseModel):
-    """Providers configuration."""
+    """Providers configuration.
+
+    Named providers (openai, anthropic, google, fastagent, minimax) are typed
+    fields.  Any additional OpenAI-compatible provider (e.g. ``zai``, ``groq``)
+    can be added directly in YAML without any code change — it is validated into
+    a ``GenericProviderConfig`` and works identically to minimax.
+    """
+    model_config = ConfigDict(extra="allow")
+
     openai: Optional[OpenAIProviderConfig] = None
     anthropic: Optional[AnthropicProviderConfig] = None
     google: Optional[GoogleProviderConfig] = None
     fastagent: Optional[FastAgentProviderConfig] = None
-    minimax: Optional[MiniMaxProviderConfig] = None
+    minimax: Optional[GenericProviderConfig] = None
+
+    @model_validator(mode="after")
+    def _coerce_extra_providers(self) -> "ProvidersConfig":
+        """Validate extra provider entries (e.g. zai) into GenericProviderConfig."""
+        if self.model_extra:
+            for name, value in self.model_extra.items():
+                if isinstance(value, dict):
+                    self.model_extra[name] = GenericProviderConfig.model_validate(value)
+        return self
 
 
 class ToolsConfig(BaseModel):
@@ -348,6 +460,12 @@ class AgentConfig(BaseModel):
     a2a: Optional[A2AAgentConfig] = Field(
         default=None,
         validation_alias=AliasChoices("a2a"),
+    )
+    # Vault memory configuration. Omit (or leave as {}) → enabled with defaults.
+    # Set to null in YAML → vault disabled for this agent.
+    vault: Optional[_VaultConfig] = Field(
+        default_factory=_VaultConfig,
+        validation_alias=AliasChoices("vault"),
     )
 
     # ── Workflow: orchestrator / iterative_planner ────────────────────────────

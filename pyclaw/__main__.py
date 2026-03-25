@@ -308,6 +308,21 @@ def _register_skill_providers(mcp_server, config) -> None:
         print(f"  [warn] Skill provider registration skipped: {e}")
 
 
+def _force_exit() -> None:
+    """Force the process to exit after gateway.stop() completes.
+
+    FastAgent spawns asyncio tasks via create_task() that are not tied to any
+    context we control.  These tasks keep the event loop alive indefinitely
+    after shutdown.  os._exit() bypasses all remaining asyncio machinery and
+    exits immediately — logs are flushed by the logging shutdown hook registered
+    via atexit, so nothing is lost.
+    """
+    import logging as _logging
+    import os as _os
+    _logging.shutdown()
+    _os._exit(0)
+
+
 async def run_gateway(
     config_path: str = None, host: str = None, port: int = None, debug: bool = False
 ):
@@ -367,6 +382,7 @@ async def run_gateway(
         pass
     finally:
         await gateway.stop()
+        _force_exit()
 
 
 async def run_gateway_with_tui(
@@ -428,6 +444,7 @@ async def run_gateway_with_tui(
         await gateway.stop()
     except Exception as e:
         print(f"Error during shutdown: {e}")
+    _force_exit()
 
 
 def cmd_init(args):

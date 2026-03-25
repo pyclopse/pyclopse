@@ -331,6 +331,26 @@ def register_builtin_commands(registry: CommandRegistry, gateway: Any) -> None:
                 else:
                     lines.append(f"Context: {ctx_tokens:,} tokens (no limit set)")
 
+        # Provider usage stats (from usage monitors)
+        try:
+            from pyclaw.core.usage import get_registry
+            usage_status = get_registry().status()
+            if usage_status:
+                lines.append("")
+                lines.append("Provider Usage:")
+                for provider_name, info in usage_status.items():
+                    pct = info.get("usage_pct")
+                    age = info.get("last_poll_seconds_ago")
+                    if pct is not None:
+                        bar_filled = int(pct) // 10
+                        bar = "█" * bar_filled + "░" * (10 - bar_filled)
+                        age_str = f" ({age}s ago)" if age is not None else ""
+                        lines.append(f"  {provider_name}: {pct:.1f}% [{bar}]{age_str}")
+                    else:
+                        lines.append(f"  {provider_name}: (pending first poll)")
+        except Exception:
+            pass
+
         return "\n".join(lines)
 
     async def cmd_model(args: str, ctx: CommandContext) -> str:
@@ -399,11 +419,27 @@ def register_builtin_commands(registry: CommandRegistry, gateway: Any) -> None:
             if ctx.gateway._agent_manager else None
         )
         old_id = ctx.session.id[:8]
-        # Evict per-session runner so a fresh FastAgent context is created next turn
+        # Evict the runner for the OLD session so it releases its FA context
         if agent:
             await agent.evict_session_runner(ctx.session.id)
-        ctx.session.context.clear()
-        return f"✅ New session started (was {old_id}…). History cleared."
+        # Create a new session with a new ID — this gives a fresh history_path
+        # so the new runner starts with an empty conversation, not the old one.
+        sm = ctx.gateway._session_manager
+        if sm:
+            channel = ctx.session.last_channel or ctx.session.channel
+            user_id = ctx.session.last_user_id or ctx.session.user_id
+            thread_ts = ctx.session.last_thread_ts
+            new_session = await sm.create_session(
+                agent_id=ctx.session.agent_id,
+                channel=channel,
+                user_id=user_id,
+            )
+            new_session.last_channel = channel
+            new_session.last_user_id = user_id
+            new_session.last_thread_ts = thread_ts
+            new_session.save_metadata()
+            sm.set_active_session(ctx.session.agent_id, new_session.id)
+        return f"✅ New session started (was {old_id}…). Fresh context, no history."
 
     async def cmd_stop(args: str, ctx: CommandContext) -> str:
         """Cancel any in-progress agent call for this session."""
@@ -581,7 +617,7 @@ def register_builtin_commands(registry: CommandRegistry, gateway: Any) -> None:
         return f"🧠 Thinking set to {level} ({budget_map[level]:,} tokens)."
 
     async def cmd_usage(args: str, ctx: CommandContext) -> str:
-        """Show message counts and uptime for this session and gateway."""
+        """Show message counts, uptime, and provider quota usage."""
         import time
         gw_usage = getattr(ctx.gateway, "_usage", {})
         started = gw_usage.get("started_at", time.time())
@@ -601,6 +637,42 @@ def register_builtin_commands(registry: CommandRegistry, gateway: Any) -> None:
                 f"  Messages: {len(ctx.session.get_messages())}",
                 f"  Session ID: {ctx.session.id[:16]}…",
             ]
+
+        # Provider quota usage
+        try:
+            from pyclaw.core.usage import get_registry
+            usage_status = get_registry().status()
+            if usage_status:
+                lines.append("\nProvider Quota:")
+                for provider_name, info in usage_status.items():
+                    pct = info.get("usage_pct")
+                    age = info.get("last_poll_seconds_ago")
+                    interval = info.get("check_interval", 300)
+                    endpoint = info.get("endpoint", "")
+                    if pct is not None:
+                        bar_filled = int(pct) // 10
+                        bar = "█" * bar_filled + "░" * (10 - bar_filled)
+                        age_str = f"  (polled {age}s ago)" if age is not None else ""
+                        lines.append(f"  {provider_name}: {pct:.1f}% [{bar}]{age_str}")
+                        # Show throttle thresholds from config if accessible
+                        try:
+                            providers_cfg = ctx.gateway.config.providers
+                            pcfg = (
+                                getattr(providers_cfg, provider_name, None)
+                                or (getattr(providers_cfg, "model_extra", None) or {}).get(provider_name)
+                            )
+                            if pcfg and getattr(pcfg, "usage", None):
+                                t = pcfg.usage.throttle
+                                lines.append(
+                                    f"    Throttle: background≥{t.background}%  normal≥{t.normal}%"
+                                )
+                        except Exception:
+                            pass
+                    else:
+                        lines.append(f"  {provider_name}: (pending first poll, interval={interval}s)")
+        except Exception:
+            pass
+
         return "\n".join(lines)
 
     async def cmd_context(args: str, ctx: CommandContext) -> str:
@@ -1620,6 +1692,182 @@ def register_builtin_commands(registry: CommandRegistry, gateway: Any) -> None:
         }
         return f"✅ Elevated mode: {sub} — {descriptions[sub]}"
 
+    def _get_agent_vault(ctx: CommandContext):
+        """Return the vault store for the agent associated with ctx.session, or None."""
+        if ctx.session is None:
+            return None
+        agent = (
+            ctx.gateway._agent_manager.get_agent(ctx.session.agent_id)
+            if getattr(ctx.gateway, "_agent_manager", None) else None
+        )
+        if agent is None:
+            return None
+        return getattr(agent, "_vault_store", None)
+
+    async def cmd_memories(args: str, ctx: CommandContext) -> str:
+        """List or search vault memory facts for the current agent.
+
+        Usage:
+          /memories              — list all crystallized facts
+          /memories <query>      — search facts relevant to query
+          /memories --all        — include provisional facts too
+          /memories --type <t>   — filter by type (preference, decision, ...)
+        """
+        store = _get_agent_vault(ctx)
+        if store is None:
+            return "Vault memory is not available for this agent (not configured or not yet initialised)."
+
+        try:
+            from pyclaw.memory.vault.models import VaultFactState
+            from pyclaw.memory.vault.retrieval import FallbackSearchBackend  # noqa: F401
+
+            parts = args.strip().split()
+            include_all = "--all" in parts
+            type_filter = None
+            query = []
+            i = 0
+            while i < len(parts):
+                if parts[i] == "--all":
+                    i += 1
+                elif parts[i] == "--type" and i + 1 < len(parts):
+                    type_filter = parts[i + 1]
+                    i += 2
+                else:
+                    query.append(parts[i])
+                    i += 1
+            query_str = " ".join(query)
+
+            states = None if include_all else {VaultFactState.CRYSTALLIZED}
+            types = {type_filter} if type_filter else None
+            facts = store.list_facts(states=states, types=types)
+
+            if not facts:
+                qualifier = "" if include_all else " crystallized"
+                return f"No{qualifier} memories found."
+
+            # If a query was given, do a simple keyword filter on claim text
+            if query_str:
+                q_lower = query_str.lower()
+                facts = [f for f in facts if q_lower in f.claim.lower() or (f.body and q_lower in f.body.lower())]
+                if not facts:
+                    return f"No memories matching: {query_str!r}"
+
+            lines = [f"Memories ({len(facts)}):"]
+            for f in facts:
+                state_tag = f"/{f.state.value}" if include_all and f.state != VaultFactState.CRYSTALLIZED else ""
+                line = f"  [{f.id[:8]}] ({f.type}{state_tag}) {f.claim}"
+                if f.contrastive:
+                    line += f" — {f.contrastive}"
+                lines.append(line)
+            lines.append("\nUse /forget <id> to archive a fact.")
+            return "\n".join(lines)
+
+        except Exception as e:
+            return f"[ERROR] {e}"
+
+    async def cmd_forget(args: str, ctx: CommandContext) -> str:
+        """Archive (soft-delete) a vault memory fact by ID.
+
+        Usage: /forget <fact-id>
+
+        The fact ID can be the full ULID or just the first 8 characters
+        (as shown in /memories output).  Archived facts are no longer
+        included in context injection but are kept on disk.
+
+        Example:
+          /forget 01J8ZX3A
+        """
+        if not args.strip():
+            return "Usage: /forget <fact-id>\nSee /memories for IDs."
+
+        store = _get_agent_vault(ctx)
+        if store is None:
+            return "Vault memory is not configured for this agent."
+
+        fact_id = args.strip()
+        try:
+            from pyclaw.memory.vault.models import VaultFactState
+
+            # Support short IDs (first 8 chars) — scan list for match
+            fact = store.read_fact(fact_id)
+            if fact is None:
+                # Try prefix match
+                all_facts = store.list_facts(states=None, include_archive=False)
+                matches = [f for f in all_facts if f.id.startswith(fact_id)]
+                if len(matches) == 1:
+                    fact = matches[0]
+                elif len(matches) > 1:
+                    return f"Ambiguous ID {fact_id!r} matches {len(matches)} facts — use a longer prefix."
+                else:
+                    return f"Fact {fact_id!r} not found."
+
+            if fact.state == VaultFactState.ARCHIVED:
+                return f"Fact [{fact.id[:8]}] is already archived."
+
+            store.archive_fact(fact.id, reason="user:forget")
+            return f"Archived [{fact.id[:8]}]: {fact.claim}"
+
+        except Exception as e:
+            return f"[ERROR] {e}"
+
+    async def cmd_ingest(args: str, ctx: CommandContext) -> str:
+        """Bulk-ingest session history and memory files into vault memory.
+
+        Usage:
+          /ingest              — ingest both sessions and memory files
+          /ingest sessions     — session history only
+          /ingest memory       — memory files only
+
+        Safe to re-run — already-processed content is skipped.
+        Rate-limit errors are retried automatically with back-off.
+        """
+        if ctx.session is None:
+            return "No active session."
+
+        agent = (
+            ctx.gateway._agent_manager.get_agent(ctx.session.agent_id)
+            if getattr(ctx.gateway, "_agent_manager", None) else None
+        )
+        if agent is None:
+            return "No agent found for this session."
+
+        if agent._vault_ingestion is None:
+            return "Vault memory is not configured for this agent."
+
+        sub = args.strip().lower()
+        include_sessions = sub in ("", "sessions", "both")
+        include_memory = sub in ("", "memory", "both")
+        if not include_sessions and not include_memory:
+            return "Usage: /ingest [sessions|memory]"
+
+        from pathlib import Path
+        from pyclaw.core.prompt_builder import get_agent_dir
+        from pyclaw.memory.vault.bulk import BulkIngestor
+
+        agent_dir = get_agent_dir(agent.id, agent.config_dir)
+        lines: list[str] = [
+            f"Starting bulk ingest for {agent.name}… "
+            f"({'sessions + memory' if include_sessions and include_memory else sub})"
+        ]
+
+        async def _progress(msg: str) -> None:
+            lines.append(msg)
+
+        ingestor = BulkIngestor(
+            agent_dir=agent_dir,
+            ingestion_handler=agent._vault_ingestion,
+            progress_callback=_progress,
+        )
+        try:
+            await ingestor.run(
+                include_sessions=include_sessions,
+                include_memory=include_memory,
+            )
+        except Exception as e:
+            lines.append(f"[ERROR] {e}")
+
+        return "\n".join(lines)
+
     # ---------------------------------------------------------------- register
     registry.register("start",   cmd_start,   "Start / show welcome message",               usage="/start")
     registry.register("help",    cmd_help,    "Show available commands",                     usage="/help")
@@ -1667,3 +1915,6 @@ def register_builtin_commands(registry: CommandRegistry, gateway: Any) -> None:
     registry.register("focus",      cmd_focus,      "Bind current thread/topic to an agent",           usage="/focus [agent_id]")
     registry.register("unfocus",    cmd_unfocus,    "Remove thread/topic binding",                     usage="/unfocus")
     registry.register("agents",     cmd_agents,     "List thread/topic bindings for this channel",     usage="/agents")
+    registry.register("memories",   cmd_memories,   "List or search vault memory facts",               usage="/memories [query] [--all] [--type <t>]")
+    registry.register("forget",     cmd_forget,     "Archive a vault memory fact by ID",               usage="/forget <fact-id>")
+    registry.register("ingest",     cmd_ingest,     "Bulk-ingest session history and memory into vault", usage="/ingest [sessions|memory]")

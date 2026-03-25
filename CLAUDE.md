@@ -60,12 +60,12 @@ The MCP server uses `FastMCP.run_http_async()` — FastMCP owns the uvicorn life
 |------|------|
 | `pyclaw/core/gateway.py` | Main orchestrator: Telegram, Slack, jobs, sessions, server lifecycle |
 | `pyclaw/core/agent.py` | Agent dataclass + session runner cache; `evict_session_runner()` on error |
-| `pyclaw/agents/runner.py` | `AgentRunner` wraps FastAgent; `run_stream()` yields `(text, is_reasoning)` tuples |
+| `pyclaw/agents/runner.py` | `AgentRunner` wraps FastAgent; `run_stream()` yields `(text, is_reasoning)` tuples; `strip_thinking_tags()` utility used throughout |
 | `pyclaw/tools/server.py` | FastMCP server exposing all built-in tools to agents (port 8081) |
 | `pyclaw/api/app.py` | FastAPI REST API (port 8080); used by MCP tools and external clients |
 | `pyclaw/core/commands.py` | Slash command dispatcher: `/help /reset /status /model /job /skills /skill` |
 | `pyclaw/core/session.py` | Session persistence + TTL-based reaper |
-| `pyclaw/jobs/scheduler.py` | Cron/interval/one-shot job scheduler with `notify_callback` |
+| `pyclaw/jobs/scheduler.py` | Cron/interval/one-shot job scheduler with `notify_callback`; agent jobs run via `_agent_executor()` in `gateway.py` |
 | `pyclaw/config/schema.py` | Pydantic config schema — all fields use `validation_alias` for camelCase YAML |
 | `pyclaw/config/loader.py` | Loads `~/.pyclaw/config.yaml`; resolves `${source:id}` inline secrets |
 | `pyclaw/tui/app.py` | Textual TUI; `pyclaw/tui/screens.py` contains `ChatScreen` with streaming |
@@ -100,6 +100,12 @@ When a tool receives a 404 from the REST API, use `_fmt_http_err(e, resource_id)
 Each agent × session gets its own `AgentRunner` instance cached in `agent._session_runners`. This preserves per-session conversation history. On error, call `agent.evict_session_runner(session_id)` to force a fresh runner on the next message.
 
 On `agent.stop()`, all session runners and the base runner are cleaned up (closes FastAgent MCP connections) before the MCP server is stopped.
+
+### Job Execution
+
+Agent-type jobs run via `_agent_executor()` in `gateway.py`. The job creates an ephemeral session (`session_mode: isolated`) or a shared one (`persistent`), injects a job-specific system prompt built from the `AgentRun` include flags, then calls `handle_message()` to get the response.
+
+**Thinking tag stripping:** Job results always have thinking tags stripped before delivery — regardless of the agent's `show_thinking` setting. This is enforced unconditionally in `_agent_executor()` (via `strip_thinking_tags()` from `runner.py`) before the response is passed to `report_to_agent` or `report_to_session`. The rationale: thinking output from an isolated job agent is internal reasoning noise that should never pollute the receiving agent's context.
 
 ### Config Schema
 
