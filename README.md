@@ -130,37 +130,130 @@ pyclawops stores all runtime data under `~/.pyclawops/`:
 
 ---
 
-## pyclawops vs OpenClaw
+## PyClawOps vs OpenClaw
 
-pyclawops is **not** a port of OpenClaw. It shares design philosophy and some terminology but differs substantially in implementation:
+PyClawOps is **not** a port of OpenClaw. It is an independent Python rewrite inspired by OpenClaw's design philosophy. Both are multi-channel AI agent gateways — the differences are substantial.
 
-| Area | OpenClaw | pyclawops |
-|------|----------|--------|
-| **Language** | TypeScript (Node.js) | Python (asyncio) |
-| **LLM layer** | Anthropic SDK directly | FastAgent (abstracted, supports any provider) |
-| **Multi-provider** | Anthropic only | Anthropic, OpenAI, MiniMax, Google, and any OpenAI-compatible endpoint via `generic` provider |
-| **MCP** | mcp SDK | FastMCP (server) + FastAgent (client); never manages uvicorn directly |
-| **Session history** | JSONL per session | FastAgent-native `PromptMessageExtended` JSON; loaded lazily into FA context |
-| **Active session model** | Per-channel session | One active session per agent; channels are routing metadata only |
-| **Message queue** | Basic | 7-mode queue (`followup`, `collect`, `interrupt`, `steer`, `steer-backlog`, `steer+backlog`, `queue`) with debounce, cap, and drop policy |
-| **Job system** | Basic scheduler | Full scheduler with cron, interval, and one-shot; `continuous` cron mode; delivery tokens (`NO_REPLY`, `SUMMARIZE`); subagent system built on jobs |
-| **Memory** | File-based | Pluggable via hook intercept; default is pyclawops's built-in Vault (structured fact store with lifecycle management and graph-linked retrieval); legacy FileMemoryBackend also available |
-| **Skills** | agentskills.io format | Same format; adds `agent`, `channels`, `inject`, `schedule` frontmatter fields |
-| **Hooks** | Basic | Two-pattern system: notification (fire-all) + intercept (first-wins); bundled hooks for session-memory and boot-md |
-| **Channels** | Telegram | Telegram (multi-bot, topics, thinking spoilers), Slack (threading, pulse), Discord, iMessage, Signal, WhatsApp, Google Chat, LINE, plugin API |
-| **Security** | None | Exec approval system (allowlist/denylist/all/none), Docker sandbox, audit logging |
-| **A2A** | Not supported | Google A2A protocol; per-agent endpoints mounted on the REST API; shared or isolated session modes |
-| **TUI** | None | Full Textual dashboard (agents, sessions, history, jobs, config, skills, traces, log stream) |
-| **Reflection** | None | Live architecture reflection via `@reflect_system/event/command` decorators; `reflect()` MCP tool |
-| **Config secrets** | Env vars only | `${env:}`, `${keychain:}`, `${file:}`, `${provider:}` inline resolution |
-| **Import from OpenClaw** | — | `pyclawops import-openclaw` converts OpenClaw JSONL history to FA format |
+### Language & Agent Framework
 
-### What pyclawops reuses from OpenClaw
+| | PyClawOps | OpenClaw |
+|---|---|---|
+| **Language** | Python 3.13.5+ (asyncio) | TypeScript (Node.js) |
+| **Package manager** | uv | pnpm |
+| **Agent framework** | [FastAgent](https://github.com/evalstate/fast-agent) (`fast-agent-mcp`) | [PI Framework](https://github.com/mariozechner/pi) (`@mariozechner/pi-agent-core`, `pi-ai`, `pi-coding-agent`) |
+| **LLM providers** | Anthropic, OpenAI, Ollama, MiniMax, VolcEngine, xAI, Bedrock, and any OpenAI-compatible endpoint | Anthropic, OpenAI, Gemini, Ollama, MiniMax, VolcEngine, xAI, Bedrock, Moonshot — via PI's per-provider `StreamFn` wrappers |
+| **Reasoning/thinking** | Delegated to FastAgent; `show_thinking` flag controls display | Explicit levels (FULL, EXTENDED, BASIC, OFF) controlled per session by PI |
 
-- **Skill format**: `SKILL.md` with YAML frontmatter — fully compatible.
-- **`fastagent.config.yaml` schema**: pyclawops generates equivalent settings programmatically.
-- **Cron expression syntax**: same 5-field cron with timezone support.
-- **General philosophy**: one always-active session per agent, channels as routing, skills as injected context.
+### MCP
+
+| | PyClawOps | OpenClaw |
+|---|---|---|
+| **MCP role** | Runs an HTTP **MCP server** (FastMCP, port 8081); FastAgent acts as the MCP client | **MCP client only** — connects to external stdio-launched MCP servers |
+| **Library** | [FastMCP](https://github.com/jlowin/fastmcp) (Python) | `@modelcontextprotocol/sdk` 1.27.1 (TypeScript) |
+| **Tool definition** | `@mcp.tool()` decorator; 60+ built-in tools (jobs, memory, sessions, todos, skills, audit, workflows, etc.) | Dynamically discovers tools from connected external MCP servers via `listAllTools()` |
+| **Transport** | HTTP | stdio (spawned subprocesses) |
+
+### Channels
+
+| | PyClawOps | OpenClaw |
+|---|---|---|
+| **Total** | 8 | 20 |
+| **Supported** | Telegram, Slack, Discord, WhatsApp, Signal, LINE, Google Chat, iMessage | All 8 PyClawOps channels, plus IRC, Matrix, Mattermost, Microsoft Teams, Feishu, Nostr, Nextcloud Talk, Synology Chat, Tlon/Urbit, Zalo, ZaloUser |
+| **Plugin model** | `ChannelPlugin` ABC (Python); discovered via entry points or explicit config list | TypeScript SDK with per-plugin allowlist config, multi-account support, group policy, message actions, and interactive setup wizards |
+
+### Sessions
+
+| | PyClawOps | OpenClaw |
+|---|---|---|
+| **Session ID** | `YYYY-MM-DD-XXXXXX` (date-prefixed, 6 random chars) | UUID v4 |
+| **Storage** | Per-agent: `~/.pyclawops/agents/{id}/sessions/{sid}/session.json` + `history.json` | Central `sessions.json` index + per-agent JSONL transcript files |
+| **History format** | FastAgent-native `PromptMessageExtended` JSON | JSONL transcripts |
+| **Ephemeral sessions** | Explicit ephemeral mode — no disk writes (used for job isolation) | Ephemeral job sessions pruned by session reaper |
+| **TTL/reaper** | 24-hour in-memory TTL; disk files kept indefinitely | Session reaper prunes cron run sessions (24h default) |
+| **Active session** | One active session per agent; channels are routing metadata only | Per-session SessionManager instance |
+
+### Memory
+
+| | PyClawOps | OpenClaw |
+|---|---|---|
+| **Backend** | ClawVault — custom immutable fact log with ULID IDs | SQLite with FTS5 full-text search + vector embeddings |
+| **Storage model** | Atomic semantic facts with lifecycle states: PROVISIONAL → CRYSTALLIZED → SUPERSEDED → ARCHIVED | Chunk-based (file line ranges); hash-deduplicated |
+| **Semantic typing** | 14 fact types: `user`, `preference`, `fact`, `decision`, `lesson`, `commitment`, `goal`, `person`, `hypothesis`, `absence`, `anti`, `context`, `project`, `rule` | None — chunks are plain text |
+| **Fact links** | `supersedes`, `superseded_by`, `related_to`, `depends_on`, `part_of`, `contradicts` | None |
+| **Confidence** | Confidence score (0.0–1.0) + reinforcement count + surprise score | None |
+| **Embeddings** | Configurable provider | OpenAI, Gemini, Voyage, Mistral, Ollama, or local; fallback chain |
+| **Search** | Semantic retrieval with retrieval profiles (default, planning, incident, handoff, research) | Hybrid BM25 + cosine similarity |
+| **Lifecycle** | Automatic crystallization, forgetting, compression, and reaping tasks | Not applicable |
+
+### Jobs & Scheduling
+
+| | PyClawOps | OpenClaw |
+|---|---|---|
+| **Schedule types** | cron (croniter), interval, at (one-shot) | cron (croner), every (interval), at (one-shot) |
+| **Timezone** | System local | IANA timezone with croner expression cache |
+| **Stagger** | Random jitter per schedule | Deterministic SHA256-based offset (stable per job) |
+| **Run types** | `CommandRun` (shell command), `AgentRun` (send message to agent) | `SystemEvent` (broadcast to session), `AgentTurn` (isolated agent run) |
+| **Delivery** | announce (channel post), webhook (HTTP POST), none | announce, webhook, none, plus failure destination channel |
+| **Prompt composition** | Granular `include_*` flags per job: personality, identity, memory, tools, skills, files, model override | Lightweight context flag (`lightContext`) |
+| **Storage** | Per-agent `jobs.yaml` + per-job JSONL run history | Central `cron/jobs.json` (JSON5 with comments) |
+| **Failure handling** | Max retries + consecutive error alerts | Auto-disable after 3 schedule errors + alert threshold |
+
+### Configuration
+
+| | PyClawOps | OpenClaw |
+|---|---|---|
+| **Format** | YAML validated by Pydantic | YAML validated by Zod |
+| **Key style** | camelCase YAML → snake_case Python via `validation_alias` | camelCase TypeScript throughout |
+| **Inline secrets** | `${env:VAR}`, `${keychain:Name}`, `${file:path}` resolved at load time | No inline syntax; secrets are first-class typed config values |
+| **Scale** | Single YAML file | ~5,000 lines across 86 typed config files |
+
+### Security & Approvals
+
+| | PyClawOps | OpenClaw |
+|---|---|---|
+| **Approval model** | Local rule-based evaluation | Human-in-the-loop: forwards requests to chat channels |
+| **Modes** | `ALLOWLIST`, `DENYLIST`, `ALL`, `NONE` | N/A (forward-only) |
+| **Rules** | `safe_bins` list + `always_approve` regex patterns | Filter by agent ID or session pattern, then route to channel/user |
+| **Audit log** | Built-in (file, configurable retention) | Not present in config schema |
+| **Sandbox** | Docker sandbox config | Not present in config schema |
+
+### Hooks & Events
+
+| | PyClawOps | OpenClaw |
+|---|---|---|
+| **Handler type** | Python functions, in-process | npm packages, git repos, or bundled TypeScript modules |
+| **Event types** | 15 named events (gateway lifecycle, message flow, commands, sessions, agent, tools, memory) | Per-module event declarations |
+| **Execution contracts** | Two contracts: **notification** (all handlers run) and **interceptable** (first non-None return wins, overrides default behavior) | Single execution model |
+| **Dependency tracking** | None | Hooks declare required binaries, env vars, and config paths; eligibility checked before execution |
+| **Bundled hooks** | `boot-md` (injects BOOT.md at startup), `session-memory` (writes history to memory on reset/new) | Bundled hooks with npm install tracking |
+
+### HTTP API
+
+| | PyClawOps | OpenClaw |
+|---|---|---|
+| **Framework** | FastAPI + uvicorn | Raw Node.js `http`/`https` modules (no framework) |
+| **Port** | 8080 | Configurable |
+| **Routing** | Declarative routers under `/api/v1/` | Custom request handler |
+| **Real-time** | HTTP polling | WebSocket-first (streaming, live updates, agent state broadcast) |
+| **API docs** | Auto-generated OpenAPI at `/docs` | None |
+| **Auth** | None built-in | Rate limiting, bearer token validation, hook replay protection |
+| **Route groups** | agents, channels, config, jobs, sessions, usage, tools, health, todos, hooks, subagents, self | health, channels, hooks, tools, OpenAI-compat, plugin routes |
+
+### TUI / UI
+
+| | PyClawOps | OpenClaw |
+|---|---|---|
+| **Terminal UI** | Yes — Textual dashboard (chat, agents, sessions, logs, status) | No |
+| **Web UI** | No | Yes — Control UI served by gateway at `/` |
+
+---
+
+### What PyClawOps shares with OpenClaw
+
+- **Skill format**: `SKILL.md` with YAML frontmatter — same concept and file name.
+- **Cron syntax**: 5-field cron expressions with timezone support.
+- **Core philosophy**: one always-active session per agent, channels as routing metadata, skills as injected context.
+- **Session history import**: `pyclawops import-openclaw` converts OpenClaw JSONL session transcripts to FastAgent history format.
 
 ---
 
