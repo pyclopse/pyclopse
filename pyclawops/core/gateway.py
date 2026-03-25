@@ -541,22 +541,15 @@ class Gateway:
         except Exception as exc:
             self._logger.warning(f"Could not init embedding backend: {exc}")
 
-        if mem_cfg.backend == "clawvault":
-            from pyclawops.memory.clawvault import ClawVaultBackend
-            default_backend = ClawVaultBackend(
-                vault_path=mem_cfg.clawvault.vault_path
-            )
-        else:
-            # Default: per-agent file backend using a "gateway" namespace
-            from pyclawops.memory.file_backend import FileMemoryBackend
-            config_dir = "~/.pyclawops"
-            if self._config_loader.config_path:
-                p = self._config_loader.config_path
-                config_dir = str(p.parent if p.is_file() else p)
-            default_backend = FileMemoryBackend(
-                base_dir=str(Path(config_dir).expanduser() / "agents" / "gateway"),
-                embedding_backend=embedding_backend,
-            )
+        from pyclawops.memory.file_backend import FileMemoryBackend
+        config_dir = "~/.pyclawops"
+        if self._config_loader.config_path:
+            p = self._config_loader.config_path
+            config_dir = str(p.parent if p.is_file() else p)
+        default_backend = FileMemoryBackend(
+            base_dir=str(Path(config_dir).expanduser() / "agents" / "gateway"),
+            embedding_backend=embedding_backend,
+        )
 
         self._memory_service = MemoryService(
             registry=self._hook_registry,

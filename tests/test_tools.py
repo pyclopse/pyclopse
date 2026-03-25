@@ -329,24 +329,21 @@ async def test_session_status():
 
 
 # ---------------------------------------------------------------------------
-# pyclawops MCP server: memory tools (clawvault optional)
+# pyclawops MCP server: memory tools
 # ---------------------------------------------------------------------------
 
 @pytest.mark.asyncio
-async def test_memory_search_graceful_without_clawvault():
+async def test_memory_search_returns_result():
     params = await _pyclawops_session()
     async with stdio_client(params) as (r, w):
         async with ClientSession(r, w) as session:
             await session.initialize()
             out = await _call(session, "memory_search", {"query": "test query"})
-            # Either returns results or graceful unavailable message
             assert len(out) > 0
-            if "UNAVAILABLE" in out:
-                assert "clawvault" in out.lower()
 
 
 @pytest.mark.asyncio
-async def test_memory_get_graceful_without_clawvault():
+async def test_memory_get_returns_result():
     params = await _pyclawops_session()
     async with stdio_client(params) as (r, w):
         async with ClientSession(r, w) as session:

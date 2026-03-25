@@ -162,7 +162,7 @@ Long-term persistent memory for agents. Supports multiple backends and optional 
 | `embeddings.py` | Embedding providers (OpenAI, Gemini, local/OpenAI-compat HTTP); pure-Python cosine similarity |
 | `vault/` | **Optional per-agent structured fact store** — ULID-keyed Markdown files with YAML frontmatter; 13 semantic types; `provisional→crystallized→superseded→archived` lifecycle; FallbackSearch (keyword) or HybridSearch (BM25+vector via RRF). Configured per-agent under `agents[].vault:`. See [docs/VAULT.md](VAULT.md). |
 
-**Config:** `memory.backend` (`file` is the default; `clawvault` is a legacy CLI-wrapper that is no longer recommended). Per-agent Vault is configured under `agents[name].vault:` — it is separate from `memory.backend`.
+**Config:** `memory.backend` is always `file` (FileMemoryBackend). Per-agent Vault is configured separately under `agents[name].vault:` — it is a different system from the memory backend.
 
 Hook events `memory:read/write/delete/search/list` are **interceptable** — a plugin can transparently replace the backend.
 

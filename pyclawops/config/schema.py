@@ -106,12 +106,6 @@ class SecurityConfig(BaseModel):
     denied_users: List[int] = Field(default_factory=list, validation_alias="deniedUsers")
 
 
-class ClawVaultConfig(BaseModel):
-    """ClawVault CLI wrapper config."""
-    vault_path: str = "~/.claw/vault"
-    enabled: bool = True
-
-
 class FileMemoryConfig(BaseModel):
     """
     File-based per-agent memory backend configuration.
@@ -173,10 +167,8 @@ class EmbeddingConfig(BaseModel):
 
 class MemoryConfig(BaseModel):
     """Memory configuration."""
-    # "file" uses the built-in markdown journal; "clawvault" uses ClawVault CLI
     backend: str = "file"
     file: FileMemoryConfig = Field(default_factory=FileMemoryConfig)
-    clawvault: ClawVaultConfig = Field(default_factory=ClawVaultConfig)
     embedding: EmbeddingConfig = Field(default_factory=EmbeddingConfig)
 
 
@@ -906,7 +898,7 @@ class Config(BaseModel):
         agents    — per-agent model, MCP servers, tools, vault config
         channels  — Telegram bots, Slack workspace, allowed/denied users
         gateway   — host/port, skills dirs, debug flags, A2A config
-        memory    — backend selection (file or clawvault)
+        memory    — backend selection (file)
         security  — exec approval mode, audit logging, sandbox
         jobs      — scheduler timezone and agents dir
         sessions  — TTL, daily rollover, max sessions

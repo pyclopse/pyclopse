@@ -9,7 +9,6 @@ handler: handler.py
 requirements:
   config:
     - sessions.persist_dir
-    - memory.clawvault.vault_path
 ---
 
 # session-memory

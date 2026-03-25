@@ -61,7 +61,7 @@ directly by the Gateway.
 | queue        | pyclawops/core/queue.py                 | Per-session message queue (7 modes)       |
 | jobs         | pyclawops/jobs/scheduler.py             | Cron/interval/one-shot job scheduler      |
 | hooks        | pyclawops/hooks/                        | Event/hook registry + bundled hooks       |
-| memory       | pyclawops/memory/                       | ClawVault + MemoryService routing         |
+| memory       | pyclawops/memory/                       | FileMemoryBackend + MemoryService routing |
 | skills       | pyclawops/skills/                       | Skill discovery + injection               |
 | channels     | pyclawops/channels/                     | Channel plugin system (Telegram, Slack)   |
 | security     | pyclawops/security/                     | Exec approval + audit logging             |

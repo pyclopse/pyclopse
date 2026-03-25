@@ -8,13 +8,12 @@ class MemoryBackend(ABC):
     """Abstract interface for pyclawops's persistent memory store.
 
     All memory operations (read, write, delete, search, list) are routed
-    through this interface.  The default implementation is FileMemoryBackend
-    (per-agent markdown daily journals).  ClawVault is an optional alternative
-    activated by setting ``memory.backend: clawvault`` in the config.
-    Alternative backends (SQLite, vector DBs, remote APIs, etc.) can be
-    swapped in by registering handlers for the ``memory:*`` hook events —
-    the MemoryService routes each operation through the hook registry and
-    only falls back to this backend if no plugin intercepts the call.
+    through this interface.  The default (and only built-in) implementation is
+    FileMemoryBackend (per-agent markdown daily journals).  Alternative backends
+    (SQLite, vector DBs, remote APIs, etc.) can be swapped in by registering
+    handlers for the ``memory:*`` hook events — the MemoryService routes each
+    operation through the hook registry and only falls back to this backend if
+    no plugin intercepts the call.
     """
 
     @abstractmethod
@@ -56,9 +55,8 @@ class MemoryBackend(ABC):
         """Delete a memory entry by key.
 
         Implementors must remove the entry identified by *key* from the
-        underlying store.  If the backend does not support deletion (e.g.
-        ClawVault's immutable log) it should log a warning and return
-        ``False``.
+        underlying store.  If the backend does not support deletion it should
+        log a warning and return ``False``.
 
         Args:
             key (str): The unique identifier of the memory entry to delete.

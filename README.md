@@ -559,9 +559,9 @@ gateway:
 
 ```yaml
 memory:
-  backend: file                       # file (default) | clawvault (legacy CLI wrapper)
+  backend: file
 
-  # Legacy file backend — daily markdown journals with optional vector search
+  # File backend — daily markdown journals with optional vector search
   embedding:
     enabled: false                    # enable vector search
     provider: openai                  # openai | gemini | local

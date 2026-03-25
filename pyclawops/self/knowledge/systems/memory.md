@@ -2,8 +2,7 @@
 # Memory System
 
 **Files:** `pyclawops/memory/service.py`, `pyclawops/memory/file_backend.py`,
-`pyclawops/memory/backend.py`, `pyclawops/memory/embeddings.py`,
-`pyclawops/memory/clawvault.py`
+`pyclawops/memory/backend.py`, `pyclawops/memory/embeddings.py`
 
 ---
 
@@ -79,7 +78,7 @@ are embedded and ranked by cosine similarity.
 Config:
 ```yaml
 memory:
-  backend: file     # file | clawvault
+  backend: file
   embedding:
     enabled: true
     provider: openai   # openai | gemini | local
@@ -88,14 +87,6 @@ memory:
 
 `memory_reindex` MCP tool rebuilds `vectors.json` from scratch — run after
 bulk imports or if the index gets out of sync.
-
----
-
-## ClawVault (`pyclawops/memory/clawvault.py`)
-
-Alternative backend with a key-value store and optional vector search.
-Configured via `memory.backend: clawvault`. Used when more structured
-storage is needed than the daily journal format.
 
 ---
 

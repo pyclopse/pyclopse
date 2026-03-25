@@ -21,7 +21,7 @@ class HookEvent:
     handler that returns a non-None value short-circuits the chain. The
     returned value replaces the default backend result. The ``memory:*``
     events use this contract so that plugins can transparently substitute an
-    alternative memory backend for ClawVault.
+    alternative memory backend in place of FileMemoryBackend.
 
     Attributes:
         GATEWAY_STARTUP (str): Fired once when the gateway has fully started up.
@@ -89,9 +89,9 @@ class HookEvent:
     # ------------------------------------------------------------------ #
     # Memory (interceptable)
     #
-    # Plugins that want to replace ClawVault register handlers for these
-    # events and return the operation result.  If no plugin handles an
-    # event the default ClawVault backend is used.
+    # Plugins that want to replace the default FileMemoryBackend register
+    # handlers for these events and return the operation result.  If no
+    # plugin handles an event the default FileMemoryBackend is used.
     # ------------------------------------------------------------------ #
     MEMORY_READ = "memory:read"
     MEMORY_WRITE = "memory:write"

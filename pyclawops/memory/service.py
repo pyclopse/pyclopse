@@ -1,7 +1,7 @@
 """
 MemoryService — routes memory operations through the hook registry.
 
-Plugins replace the default ClawVault backend by registering handlers for
+Plugins replace the default FileMemoryBackend by registering handlers for
 the ``memory:*`` interceptable events.  If no plugin handles a call, the
 service falls back to the configured default backend.
 """

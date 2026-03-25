@@ -43,7 +43,7 @@ delivery types, prompt presets, session modes, failure alerting, subagents.
 
 ## systems/memory
 Memory system: MemoryService, FileMemoryBackend (daily journals + MEMORY.md),
-ClawVault, vector search with embeddings, hook intercept pattern.
+vector search with embeddings, hook intercept pattern.
 
 ## systems/skills
 Skill system: SKILL.md format, frontmatter fields, discovery paths, template

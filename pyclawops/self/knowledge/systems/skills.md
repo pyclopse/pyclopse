@@ -271,7 +271,7 @@ The agent writes the files, tests them, and the new skill is immediately availab
 | `summarize` | Summarize URL or text | Inline |
 | `job-setup` | Interactive job/cron creator | Python (uv) |
 | `config-edit` | Guide config.yaml changes | Inline |
-| `memory-browse` | Browse/search ClawVault | Python (uv) |
+| `memory-browse` | Browse/search memory | Python (uv) |
 | `agent-info` | Show agent status and config | Inline |
 | `export-chat` | Export session to markdown | Python (uv) |
 
@@ -396,8 +396,8 @@ skills:
 | Scheduling | N/A | Skills can create/be jobs |
 | Script runner | `python3` / `bash` | `uv run` preferred / `bash` |
 | Distribution | .skill zip | .skill zip (same format) |
-| Self-improvement | skill-creator skill | skill-creator + can write to ClawVault |
-| Memory | N/A | Skills can read/write ClawVault memory |
+| Self-improvement | skill-creator skill | skill-creator + can write to memory |
+| Memory | N/A | Skills can read/write memory via MCP tools |
 
 ---
 
@@ -423,7 +423,7 @@ skills:
    support this explicitly but the agent could invoke `/other-skill` in a message.
    Probably fine to leave implicit for now.
 
-6. **ClawVault integration**: Should skills have read/write access to ClawVault
+6. **Memory integration**: Should skills have read/write access to memory tools
    by default? Enabling skill-level memory (e.g., skill remembers user preferences
    across invocations). This is powerful but needs security consideration.
 
