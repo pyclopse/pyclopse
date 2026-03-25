@@ -97,6 +97,10 @@ confidence: 0.85                        # 0.0–1.0
 reinforcement_count: 3                  # How many times seen again
 surprise_score: 0.0                     # 0.0–1.0; high = agent was corrected
 written_at: 2026-03-10T14:22:00Z
+event_at: null                          # When the event/fact occurred (optional)
+stated_at: null                         # When the user stated this (optional)
+expires_at: null                        # Expiry datetime; lifecycle reaper archives when past
+valid_from: null                        # Fact becomes relevant from this datetime
 valid_until: null                       # Set when superseded
 source_sessions:
   - session_id: 2026-03-10-abc123
@@ -319,8 +323,8 @@ Facts are progressively compressed as they age to reduce storage and context siz
 ### Hypothesis Promotion/Archival
 
 Hypotheses (`type=hypothesis`) are reviewed during lifecycle runs:
-- Promoted to `fact` if `confidence` rises above 0.75 (reinforced multiple times)
-- Archived if `confidence` drops below 0.3 or no reinforcement after `forget_days`
+- Promoted to `PROVISIONAL` state (not to `fact` type) if `reinforcement_count >= 2`
+- Archived if `age_days > 14` and `reinforcement_count == 0` (stale, never reinforced)
 
 ### Anti-Memory Expiry
 
@@ -477,8 +481,8 @@ agents:
         tier3_to_4_days: 365
 
       search:
-        backend: fallback               # fallback | hybrid
-        qmd_path: ""                    # path to qmd binary (hybrid only)
+        backend: fallback               # fallback | qmd | hybrid (auto-detects qmd if available)
+        qmd_path: ""                    # path to qmd binary; defaults to "qmd" on PATH
         qmd_collection: ""              # qmd collection name (hybrid only)
         injection_limit: 5              # max facts injected per query
         confidence_threshold: 0.5       # min confidence to include a fact

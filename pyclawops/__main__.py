@@ -496,7 +496,7 @@ def cmd_secret(args):
         sys.exit(1)
 
 
-_REPO_HTTPS = "git+https://github.com/jondecker76/pyclawopsops.git"
+_REPO_HTTPS = "git+https://github.com/jondecker76/pyclawops.git"
 
 
 def cmd_update(args):

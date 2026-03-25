@@ -339,7 +339,7 @@ All endpoints are under `/api/v1/jobs`.
 | `POST` | `/{name_or_id}/enable` | Enable a disabled job |
 | `POST` | `/{name_or_id}/disable` | Disable without deleting |
 | `POST` | `/{name_or_id}/run` | Trigger immediately |
-| `GET` | `/{name_or_id}/runs` | Run history (last 20) |
+| `GET` | `/{name_or_id}/history` | Run history (last 20) |
 
 ### PATCH fields
 
@@ -348,7 +348,7 @@ All endpoints are under `/api/v1/jobs`.
   "name": "string",
   "description": "string",
   "enabled": true,
-  "schedule": "cron:0 9 * * 1-5:America/New_York",
+  "schedule": "0 9 * * 1-5 America/New_York",
   "timeout_seconds": 600,
   "deliver_channel": "telegram",
   "deliver_chat_id": "12345678",
@@ -372,28 +372,21 @@ All endpoints are under `/api/v1/jobs`.
 
 | Format | Example |
 |---|---|
-| `cron:<expr>` | `cron:0 9 * * 1-5` |
-| `cron:<expr>:<tz>` | `cron:0 9 * * 1-5:America/New_York` |
-| `interval:<seconds>` | `interval:3600` |
-| `at:<iso-datetime>` | `at:2026-03-15T09:30:00` |
+| bare cron (5 fields) | `0 9 * * 1-5` |
+| cron with timezone (6th token) | `0 9 * * 1-5 America/New_York` |
+| continuous cron | `continuous 7-14 * * 1-5` |
+| interval shorthand | `30m`, `1h`, `2d` |
+| ISO datetime (one-shot) | `2026-03-15T09:30:00` |
 
 ---
 
-## MCP Tools
+## Agent Access to Jobs
 
-Agents can manage jobs from within a conversation via the `job_*` MCP tools exposed by the pyclawops MCP server:
+Agents interact with jobs through the **REST API** (via HTTP tools or the `bash` MCP tool) — there are no `job_*` MCP tools in the pyclawops MCP server. Agents can use:
 
-| Tool | Description |
-|---|---|
-| `job_list()` | List all jobs with status |
-| `job_get(name)` | Get one job by name or ID |
-| `job_create(...)` | Create a new job |
-| `job_update(name, ...)` | Update job fields |
-| `job_delete(name)` | Delete a job |
-| `job_enable(name)` | Enable a job |
-| `job_disable(name)` | Disable a job |
-| `job_run_now(name)` | Trigger immediately |
-| `job_history(name)` | Get run history |
+- The `/job` slash command from any chat session (see below)
+- `bash` MCP tool to call the REST API directly: `curl http://localhost:8080/api/v1/jobs`
+- The `subagent_*` MCP tools for managing subagent-type jobs: `subagent_spawn`, `subagent_status`, `subagents_list`, `subagent_kill`, `subagent_interrupt`, `subagent_send`
 
 ---
 

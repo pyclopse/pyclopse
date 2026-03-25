@@ -1,4 +1,4 @@
-# Pyclaw Skill System — Design & Implementation Notes
+# PyClawOps Skill System
 
 Skills are modular, user-installable capability packages. A skill is a folder
 containing a `SKILL.md` file (prompt template + metadata) plus optional scripts
@@ -83,7 +83,7 @@ Complex skill body (delegates to script):
 Set up a daily news briefing job for the user.
 
 Run:
-  uv run {baseDir}/scripts/setup_briefing.py --time "{args}"
+  uv run {skill_dir}/scripts/setup_briefing.py --time "{args}"
 
 The script will ask clarifying questions and create the appropriate job.
 Report what was created when done.
@@ -95,7 +95,7 @@ Report what was created when done.
 
 | Variable   | Value                                      |
 |------------|--------------------------------------------|
-| `{baseDir}`| Absolute path to this skill's folder       |
+| `{skill_dir}`| Absolute path to this skill's folder       |
 | `{args}`   | Raw argument string passed by user          |
 | `{agent}`  | Name of the agent handling this turn        |
 | `{channel}`| Channel this was invoked from (telegram...) |
@@ -132,7 +132,7 @@ from rich.console import Console
 
 Invoked from SKILL.md body:
 ```
-uv run {baseDir}/scripts/do_thing.py --arg1 value --arg2 "{args}"
+uv run {skill_dir}/scripts/do_thing.py --arg1 value --arg2 "{args}"
 ```
 
 uv downloads and caches deps on first run, near-instant thereafter.
@@ -170,13 +170,15 @@ Does it call APIs?                   → Python (uv, httpx/requests)
 
 ## Discovery & Precedence
 
-Pyclaw searches locations in order (later overrides earlier on name conflict):
+pyclawops searches locations in order (later entry wins on name conflict):
 
 ```
-1. pyclawops/skills/              bundled with package (lowest priority)
-2. ~/.pyclawops/skills/           user-installed (managed)
-3. <project>/skills/           workspace (highest priority)
+1. ~/.pyclawops/skills/                           global user skills (lowest priority)
+2. ~/.pyclawops/agents/{agent_name}/skills/       per-agent skills (overrides global)
+3. extra dirs from gateway.skills_dirs config      (highest priority)
 ```
+
+Note: there is no bundled-skills directory in the package. All skills are user-installed.
 
 Each location: top-level `SKILL.md` or subdirs each with `SKILL.md`.
 
@@ -190,17 +192,14 @@ Each location: top-level `SKILL.md` or subdirs each with `SKILL.md`.
 
 ## Invocation
 
-### Slash command (primary)
+### Slash commands
 
 ```
-/skill-name
-/skill-name some arguments here
+/skills                      — list all available skills
+/skill <name> [args]         — inject skill body + optional args and forward to agent
 ```
 
-- Command dispatcher checks built-in commands first
-- Falls through to skill registry if no built-in matches
-- Skill body + args injected into agent message
-- Routed to skill's specified agent (or default)
+The `/skill` command looks up the skill by name, substitutes template variables (`{skill_dir}`, `{args}`, etc.), prepends the skill body to the user's message, and routes it to the agent. There are no per-skill auto-registered slash commands (e.g. `/daily-briefing` does not exist — use `/skill daily-briefing`).
 
 ### Natural trigger (secondary)
 
@@ -209,7 +208,7 @@ by the agent when the description matches the user's intent. This is the
 OpenClaw model — the LLM reads skill metadata in the system prompt and
 decides when to apply a skill without explicit invocation.
 
-Pyclaw can support both: explicit `/invoke` and implicit trigger via system
+PyClawOps can support both: explicit `/invoke` and implicit trigger via system
 prompt metadata.
 
 ---
@@ -217,21 +216,19 @@ prompt metadata.
 ## Execution Flow
 
 ```
-User: /daily-briefing 9am
+User: /skill daily-briefing 9am
          │
          ▼
-CommandRegistry.dispatch("/daily-briefing", "9am")
+CommandRegistry.dispatch("/skill", "daily-briefing 9am")
          │
-         ├─ built-in command? → no
          ▼
 SkillRegistry.lookup("daily-briefing")
          │
          ├─ load SKILL.md body
-         ├─ replace {args} → "9am", {baseDir} → "~/.pyclawops/skills/daily-briefing"
+         ├─ substitute {args} → "9am"
+         ├─ substitute {skill_dir} → "~/.pyclawops/skills/daily-briefing"
          ▼
-Construct agent message:
-  [system: skill body injected here]
-  [user: /daily-briefing 9am]
+Prepend skill body to user message, forward to agent
          │
          ▼
 Agent (with full MCP tool access)
@@ -245,35 +242,11 @@ Response to user
 
 ---
 
-## Bundled Skills (Ship with Pyclaw)
+## Skills
 
-### `skill-creator` — The Meta-Skill (Most Important)
+No skills are bundled with the pyclawops package. All skills are user-created and installed into `~/.pyclawops/skills/` or `~/.pyclawops/agents/{name}/skills/`.
 
-Guides creating new skills. When user says "create a skill", "build me a skill
-that does X", "I want a command that...":
-
-1. Understand what the user wants (concrete examples)
-2. Decide: inline instructions, bash script, or Python+uv?
-3. Run `uv run {baseDir}/scripts/init_skill.py <name> --path ~/.pyclawops/skills`
-4. Write the script(s) if needed (tested, with PEP 723 deps)
-5. Write the SKILL.md body (short, references scripts)
-6. Test by invoking the new skill
-7. Report what was created and how to invoke it
-
-The skill-creator itself uses a Python script for initialization and validation.
-The agent writes the files, tests them, and the new skill is immediately available.
-
-### Other bundled skills (initial set)
-
-| Skill | Purpose | Script type |
-|-------|---------|-------------|
-| `skill-creator` | Build new skills | Python (uv) |
-| `summarize` | Summarize URL or text | Inline |
-| `job-setup` | Interactive job/cron creator | Python (uv) |
-| `config-edit` | Guide config.yaml changes | Inline |
-| `memory-browse` | Browse/search ClawVault | Python (uv) |
-| `agent-info` | Show agent status and config | Inline |
-| `export-chat` | Export session to markdown | Python (uv) |
+A skill is just a directory with a `SKILL.md` file. Create one manually or ask an agent to create it for you.
 
 ---
 
@@ -304,11 +277,11 @@ Or the agent can do it: "install this skill for me" + attach .skill file.
 ### Skill packages vs OpenClaw compatibility
 
 Since the SKILL.md format is compatible, most OpenClaw skills that:
-- Don't use `{baseDir}/bin/` (no compiled binaries)
+- Don't use `{skill_dir}/bin/` (no compiled binaries)
 - Don't require OpenClaw-specific env vars
 - Use Python or bash scripts
 
-...can be installed directly in Pyclaw. The `metadata.openclaw` block is just
+...can be installed directly in PyClawOps. The `metadata.openclaw` block is just
 ignored. This is a meaningful compatibility story.
 
 ---
@@ -325,7 +298,7 @@ A `validate_skill.py` script (bundled in `skill-creator`) checks:
 - Description length: max 1024 chars
 - No disallowed keys in frontmatter
 - If `requires.bins` set: check binaries exist (optional, warn only)
-- If scripts referenced: check files exist at `{baseDir}/scripts/...`
+- If scripts referenced: check files exist at `{skill_dir}/scripts/...`
 
 ---
 
@@ -344,7 +317,7 @@ A `validate_skill.py` script (bundled in `skill-creator`) checks:
    - Return `None` (fall-through to agent) with skill body pre-injected
 
 3. **Template variable substitution**
-   - `{baseDir}`, `{args}`, `{agent}`, `{channel}`, `{user}`, `{session}`
+   - `{skill_dir}`, `{args}`, `{agent}`, `{channel}`, `{user}`, `{session}`
 
 4. **System prompt injection**
    - Skill metadata (name + description) injected as agent context
@@ -369,25 +342,23 @@ A `validate_skill.py` script (bundled in `skill-creator`) checks:
 
 ---
 
-## Config Schema Addition
+## Config
+
+The only skills-related config field in `pyclawops.yaml` is `gateway.skills_dirs` — an optional list of extra directories to search beyond the defaults:
 
 ```yaml
-# pyclawops.yaml
-skills:
-  enabled: true
-  dirs:
-    - ~/.pyclawops/skills         # managed
-    # - /custom/path           # extra dirs
-  allow_bundled: []            # empty = all bundled skills allowed
-  max_in_prompt: 100           # max skills injected into system prompt
-  auto_trigger: true           # allow implicit triggering from description
+gateway:
+  skills_dirs:
+    - /custom/path/my-skills     # extra search dir (highest precedence)
 ```
+
+There is no `skills:` top-level block. Fields like `max_in_prompt`, `auto_trigger`, and `allow_bundled` do not exist in the config schema.
 
 ---
 
 ## Key Differences from OpenClaw
 
-| Aspect | OpenClaw | Pyclaw |
+| Aspect | OpenClaw | PyClawOps |
 |--------|----------|--------|
 | Runtime | Coding agent (local) | Messaging bot (any channel) |
 | Channels | Chat window | Telegram, TUI, Slack, WhatsApp |
@@ -396,8 +367,8 @@ skills:
 | Scheduling | N/A | Skills can create/be jobs |
 | Script runner | `python3` / `bash` | `uv run` preferred / `bash` |
 | Distribution | .skill zip | .skill zip (same format) |
-| Self-improvement | skill-creator skill | skill-creator + can write to ClawVault |
-| Memory | N/A | Skills can read/write ClawVault memory |
+| Self-improvement | skill-creator skill | skill-creator + can write to the Vault |
+| Memory | N/A | Skills can read/write the Vault memory |
 
 ---
 
@@ -423,12 +394,12 @@ skills:
    support this explicitly but the agent could invoke `/other-skill` in a message.
    Probably fine to leave implicit for now.
 
-6. **ClawVault integration**: Should skills have read/write access to ClawVault
+6. **the Vault integration**: Should skills have read/write access to the Vault
    by default? Enabling skill-level memory (e.g., skill remembers user preferences
    across invocations). This is powerful but needs security consideration.
 
 ---
 
 *Research session: 2026-03-09*
-*Based on: OpenClaw skills/ analysis + Pyclaw architecture review*
+*Based on: OpenClaw skills/ analysis + PyClawOps architecture review*
 *Related: docs/TOOL_RESEARCH.md*

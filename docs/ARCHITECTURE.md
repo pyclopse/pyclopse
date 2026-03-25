@@ -16,7 +16,7 @@ The central orchestrator. Owns and initialises every other subsystem, manages th
 - Channel registration and dispatch
 - Streaming Telegram responses via `_stream_telegram_response`
 - Slash command routing via `CommandRegistry`
-- Heartbeat / pulse registration
+- Job scheduling and agent job execution (`_agent_executor`)
 
 ---
 
@@ -80,20 +80,20 @@ Token-budget management: when conversation history grows beyond a threshold, old
 
 Each channel adapter receives messages from an external platform and calls back into the Gateway.
 
-| Module | Channel |
-|---|---|
-| `telegram.py` | Telegram Bot API (polling + webhook, streaming edits, typing indicator) |
-| `slack.py` | Slack Events API (threading support) |
-| `discord.py` | Discord bot |
-| `googlechat.py` | Google Chat |
-| `imessage.py` | iMessage (macOS) |
-| `line.py` | LINE Messaging API |
-| `signal.py` | Signal |
-| `whatsapp.py` | WhatsApp Cloud API |
+| Module | Channel | Wired in Gateway |
+|---|---|---|
+| `telegram.py` | Telegram Bot API (polling, streaming edits, typing indicator) | ✅ Yes |
+| `slack.py` | Slack Events API (threading, pulse channel) | ✅ Yes |
+| `discord.py` | Discord bot | Adapter exists; not yet wired |
+| `googlechat.py` | Google Chat | Adapter exists; not yet wired |
+| `imessage.py` | iMessage (macOS) | Adapter exists; not yet wired |
+| `line.py` | LINE Messaging API | Adapter exists; not yet wired |
+| `signal.py` | Signal | Adapter exists; not yet wired |
+| `whatsapp.py` | WhatsApp Cloud API | Adapter exists; not yet wired |
 
 **`base.py`** — `ChannelAdapter` ABC all adapters implement.
 **`loader.py`** — discovers and instantiates adapters from config + plugin entry points.
-**`plugin.py`** — plugin adapter wrapper for third-party channel packages.
+**`plugin.py`** — `ChannelPlugin` ABC for third-party channel packages; discovered via entry points (`pyclawops.channels` group) or explicit `plugins.channels` list in config.
 
 **Per-channel config fields:** `enabled`, `botToken`, `allowedUsers`, `deniedUsers`, `streaming`, `typingIndicator`, `topics` (Telegram forum topics), `threading` (Slack).
 
@@ -138,28 +138,15 @@ Appends JSON-lines audit records to `~/.pyclawops/logs/audit.log`. Records every
 
 ### Job Scheduler (`scheduler.py`)
 
-Cron-style job runner. Jobs are defined with a cron expression, an agent name, a prompt, and an optional delivery target (`target_channel` / `target_chat_id`). Jobs survive restarts via `~/.pyclawops/jobs.json`. Created via `/job add` slash command or the HTTP API.
+Runs cron, interval, and one-shot jobs. Run types are `CommandRun` (shell command via subprocess) and `AgentRun` (agent prompt via `gateway._agent_executor()`). Jobs survive restarts; stored in `~/.pyclawops/agents/{agent_id}/jobs.yaml` (per agent). Run logs appended to `~/.pyclawops/agents/{agent_id}/runs/{job_id}.jsonl`.
+
+Agent jobs support: isolated vs persistent session modes, granular `include_*` system prompt flags, prompt presets (`full`/`minimal`/`task`), delivery tokens (`NO_REPLY`/`SUMMARIZE`), and `report_to_agent` for cross-agent result delivery. See [docs/JOBS.md](JOBS.md) for the full model.
 
 ### Job Models (`models.py`)
 
-`Job` dataclass: `id`, `name`, `cron`, `agent_name`, `prompt`, `target_channel`, `target_chat_id`, `enabled`, `last_run`, `next_run`.
+`Job` → `run: CommandRun | AgentRun`, `schedule: CronSchedule | IntervalSchedule | AtSchedule`, `deliver: DeliverNone | DeliverAnnounce | DeliverWebhook`, `on_failure: FailureAlert | None`, plus runtime state fields (`status`, `next_run`, `last_run`, `consecutive_errors`, etc.).
 
 ---
-
-## Pulse / Heartbeat (`pyclawops/pulse/`)
-
-Periodic agent invocations on a configurable schedule. Each agent config can define a `heartbeat` block with `enabled`, `every` (e.g. `30m`), `prompt`, and optional `activeHours`. `PulseRunner` runs each agent's heartbeat as an independent `asyncio.Task`.
-
-**Config (per agent):**
-```yaml
-heartbeat:
-  enabled: true
-  every: 30m
-  prompt: "Say exactly: \"Pulse fired!\""
-  activeHours:
-    start: "08:00"
-    end: "22:00"
-```
 
 ---
 
@@ -169,14 +156,13 @@ Long-term persistent memory for agents. Supports multiple backends and optional 
 
 | Module | Purpose |
 |---|---|
-| `service.py` | `MemoryService` — high-level CRUD + search API |
+| `service.py` | `MemoryService` — hook-interceptable CRUD + search, falls back to configured backend |
 | `backend.py` | `MemoryBackend` ABC |
-| `file_backend.py` | Daily markdown journal files in `~/.pyclawops/agents/` |
-| `clawvault.py` | Key/value store with optional vector search |
-| `embeddings.py` | Embedding providers (OpenAI, Gemini, local/Ollama) |
-| `client.py` | Async HTTP client that calls the pyclawops MCP server memory tools |
+| `file_backend.py` | **Default backend** — append-only daily markdown journals in `~/.pyclawops/agents/{id}/memory/`; optional `vectors.json` embedding index |
+| `embeddings.py` | Embedding providers (OpenAI, Gemini, local/OpenAI-compat HTTP); pure-Python cosine similarity |
+| `vault/` | **Optional per-agent structured fact store** — ULID-keyed Markdown files with YAML frontmatter; 13 semantic types; `provisional→crystallized→superseded→archived` lifecycle; FallbackSearch (keyword) or HybridSearch (BM25+vector via RRF). Configured per-agent under `agents[].vault:`. See [docs/VAULT.md](VAULT.md). |
 
-**Config:** `memory.backend` (`file` | `clawvault`), `memory.embedding.enabled`, `memory.embedding.provider`.
+**Config:** `memory.backend` (`file` is the default; `clawvault` is a legacy CLI-wrapper that is no longer recommended). Per-agent Vault is configured under `agents[name].vault:` — it is separate from `memory.backend`.
 
 Hook events `memory:read/write/delete/search/list` are **interceptable** — a plugin can transparently replace the backend.
 
@@ -219,7 +205,9 @@ Reads `hooks.bundled` and `hooks.custom` from config, wraps file-based handlers 
 | `agent:after_response` | notify | Agent finishes responding |
 | `tool:before_exec` | notify | Before tool call |
 | `tool:after_exec` | notify | After tool call |
-| `heartbeat:tick` | notify | Pulse runner fires |
+| `message:transcribed` | notify | Audio message transcription complete |
+| `message:preprocessed` | notify | After initial message preprocessing |
+| `command:new` | notify | `/new` session command |
 | `memory:read` | intercept | Memory read |
 | `memory:write` | intercept | Memory write |
 | `memory:delete` | intercept | Memory delete |
@@ -277,7 +265,7 @@ Thin provider wrappers used for non-FastAgent paths (direct API calls, fallback)
 |---|---|
 | `anthropic.py` | Anthropic Claude API |
 | `openai.py` | OpenAI-compatible APIs |
-| `minimax.py` | MiniMax API (with `reasoning_split` support) |
+| `generic.py` | Generic OpenAI-compatible API (MiniMax, Ollama, and any other compat endpoint) |
 | `fastagent.py` | FastAgent orchestration layer |
 
 For FastAgent-backed agents the provider is selected by the model string (e.g. `generic.MiniMax-M2.5`, `sonnet`, `haiku`).

@@ -14,11 +14,11 @@ uv run pytest tests/test_gateway.py
 # Run a single test by name
 uv run pytest tests/test_commands.py::test_help_command -v
 
-# Run the gateway (headless)
+# Run the gateway with dashboard TUI (default)
 uv run python -m pyclawops run
 
-# Run with TUI
-uv run python -m pyclawops run --tui
+# Run headless (no TUI — stdout only)
+uv run python -m pyclawops run --headless
 
 # Run with a specific config
 uv run python -m pyclawops run --config ~/.pyclawops/config.yaml
@@ -50,7 +50,17 @@ Telegram / Slack / TUI / HTTP API
 
 ### Startup Sequence (important)
 
-Both the MCP server (8081) and REST API (8080) **must** start before `gateway.initialize()` because FastAgent eagerly connects to MCP servers during agent initialization. See `__main__.py: run_gateway()`.
+Exact order from `__main__.py`:
+1. Parse config + load secrets
+2. Setup logging (root logger + file handler)
+3. Create `Gateway` instance (no servers started yet)
+4. Register `SkillProvider` on the FastMCP server (skill:// MCP resources)
+5. **Start MCP server** (port 8081) — `gateway.start_mcp_server()`
+6. **Start REST API** (port 8080) — `gateway.start_api_server()`
+7. **`gateway.initialize()`** — creates agents, FastAgent connects to MCP. **Must be after steps 5+6.**
+8. Setup per-agent logging (`setup_agent_logging()` for each agent)
+9. Start Telegram polling tasks (if configured)
+10. Start TUI dashboard (`run_dashboard()`) or enter headless sleep loop
 
 The MCP server uses `FastMCP.run_http_async()` — FastMCP owns the uvicorn lifecycle. Do not replace this with manual uvicorn management.
 
@@ -131,7 +141,7 @@ FastAgent reads this from CWD or `~/.pyclawops/`. It defines MCP server connecti
 
 ### Installation, Updates, and Removal
 
-pyclawops is distributed as a `uv tool` installed directly from the private GitHub repo over SSH. All install/update/remove operations require SSH access to GitHub (`git@github.com:jondecker76/pyclawops.git`). The SSH key is stored at `~/.ssh/pyclawops_github` with a Host entry in `~/.ssh/config`.
+pyclawops is distributed as a `uv tool` installed from the GitHub repo. All install/update/remove operations use `uv tool` with the HTTPS GitHub URL (`https://github.com/jondecker76/pyclawops.git`). No SSH key is required for installation or updates.
 
 **First-time install** — requires `uv` and SSH access to GitHub:
 ```bash

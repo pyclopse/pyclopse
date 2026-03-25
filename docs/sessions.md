@@ -256,12 +256,11 @@ The rollover fires the `SESSION_CREATED` hook for the new session.
 
 ### Reaper
 
-Two background tasks run while the gateway is up:
+One background task runs while the gateway is up:
 
 | Task | Period | Action |
 |---|---|---|
-| `_cleanup_loop` | Every 60 s | Marks sessions as `is_active=False` if idle > `session_timeout` (default 1 h); removes from index |
-| `_reaper_loop` | Every `reaper_interval_minutes` (default 60) | Removes sessions from index if `updated_at < now - ttl_hours`; fires optional `on_expire` callback |
+| `_reaper_loop` | Every `reaper_interval_minutes` (default 60 min) | Removes sessions from the in-memory index if `updated_at < now - ttl_hours`; fires optional `on_expire` callback |
 
 **Neither task deletes files or the `active_session` pointer.** They only remove entries from the in-memory dicts. Session directories and history files remain on disk permanently.
 
@@ -331,14 +330,12 @@ pyclawops uses FastAgent strictly as an LLM execution engine. It does **not** us
 
 ```yaml
 sessions:
-  ttlHours: 24              # how long before idle sessions are reaped from index
-  reaperIntervalMinutes: 60 # how often the reaper runs
-  maxSessions: 1000         # max sessions in the in-memory index
-  sessionTimeout: 3600      # seconds idle before is_active → false
-  dailyRollover: true       # create a new session at midnight and archive the old one
+  ttlHours: 24              # how long before idle sessions are reaped from index (default 24)
+  reaperIntervalMinutes: 60 # how often the reaper runs (default 60)
+  dailyRollover: true       # create new session at midnight and archive old history (default true)
 ```
 
-The session directory is always `~/.pyclawops/agents/{agent_id}/sessions/` — not configurable.
+Session files are stored under `~/.pyclawops/agents/{agent_id}/sessions/`. The base agents directory is configurable via `sessions.persist_dir` in config, but defaults to `~/.pyclawops/sessions` (the gateway maps this to the per-agent directory layout internally).
 
 ---
 

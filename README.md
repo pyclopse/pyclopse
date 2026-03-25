@@ -172,8 +172,9 @@ TODO: Put total file size, ram usage, etc. stats here
 
 | | PyClawOps | OpenClaw |
 |---|---|---|
-| **Total** | 8 | 20 |
-| **Supported** | Telegram, Slack, Discord, WhatsApp, Signal, LINE, Google Chat, iMessage | All 8 PyClawOps channels, plus IRC, Matrix, Mattermost, Microsoft Teams, Feishu, Nostr, Nextcloud Talk, Synology Chat, Tlon/Urbit, Zalo, ZaloUser |
+| **Fully wired** | 2 (Telegram, Slack) | 20 |
+| **Adapters implemented, not yet wired** | 6 (Discord, WhatsApp, Signal, LINE, Google Chat, iMessage) | — |
+| **OpenClaw channels** | — | Telegram, Slack, Discord, WhatsApp, Signal, LINE, Google Chat, iMessage + IRC, Matrix, Mattermost, Microsoft Teams, Feishu, Nostr, Nextcloud Talk, Synology Chat, Tlon/Urbit, Zalo, ZaloUser, Email |
 | **Plugin model** | `ChannelPlugin` ABC (Python); discovered via entry points or explicit config list | TypeScript SDK with per-plugin allowlist config, multi-account support, group policy, message actions, and interactive setup wizards |
 
 ### Sessions
