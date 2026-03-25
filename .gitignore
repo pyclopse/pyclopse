@@ -49,7 +49,7 @@ uv.lock
 # OS
 .DS_Store
 Thumbs.db
-pyclaw/_version.py
+pyclawops/_version.py
 
 # FastAgent local session cache and logs
 .fast-agent/
