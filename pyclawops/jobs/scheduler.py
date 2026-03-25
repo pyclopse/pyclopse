@@ -27,7 +27,7 @@ class JobScheduler:
     any job whose next_run time has passed. Cron expressions are evaluated using
     croniter; interval jobs are re-scheduled from completion time.
 
-    Supports three run types (CommandRun, AgentRun) and three delivery types
+    Supports two run types (CommandRun, AgentRun) and three delivery types
     (DeliverNone, DeliverAnnounce, DeliverWebhook). Also provides a subagent
     API for spawning ephemeral one-shot agent jobs from within an agent session.
 

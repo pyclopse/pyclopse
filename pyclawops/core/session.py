@@ -544,7 +544,9 @@ class SessionManager:
             session_id (str): Session identifier.
 
         Returns:
-            Optional[Session]: The Session if found and active, else None.
+            Optional[Session]: The Session if found in the in-memory index
+                (is_active is set to True and updated_at is refreshed), or
+                None if not found.
         """
         session = self.sessions.get(session_id)
         if session:

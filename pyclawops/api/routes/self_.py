@@ -1,7 +1,8 @@
 """REST API routes for the pyclawops self-knowledge system.
 
-Exposes the same data as the self MCP server (port 8082) over HTTP, for
-external clients that cannot connect to MCP directly.
+Exposes the same data as the self-knowledge MCP tools (registered on the main
+MCP server, port 8081) over HTTP, for external clients that cannot connect to
+MCP directly.
 
 Endpoints:
   GET /api/v1/self/topics            — list all knowledge topics

@@ -48,7 +48,7 @@ class AnthropicProvider(Provider):
         """Convert internal message objects to the Anthropic API message format.
 
         System role messages are re-emitted as assistant turns prefixed with
-        ``"System: "`` because Anthropic's messages API does not accept a
+        ``"\n\nSystem: "`` because Anthropic's messages API does not accept a
         ``system`` role inside the messages array.
 
         Args:

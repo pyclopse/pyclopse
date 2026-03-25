@@ -73,7 +73,7 @@ The MCP server uses `FastMCP.run_http_async()` — FastMCP owns the uvicorn life
 | `pyclawops/agents/runner.py` | `AgentRunner` wraps FastAgent; `run_stream()` yields `(text, is_reasoning)` tuples; `strip_thinking_tags()` utility used throughout |
 | `pyclawops/tools/server.py` | FastMCP server exposing all built-in tools to agents (port 8081) |
 | `pyclawops/api/app.py` | FastAPI REST API (port 8080); used by MCP tools and external clients |
-| `pyclawops/core/commands.py` | Slash command dispatcher: `/help /reset /status /model /job /skills /skill` |
+| `pyclawops/core/commands.py` | Slash command dispatcher — 49 commands including `/help`, `/reset`, `/new`, `/status`, `/model`, `/job`, `/skills`, `/skill`, `/subagents`, `/memories`, `/forget`, `/config`, `/reload`, `/restart`, `/think`, `/compact`, `/bash`, and more |
 | `pyclawops/core/session.py` | Session persistence + TTL-based reaper |
 | `pyclawops/jobs/scheduler.py` | Cron/interval/one-shot job scheduler with `notify_callback`; agent jobs run via `_agent_executor()` in `gateway.py` |
 | `pyclawops/config/schema.py` | Pydantic config schema — all fields use `validation_alias` for camelCase YAML |
@@ -133,7 +133,7 @@ Channel plugins implement `ChannelPlugin` ABC from `pyclawops/channels/plugin.py
 
 ### Hook System
 
-Hooks fire on gateway events (`gateway:startup`, `message:received`, `command:reset`, etc.). Bundled hooks: `session-memory` (writes conversation history to memory on reset), `boot-md` (injects `MEMORY.md` into agent context at startup). Custom hooks are Python scripts registered in config.
+Hooks fire on gateway events (`gateway:startup`, `message:received`, `command:reset`, etc.). Bundled hooks: `session-memory` (writes conversation history to memory on reset), `boot-md` (injects `BOOT.md` from `~/.pyclawops/BOOT.md` or `~/BOOT.md` into agent context at startup). Custom hooks are Python scripts registered in config.
 
 ### fastagent.config.yaml
 

@@ -71,7 +71,7 @@ class LifecycleManager:
 
         Rules for provisional facts:
         - reinforcement_count >= crystallize_reinforcements → crystallized
-        - age > crystallize_days AND no contradiction (state still provisional) → crystallized
+        - age > crystallize_days → crystallized
         - age > forget_days AND reinforcement_count == 0 → archived (forgotten)
 
         Rules for hypothesis facts:

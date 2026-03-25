@@ -271,7 +271,7 @@ class ExecApprovalSystem:
     def remove_safe_bin(self, bin_path: str) -> None:
         """Remove a binary from the safe-bins allowlist at runtime.
 
-        Expands ``~`` in *bin_path`` and discards the expanded path and its
+        Expands ``~`` in *bin_path* and discards the expanded path and its
         basename from both :attr:`safe_bins` and :attr:`safe_bins_resolved`.
 
         Args:

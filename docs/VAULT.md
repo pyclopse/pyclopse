@@ -307,7 +307,7 @@ Crystallized facts are more trusted and rank higher in PLANNING and INCIDENT pro
 
 ### Forgetting
 
-Facts with confidence below 0.3 and no reinforcements that have not been crystallized within `forget_days` (default: 30) are archived and removed from the active index.
+Provisional facts where `age_days > forget_days` (default: 30) AND `reinforcement_count == 0` are archived. There is no confidence threshold for forgetting — only age and reinforcement count are checked.
 
 ### Tier Compression
 
@@ -475,7 +475,7 @@ agents:
       lifecycle:
         crystallize_reinforcements: 3   # reinforce count to crystallize
         crystallize_days: 7             # days to crystallize regardless of reinforcements
-        forget_days: 30                 # days before low-confidence facts are archived
+        forget_days: 30                 # days before unreinforced provisional facts are archived
         tier1_to_2_days: 30
         tier2_to_3_days: 90
         tier3_to_4_days: 365

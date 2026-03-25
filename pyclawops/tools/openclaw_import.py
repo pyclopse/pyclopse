@@ -221,7 +221,7 @@ def _write_session_metadata(
 
     Args:
         session_dir (Path): Directory in which to create ``session.json``.
-        session_id (str): Pyclaw session ID (e.g. ``2024-01-15-aB3xY7``).
+        session_id (str): pyclawops session ID (e.g. ``2024-01-15-aB3xY7``).
         agent_name (str): Name of the agent this session belongs to.
         records (List[Dict[str, Any]]): OpenClaw JSONL records used to count messages.
         created_at (Optional[datetime]): Session creation datetime; uses current time

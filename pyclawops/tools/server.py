@@ -4,31 +4,21 @@ pyclawops MCP tool server.
 Exposes pyclawops-native tools via the MCP protocol so FastAgent can use them.
 Run as: uv run python -m pyclawops.tools.server
 
-Tools provided:
-  bash             - shell execution with security policy
-  web_search       - DuckDuckGo search (no API key needed)
-  send_message     - send to configured channels (Telegram)
-  sessions_list    - list active gateway sessions
-  sessions_history - get conversation history for a session
-  sessions_send    - send a message into another session via gateway API
-  sessions_spawn   - spawn a sub-agent session
-  memory_search    - search long-term memory
-  memory_store     - store a key/value entry in long-term memory
-  memory_get       - get a memory entry by key
-  memory_delete    - delete a memory entry by key
-  memory_list      - list memory keys
-  memory_reindex   - rebuild vector search index for all memory entries
-  agents_list      - list configured agents
-  process          - manage background processes (list/kill)
-  image            - image understanding via vision model
-  tts              - text-to-speech via MiniMax TTS
-  session_status   - current session info
-  audit_log_tail   - tail the most recent audit log entries
-  audit_log_search - search audit log entries by field/keyword
-  workflow_chain   - run a sequential chain of agent steps
-  workflow_parallel - run agents in parallel (fan-out/fan-in)
-  reflect          - query pyclawops architecture (overview / systems / events / commands / config)
-  reflect_source   - read pyclawops source code with line numbers
+Tool categories (61 tools total):
+  bash / web_search / send_message / agents_list / process / image / tts
+  sessions_*      - list, history, send, status
+  subagent_*      - spawn, list, status, kill, interrupt, send
+  memory_*        - search, get, store, delete, list, reindex
+  vault_*         - search, facts_list, fact_store, bulk_ingest
+  jobs_*          - list, get, create_command, create_agent, update, delete,
+                    enable, disable, run_now, history, status
+  todos_* / todo_* - list, get, create, update, mark, delete, next
+  skills_* / skill_read
+  config_*        - get, set, delete, validate, reload, schema
+  secrets_* / secret_get
+  audit_log_*     - tail, search
+  workflow_*      - chain, parallel
+  reflect / reflect_source
 """
 import asyncio
 import json
@@ -64,16 +54,16 @@ class _PyclawMCPServer:
     calls.
 
     Tool categories:
-        bash / exec     — shell execution with exec-approval policy
-        sessions_*      — session listing, history, messaging
-        memory_*        — ClawVault CRUD + vector search
-        job_*           — job scheduler CRUD + run-now + history
-        subagent_*      — subagent spawn / list / kill / steer
-        todo_*          — todo store CRUD
-        config_*        — config get / set / delete / validate / reload
-        skills_*        — skill discovery and reading
-        a2a_*           — agent-to-agent card / message tools
-        vault_*         — ClawVault raw fact / recall tools
+        bash / web_search / send_message / agents_list / process / image / tts
+        sessions_*      — session listing, history, messaging, status
+        subagent_*      — subagent spawn / list / status / kill / interrupt / send
+        memory_*        — MemoryService CRUD + vector search (FileMemoryBackend by default)
+        vault_*         — per-agent structured fact store (search, list, store, bulk ingest)
+        jobs_*          — job scheduler CRUD + run-now + history + status
+        todos_* / todo_* — todo store CRUD
+        config_*        — config get / set / delete / validate / reload / schema
+        secrets_* / secret_get — secrets registry list + value retrieval
+        skills_* / skill_read — skill discovery and reading
         audit_log_*     — audit log tail / search
         workflow_*      — chain and parallel workflow helpers
         reflect / reflect_source — live architecture reflection (this module)

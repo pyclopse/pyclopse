@@ -11,8 +11,8 @@ class ToolGroup(str, Enum):
 
     Attributes:
         ALL (str): All tools from every group combined.
-        FS (str): Filesystem tools — read, write, edit, list_dir.
-        EXEC (str): Execution tools — bash, process.
+        FS (str): Filesystem tools — read_file, write_file, edit_file, list_directory, create_directory.
+        EXEC (str): Execution tools — bash, process_status, process_kill.
         WEB (str): Web tools — web_fetch, web_search.
         MEMORY (str): Memory tools — memory_search, memory_get.
         MESSAGING (str): Messaging tools — send_message.
@@ -21,13 +21,13 @@ class ToolGroup(str, Enum):
         SYSTEM (str): System tools — session_status.
     """
     ALL = "all"
-    FS = "fs"              # read, write, edit, list_dir
-    EXEC = "exec"          # bash, process
+    FS = "fs"              # read_file, write_file, edit_file, list_directory, create_directory
+    EXEC = "exec"          # bash, process_status, process_kill
     WEB = "web"            # web_fetch, web_search
     MEMORY = "memory"      # memory_search, memory_get
-    MESSAGING = "messaging"  # message
+    MESSAGING = "messaging"  # send_message
     SESSIONS = "sessions"  # sessions_list, sessions_history, sessions_send
-    TIME = "time"          # get_current_time
+    TIME = "time"          # get_current_time, convert_timezone
     SYSTEM = "system"      # session_status
 
 

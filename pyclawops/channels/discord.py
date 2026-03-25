@@ -140,7 +140,7 @@ class DiscordAdapter(ChannelAdapter):
         """Send a text message to a Discord channel.
 
         Args:
-            target (MessageTarget): Destination. Uses ``target.channel_id``
+            target (MessageTarget): Destination. Uses ``target.user_id``
                 or ``target.group_id`` as the Discord channel ID (integer).
             content (str): Text content to send.
             reply_to (Optional[str]): Message ID to create a reply reference
@@ -187,7 +187,7 @@ class DiscordAdapter(ChannelAdapter):
 
         Args:
             target (MessageTarget): Destination channel. Uses
-                ``target.channel_id`` or ``target.group_id``.
+                ``target.user_id`` or ``target.group_id``.
             media (MediaAttachment): Media to send. Either ``file_path`` or
                 ``url`` must be set.
 

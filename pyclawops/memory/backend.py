@@ -8,7 +8,9 @@ class MemoryBackend(ABC):
     """Abstract interface for pyclawops's persistent memory store.
 
     All memory operations (read, write, delete, search, list) are routed
-    through this interface.  The default implementation uses ClawVault.
+    through this interface.  The default implementation is FileMemoryBackend
+    (per-agent markdown daily journals).  ClawVault is an optional alternative
+    activated by setting ``memory.backend: clawvault`` in the config.
     Alternative backends (SQLite, vector DBs, remote APIs, etc.) can be
     swapped in by registering handlers for the ``memory:*`` hook events —
     the MemoryService routes each operation through the hook registry and

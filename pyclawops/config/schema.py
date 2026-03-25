@@ -898,14 +898,15 @@ class Config(BaseModel):
     ``AliasChoices`` to snake_case Pydantic fields.
 
     Inline secret syntax is resolved by ``ConfigLoader`` before model
-    construction: ``${env:VAR}``, ``${keychain:Name}``, ``${file:path}``.
+    construction: ``${NAME}`` is replaced with the plaintext value for the
+    named secret registered in ``~/.pyclawops/secrets/secrets.yaml``.
 
     Section summary:
         providers — LLM provider credentials and model lists
         agents    — per-agent model, MCP servers, tools, vault config
         channels  — Telegram bots, Slack workspace, allowed/denied users
         gateway   — host/port, skills dirs, debug flags, A2A config
-        memory    — backend selection (clawvault)
+        memory    — backend selection (file or clawvault)
         security  — exec approval mode, audit logging, sandbox
         jobs      — scheduler timezone and agents dir
         sessions  — TTL, daily rollover, max sessions

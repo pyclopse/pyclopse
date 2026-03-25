@@ -424,6 +424,8 @@ class Agent:
             instruction_override (Optional[str]): Custom system prompt for this
                 runner, replacing the agent's default.  Used for job runs with
                 custom prompt_preset / flags.  Defaults to None.
+            priority (str): Concurrency priority passed to the runner.
+                Defaults to "critical".
 
         Returns:
             Any: The AgentRunner instance for the session.
@@ -1231,7 +1233,7 @@ class AgentManager:
         return False
 
     async def start_all(self) -> None:
-        """Start all registered agents concurrently (sequential await)."""
+        """Start all registered agents sequentially."""
         for agent in self.agents.values():
             await agent.start()
 

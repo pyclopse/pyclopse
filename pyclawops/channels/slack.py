@@ -89,7 +89,7 @@ class SlackAdapter(ChannelAdapter):
         """Send a text message to a Slack channel.
 
         Args:
-            target (MessageTarget): Destination. Uses ``target.channel_id``
+            target (MessageTarget): Destination. Uses ``target.user_id``
                 or ``target.group_id`` as the Slack channel ID.
             content (str): Text content to send.
             reply_to (Optional[str]): Thread timestamp to reply in-thread.
@@ -100,7 +100,7 @@ class SlackAdapter(ChannelAdapter):
 
         Raises:
             RuntimeError: If the Slack client is not connected.
-            ValueError: If neither ``target.channel_id`` nor
+            ValueError: If neither ``target.user_id`` nor
                 ``target.group_id`` is set.
         """
         if not self._client:
@@ -134,7 +134,7 @@ class SlackAdapter(ChannelAdapter):
 
         Args:
             target (MessageTarget): Destination channel. Uses
-                ``target.channel_id`` or ``target.group_id``.
+                ``target.user_id`` or ``target.group_id``.
             media (MediaAttachment): Media to send. Either ``file_path`` or
                 ``url`` must be set.
 
@@ -144,7 +144,7 @@ class SlackAdapter(ChannelAdapter):
 
         Raises:
             RuntimeError: If the Slack client is not connected.
-            ValueError: If no channel ID is set or if neither ``media.file_path``
+            ValueError: If no target is set or if neither ``media.file_path``
                 nor ``media.url`` is provided.
         """
         if not self._client:

@@ -10,7 +10,7 @@ logger = logging.getLogger("pyclawops.memory")
 
 
 class ClawVaultBackend(MemoryBackend):
-    """Default memory backend backed by the ClawVault CLI.
+    """Optional memory backend backed by the ClawVault CLI.
 
     This wraps the existing :class:`ClawVaultClient` and maps the abstract
     :class:`MemoryBackend` interface onto ClawVault's subprocess commands.

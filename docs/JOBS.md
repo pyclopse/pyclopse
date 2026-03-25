@@ -382,7 +382,25 @@ All endpoints are under `/api/v1/jobs`.
 
 ## Agent Access to Jobs
 
-Agents interact with jobs through the **REST API** (via HTTP tools or the `bash` MCP tool) — there are no `job_*` MCP tools in the pyclawops MCP server. Agents can use:
+Agents interact with scheduled jobs via **MCP tools** (preferred) or the **REST API**:
+
+**`jobs_*` MCP tools** (11 tools, all registered on the main MCP server port 8081):
+
+| Tool | Description |
+|---|---|
+| `jobs_list(all_agents?)` | List scheduled jobs with status and next run time |
+| `jobs_get(job)` | Get full details of a job by name or ID |
+| `jobs_create_command(name, schedule, command, …)` | Create a scheduled shell command job |
+| `jobs_create_agent(name, schedule, agent, message, …)` | Create a scheduled agent prompt job |
+| `jobs_update(job, …)` | Update a job's schedule or settings |
+| `jobs_delete(job)` | Delete a job permanently |
+| `jobs_enable(job)` | Enable a disabled job |
+| `jobs_disable(job)` | Disable a job without deleting it |
+| `jobs_run_now(job)` | Trigger a job immediately |
+| `jobs_history(job, limit?)` | Get run history for a job |
+| `jobs_status()` | Show overall job scheduler status |
+
+**Other access methods:**
 
 - The `/job` slash command from any chat session (see below)
 - `bash` MCP tool to call the REST API directly: `curl http://localhost:8080/api/v1/jobs`

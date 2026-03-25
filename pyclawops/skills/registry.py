@@ -45,8 +45,8 @@ class SkillInfo:
         version (str): Optional version string from frontmatter.
         license (str): Optional license string from frontmatter.
         compatibility (str): Optional compatibility string from frontmatter.
-        allowed_tools (list[str]): Space-delimited list of MCP tool names the
-            skill is permitted to use (from the ``allowed-tools`` field).
+        allowed_tools (list[str]): MCP tool names the skill is permitted to use
+            (parsed from the space-delimited ``allowed-tools`` frontmatter field).
         metadata (dict): Freeform metadata dict from the frontmatter
             ``metadata`` key.
     """

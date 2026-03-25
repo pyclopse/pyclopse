@@ -190,7 +190,7 @@ class Gateway:
 
         gw = Gateway(config_path)
         await gw.initialize()
-        await gw.run_forever()  # blocks until Ctrl+C
+        await gw.start()  # blocks until Ctrl+C
         await gw.stop()
 
     The ``handle_message()`` method is the single entry point for all inbound

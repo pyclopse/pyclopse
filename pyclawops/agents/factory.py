@@ -106,8 +106,9 @@ class FastAgentFactory:
     def load_config(self, path: Optional[str] = None) -> Dict[str, Any]:
         """Load and parse the YAML agent configuration file.
 
-        Tries the provided path first; if not found and the path does not end with
-        ``.yaml``, also tries appending ``.yaml``.
+        Tries the provided path first; if not found, tries a ``.yaml`` variant:
+        if the path ends with ``.yml`` it replaces that suffix with ``.yaml``,
+        otherwise it appends ``.yaml`` to the path.
 
         Args:
             path (Optional[str]): Path to the YAML config file. Defaults to
