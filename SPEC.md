@@ -1,12 +1,12 @@
-# pyclaw - Python Gateway
+# pyclawops - Python Gateway
 
-> **⚠️ IMPORTANT: pyclaw is its own independent project.** It is inspired by OpenClaw but is NOT a port, clone, or 1:1 rewrite. pyclaw is designed to be **better**, **cleaner**, and **more secure** with its own architecture, naming conventions, and design philosophy.
+> **⚠️ IMPORTANT: pyclawops is its own independent project.** It is inspired by OpenClaw but is NOT a port, clone, or 1:1 rewrite. pyclawops is designed to be **better**, **cleaner**, and **more secure** with its own architecture, naming conventions, and design philosophy.
 
 ## Overview
 
-**pyclaw** is a Python-based gateway *inspired by* OpenClaw, but it is its own independent project—not a port or 1:1 clone. It is NOT an SDK or client library. It is a standalone gateway built with Python and `uv`, designed to be **better**, **cleaner**, and **more secure** than OpenClaw.
+**pyclawops** is a Python-based gateway *inspired by* OpenClaw, but it is its own independent project—not a port or 1:1 clone. It is NOT an SDK or client library. It is a standalone gateway built with Python and `uv`, designed to be **better**, **cleaner**, and **more secure** than OpenClaw.
 
-Different naming conventions, class names, and architectural patterns are explicitly welcome. pyclaw should reflect Python idioms and best practices rather than mirroring OpenClaw's TypeScript design.
+Different naming conventions, class names, and architectural patterns are explicitly welcome. pyclawops should reflect Python idioms and best practices rather than mirroring OpenClaw's TypeScript design.
 
 ## Goals
 
@@ -23,10 +23,10 @@ Different naming conventions, class names, and architectural patterns are explic
 ### 1.1 Python Package Layout
 
 ```
-pyclaw/
+pyclawops/
 ├── pyproject.toml              # uv project configuration
 ├── uv.lock                     # Locked dependencies
-├── pyclaw/                    # Main package
+├── pyclawops/                    # Main package
 │   ├── __init__.py
 │   ├── __main__.py           # CLI entry point
 │   ├── config/               # Configuration system
@@ -124,7 +124,7 @@ pyclaw/
 All agents (including main) are stored in the `agents/` directory:
 
 ```
-pyclaw/
+pyclawops/
 ├── agents/
 │   ├── main/                    # Main agent (NOT in workspace/)
 │   │   ├── SOUL.md              # Agent personality
@@ -146,7 +146,7 @@ pyclaw/
 
 **Key difference from OpenClaw:**
 - OpenClaw: Main agent in `workspace/`, subagents in `agents/`
-- pyclaw: All agents in `agents/` directory
+- pyclawops: All agents in `agents/` directory
 
 ---
 
@@ -154,9 +154,9 @@ pyclaw/
 
 ### File Name Aliases
 
-The gateway supports both pyclaw naming conventions AND OpenClaw naming conventions:
+The gateway supports both pyclawops naming conventions AND OpenClaw naming conventions:
 
-| pyclaw Name | OpenClaw Alias | Purpose |
+| pyclawops Name | OpenClaw Alias | Purpose |
 |-------------|-----------------|---------|
 | PULSE.md | HEARTBEAT.md | Pulse/heartbeat config |
 | AGENTS.md | (same) | Shared agent config |
@@ -168,11 +168,11 @@ The gateway supports both pyclaw naming conventions AND OpenClaw naming conventi
 
 The gateway loads agent files as follows:
 
-1. **Check for pyclaw name first** (e.g., `PULSE.md`)
+1. **Check for pyclawops name first** (e.g., `PULSE.md`)
 2. **Fall back to OpenClaw name if not found** (e.g., `HEARTBEAT.md`)
 
 This allows easy migration:
-- Copy files from OpenClaw's `~/.openclaw/workspace/` to pyclaw's `agents/main/` should just work
+- Copy files from OpenClaw's `~/.openclaw/workspace/` to pyclawops's `agents/main/` should just work
 - Existing OpenClaw users can migrate by simply copying their agent files
 - No renaming required - the compatibility layer handles it
 
@@ -184,10 +184,10 @@ This allows easy migration:
 ~/.openclaw/workspace/RULES.md
 ~/.openclaw/workspace/HEARTBEAT.md
 
-# Copy to pyclaw (just works!)
-cp -r ~/.openclaw/workspace/* ~/.pyclaw/agents/main/
+# Copy to pyclawops (just works!)
+cp -r ~/.openclaw/workspace/* ~/.pyclawops/agents/main/
 
-# pyclaw automatically maps:
+# pyclawops automatically maps:
 # - HEARTBEAT.md → PULSE.md
 # - SOUL.md → SOUL.md (same name)
 # - RULES.md → RULES.md (same name)
@@ -197,7 +197,7 @@ cp -r ~/.openclaw/workspace/* ~/.pyclaw/agents/main/
 
 ```toml
 [project]
-name = "pyclaw"
+name = "pyclawops"
 version = "0.1.0"
 description = "Python gateway - rewrite of OpenClaw"
 requires-python = ">=3.11"
@@ -278,7 +278,7 @@ These are conceptual roles—naming is not required to match OpenClaw. Use Pytho
 
 ## Concurrency Strategy
 
-> ⚠️ **This section is critical for future implementers.** It describes a key architectural mistake in OpenClaw that pyclaw intentionally avoids.
+> ⚠️ **This section is critical for future implementers.** It describes a key architectural mistake in OpenClaw that pyclawops intentionally avoids.
 
 ### The OpenClaw Problem
 
@@ -294,9 +294,9 @@ This design means:
 - Long-running sessions prevent any new sessions from starting
 - The system cannot scale beyond a few concurrent users
 
-### pyclaw's Solution
+### pyclawops's Solution
 
-pyclaw uses a **true parallel execution model** based on Python's asyncio:
+pyclawops uses a **true parallel execution model** based on Python's asyncio:
 
 - **Per-agent async tasks**: Each agent/session gets its own independent async task
 - **No global lock**: Sessions run truly in parallel — no shared lock between different agents
@@ -304,7 +304,7 @@ pyclaw uses a **true parallel execution model** based on Python's asyncio:
 - **Per-session locking only**: Locking is only needed within the same session (if at all), not across sessions
 
 ```python
-# pyclaw approach - each session runs as its own async task
+# pyclawops approach - each session runs as its own async task
 async def handle_session(session_id: str, messages: list):
     """Each session runs independently in its own task"""
     agent = Agent(session_id=session_id)
@@ -325,7 +325,7 @@ async def gateway_main():
 3. **Use asyncio primitives** — `asyncio.create_task()`, `asyncio.gather()`, etc.
 4. **Isolate session state** — no shared mutable state between sessions
 
-This ensures pyclaw can handle many concurrent users without one blocking all others.
+This ensures pyclawops can handle many concurrent users without one blocking all others.
 
 ---
 
@@ -333,10 +333,10 @@ This ensures pyclaw can handle many concurrent users without one blocking all ot
 
 ### 3.1 YAML Configuration Format
 
-Configuration is stored in `~/.pyclaw/config.yaml`:
+Configuration is stored in `~/.pyclawops/config.yaml`:
 
 ```yaml
-# pyclaw configuration
+# pyclawops configuration
 version: "1.0"
 
 # Gateway settings
@@ -361,11 +361,11 @@ security:
     enabled: true
     type: "docker"  # docker, none
     docker:
-      image: "pyclaw-sandbox:latest"
+      image: "pyclawops-sandbox:latest"
       network: "none"
   audit:
     enabled: true
-    logFile: "~/.pyclaw/logs/audit.log"
+    logFile: "~/.pyclawops/logs/audit.log"
     retentionDays: 90
 
 # Memory (ClawVault)
@@ -391,13 +391,13 @@ providers:
 
 # Workflows (FastAgent)
 workflows:
-  configPath: "~/.pyclaw/workflows.yaml"
+  configPath: "~/.pyclawops/workflows.yaml"
   enabled: true
   defaultWorkflow: "research_and_write"
 
 # Agents (FastAgent-First)
 # 
-# pyclaw uses FastAgent as the backbone. YAML config compiles to @fast.agent decorators,
+# pyclawops uses FastAgent as the backbone. YAML config compiles to @fast.agent decorators,
 # OR you can load Python files that define agents directly with decorators.
 
 agents:
@@ -449,7 +449,7 @@ agents:
 # Jobs (cron)
 jobs:
   enabled: true
-  persistFile: "~/.pyclaw/jobs.json"
+  persistFile: "~/.pyclawops/jobs.json"
 
 # Channels
 channels:
@@ -507,7 +507,7 @@ plugins:
 
 ### Plugin Types
 
-pyclaw supports multiple plugin types:
+pyclawops supports multiple plugin types:
 
 | Type | Description | Use Case |
 |------|-------------|----------|
@@ -591,7 +591,7 @@ memoryQmd:
 ### 3.2 Pydantic Models
 
 ```python
-# pyclaw/config/schema.py
+# pyclawops/config/schema.py
 from pydantic import BaseModel, Field
 from typing import Optional, List, Dict, Any
 from enum import Enum
@@ -614,7 +614,7 @@ class SandboxConfig(BaseModel):
 
 class AuditConfig(BaseModel):
     enabled: bool = True
-    logFile: str = "~/.pyclaw/logs/audit.log"
+    logFile: str = "~/.pyclawops/logs/audit.log"
     retentionDays: int = 90
 
 class SecurityConfig(BaseModel):
@@ -657,7 +657,7 @@ class ProvidersConfig(BaseModel):
 - **None Mode**: No commands approved
 
 ```python
-# pyclaw/security/approvals.py
+# pyclawops/security/approvals.py
 from dataclasses import dataclass
 from typing import List, Set, Optional
 import re
@@ -702,7 +702,7 @@ class ExecApprovalSystem:
 - **None**: No sandboxing (development only)
 
 ```python
-# pyclaw/security/sandbox.py
+# pyclawops/security/sandbox.py
 import asyncio
 from typing import Optional, Dict, Any
 
@@ -711,7 +711,7 @@ class Sandbox:
         raise NotImplementedError
 
 class DockerSandbox(Sandbox):
-    def __init__(self, image: str = "pyclaw-sandbox:latest"):
+    def __init__(self, image: str = "pyclawops-sandbox:latest"):
         self.image = image
     
     async def execute(self, command: str, cwd: str, env: Dict[str, str]):
@@ -723,7 +723,7 @@ class DockerSandbox(Sandbox):
 ### 4.3 Audit Logging
 
 ```python
-# pyclaw/security/audit_logger.py
+# pyclawops/security/audit_logger.py
 import json
 import logging
 from datetime import datetime
@@ -733,7 +733,7 @@ class AuditLogger:
     def __init__(self, log_file: str, retention_days: int = 90):
         self.log_file = Path(log_file).expanduser()
         self.retention_days = retention_days
-        self.logger = logging.getLogger("pyclaw.audit")
+        self.logger = logging.getLogger("pyclawops.audit")
     
     async def log(self, event_type: str, data: dict):
         entry = {
@@ -757,7 +757,7 @@ class AuditLogger:
 ### 5.1 Base Adapter Pattern
 
 ```python
-# pyclaw/channels/base.py
+# pyclawops/channels/base.py
 from abc import ABC, abstractmethod
 from typing import Any, Dict, Optional
 from dataclasses import dataclass
@@ -811,7 +811,7 @@ class ChannelAdapter(ABC):
 ### 5.2 Channel Registry
 
 ```python
-# pyclaw/channels/registry.py
+# pyclawops/channels/registry.py
 from typing import Dict, Type
 from .base import ChannelAdapter
 
@@ -832,7 +832,7 @@ def get_channel(name: str, config: dict) -> ChannelAdapter:
 ### 5.3 Telegram Adapter Example
 
 ```python
-# pyclaw/channels/telegram.py
+# pyclawops/channels/telegram.py
 from .base import ChannelAdapter, Message, MessageTarget
 from telegram import Bot
 from telegram.error import TelegramError
@@ -870,7 +870,7 @@ class TelegramAdapter(ChannelAdapter):
 ClawVault is an npm package (`npm install -g clawvault`) that runs via CLI. We wrap it with subprocess:
 
 ```python
-# pyclaw/memory/client.py
+# pyclawops/memory/client.py
 import subprocess
 import json
 import asyncio
@@ -917,7 +917,7 @@ class ClawVaultClient:
 ### 6.2 Memory Integration
 
 ```python
-# pyclaw/memory/store.py
+# pyclawops/memory/store.py
 from .client import ClawVaultClient
 
 class MemoryStore:
@@ -947,7 +947,7 @@ class MemoryStore:
 
 > **Key Insight: Agents Can Chain to Other Agents**
 >
-> Every pyclaw agent can use other agents as building blocks:
+> Every pyclawops agent can use other agents as building blocks:
 >
 > ```yaml
 > agents:
@@ -976,11 +976,11 @@ class MemoryStore:
 >     agents: [order_agent, ship_agent, inventory_agent]
 > ```
 
-FastAgent uses **decorators** to define agents, NOT just config. pyclaw supports two approaches:
+FastAgent uses **decorators** to define agents, NOT just config. pyclawops supports two approaches:
 
 **Option A: YAML config that compiles to FastAgent decorators**
 ```yaml
-# pyclaw.yaml - compiles to @fast.agent decorators
+# pyclawops.yaml - compiles to @fast.agent decorators
 agents:
   # Base agents (single FastAgent)
   url_fetcher:
@@ -1014,7 +1014,7 @@ agents:
 # agents/assistant.py - direct FastAgent definition
 from fast_agent import FastAgent
 
-fast = FastAgent("pyclaw")
+fast = FastAgent("pyclawops")
 
 @fast.agent(
     name="assistant",
@@ -1027,17 +1027,17 @@ async def main():
         await agent.interactive()
 ```
 
-The key insight: **agents are defined with decorators in FastAgent**. pyclaw's YAML config is a convenience layer that compiles to these decorators at runtime.
+The key insight: **agents are defined with decorators in FastAgent**. pyclawops's YAML config is a convenience layer that compiles to these decorators at runtime.
 
 ### 7.2 FastAgent is the Backbone
 
-Every pyclaw "Agent" IS a FastAgent instance. This is the core insight:
+Every pyclawops "Agent" IS a FastAgent instance. This is the core insight:
 
 ```
-pyclaw Agent = FastAgent instance + Channel binding + Security layer
+pyclawops Agent = FastAgent instance + Channel binding + Security layer
 ```
 
-**What pyclaw adds to FastAgent:**
+**What pyclawops adds to FastAgent:**
 - Channel integrations (Telegram, Discord, etc.)
 - Security layer (exec approvals, audit)
 - CLI and TUI
@@ -1053,7 +1053,7 @@ pyclaw Agent = FastAgent instance + Channel binding + Security layer
 ### 7.2 Base Provider
 
 ```python
-# pyclaw/providers/base.py
+# pyclawops/providers/base.py
 from abc import ABC, abstractmethod
 from typing import List, Dict, Any, Optional, AsyncIterator
 from dataclasses import dataclass
@@ -1121,11 +1121,11 @@ We will use [FastAgent](https://github.com/evalstate/fast-agent) as the workflow
 
 **Implementation:**
 - Add fast-agent-mcp to dependencies
-- Create pyclaw/workflows/ module that wraps FastAgent
+- Create pyclawops/workflows/ module that wraps FastAgent
 - Define workflows in YAML config
 - Agents become FastAgent agents with MCP tools
 
-**Example pyclaw workflow config:**
+**Example pyclawops workflow config:**
 ```yaml
 workflows:
   research_and_write:
@@ -1137,19 +1137,19 @@ workflows:
 
 ### 7.4 FastAgent Detailed Integration
 
-This section provides comprehensive details on integrating FastAgent with pyclaw.
+This section provides comprehensive details on integrating FastAgent with pyclawops.
 
 #### 7.4.1 Agent Definition Syntax
 
 FastAgent uses the `@fast.agent` decorator to define agents:
 
 ```python
-# pyclaw/agents/definitions.py
+# pyclawops/agents/definitions.py
 import asyncio
 from fast_agent import FastAgent
 
 # Create FastAgent application
-fast = FastAgent("pyclaw")
+fast = FastAgent("pyclawops")
 
 @fast.agent(
     name="assistant",
@@ -1284,10 +1284,10 @@ mcp:
       max_missed_pings: 3
 ```
 
-#### 7.4.5 YAML Configuration for pyclaw Agents
+#### 7.4.5 YAML Configuration for pyclawops Agents
 
 ```yaml
-# pyclaw.yaml - compiles to @fast.agent decorators
+# pyclawops.yaml - compiles to @fast.agent decorators
 agents:
   main:
     type: fastagent
@@ -1323,14 +1323,14 @@ agents:
     agents: [ny_manager, london_manager]
 
 workflows:
-  config_path: "~/.pyclaw/fastagent.config.yaml"
+  config_path: "~/.pyclawops/fastagent.config.yaml"
   default_agent: main
 ```
 
-#### 7.4.6 pyclaw Agent Factory
+#### 7.4.6 pyclawops Agent Factory
 
 ```python
-# pyclaw/agents/factory.py
+# pyclawops/agents/factory.py
 from fast_agent import FastAgent
 from typing import Dict, Any, Optional, List
 
@@ -1389,7 +1389,7 @@ class FastAgentFactory:
 #### FastAgent Provider Implementation
 
 ```python
-# pyclaw/providers/fastagent.py
+# pyclawops/providers/fastagent.py
 from .base import Provider
 from typing import List, Dict, Any, Optional, AsyncIterator
 import httpx
@@ -1453,7 +1453,7 @@ class FastAgentProvider(Provider):
 #### Workflow Runner
 
 ```python
-# pyclaw/workflows/runner.py
+# pyclawops/workflows/runner.py
 from typing import Dict, Any, List, Optional
 from dataclasses import dataclass
 from enum import Enum
@@ -1647,13 +1647,13 @@ agents:
 
 ### Skills (FastAgent Built-in)
 
-pyclaw uses FastAgent's built-in skills system (`fast_agent.skills`). The custom skills system has been removed.
+pyclawops uses FastAgent's built-in skills system (`fast_agent.skills`). The custom skills system has been removed.
 
 **Key Points:**
 - Skills are defined in FastAgent and loaded automatically
 - Use FastAgent's skill registry to manage skills
 - Skills provide additional capabilities to agents (e.g., web search, file operations)
-- pyclaw no longer has its own skills module - use FastAgent skills
+- pyclawops no longer has its own skills module - use FastAgent skills
 
 ```python
 # Example: Using FastAgent skills
@@ -1699,7 +1699,7 @@ FastAgent provides native MCP support. Agents can use MCP tools from the registr
 FastAgent provides native MCP support. Agents can use MCP tools from the registry:
 
 ```python
-# pyclaw/workflows/mcp_integration.py
+# pyclawops/workflows/mcp_integration.py
 from typing import Dict, Any, List
 
 class MCPToolRegistry:
@@ -1729,7 +1729,7 @@ class MCPToolRegistry:
 ### 8.4 Built-in Workflow Patterns
 
 ```python
-# pyclaw/workflows/patterns.py
+# pyclawops/workflows/patterns.py
 from .runner import WorkflowRunner, Workflow, WorkflowType
 from typing import Any, Dict
 
@@ -1782,7 +1782,7 @@ class WorkflowPatterns:
 ### 8.1 Plugin Loader
 
 ```python
-# pyclaw/plugins/loader.py
+# pyclawops/plugins/loader.py
 import importlib.util
 from pathlib import Path
 from typing import Dict, Any
@@ -1805,7 +1805,7 @@ class PluginLoader:
     def load_plugin(self, name: str, path: Path, config: Dict[str, Any]):
         """Load a plugin module"""
         spec = importlib.util.spec_from_file_location(
-            f"pyclaw.plugins.{name}",
+            f"pyclawops.plugins.{name}",
             path / "plugin.py"
         )
         module = importlib.util.module_from_spec(spec)
@@ -1861,11 +1861,11 @@ discord_plugin.register_routes(app)
 
 **The Problem:** OpenClaw plugins are TypeScript-only since they're part of the same Node.js process.
 
-**pyclaw's Solution:** Plugins are NOT limited to Python—any language can be a plugin via HTTP/RPC.
+**pyclawops's Solution:** Plugins are NOT limited to Python—any language can be a plugin via HTTP/RPC.
 
 #### Architecture
 
-- pyclaw runs on ONE port (e.g., 18789)
+- pyclawops runs on ONE port (e.g., 18789)
 - Plugins register ROUTES at startup (not their own servers!)
 - Main router dispatches: `/telegram/*` → Telegram plugin, `/discord/*` → Discord plugin
 
@@ -1943,7 +1943,7 @@ async fn main() -> std::io::Result<()> {
 #### Benefits
 
 - **Any language can be a plugin**: Python, Go, Rust, Node.js, etc.
-- **One port to manage**: pyclaw runs on a single port
+- **One port to manage**: pyclawops runs on a single port
 - **Easy to proxy**: Behind nginx, Caddy, or any reverse proxy
 - **Plugins distributed as binaries**: No language runtime required for plugin consumers
 
@@ -1952,7 +1952,7 @@ async fn main() -> std::io::Result<()> {
 External plugins register with the gateway:
 
 ```python
-# pyclaw/plugins/registry.py
+# pyclawops/plugins/registry.py
 from typing import Dict, Any, Optional
 from dataclasses import dataclass
 
@@ -1990,7 +1990,7 @@ class PluginRegistry:
 ### 8.2 Hook System
 
 ```python
-# pyclaw/plugins/hooks.py
+# pyclawops/plugins/hooks.py
 from typing import Callable, Dict, List, Any
 from enum import Enum
 
@@ -2021,7 +2021,7 @@ class HookRegistry:
 
 ## 9. Gateway Concepts
 
-These are gateway-level features that pyclaw must handle, which are outside the scope of FastAgent's agent/workflow engine:
+These are gateway-level features that pyclawops must handle, which are outside the scope of FastAgent's agent/workflow engine:
 
 ### 9.1 Compaction
 
@@ -2032,7 +2032,7 @@ These are gateway-level features that pyclaw must handle, which are outside the 
 **How**: Summarize old messages while keeping recent context intact. This is critical for long-running sessions where the full message history would exceed the model's context window.
 
 ```python
-# pyclaw/core/compaction.py
+# pyclawops/core/compaction.py
 class ContextCompactor:
     def __init__(self, max_tokens: int = 100000):
         self.max_tokens = max_tokens
@@ -2058,7 +2058,7 @@ class ContextCompactor:
 **How**: Serialize messages, agent state, and metadata to disk (SQLite or JSON).
 
 ```python
-# pyclaw/core/session.py
+# pyclawops/core/session.py
 class SessionPersistence:
     def __init__(self, storage_path: str):
         self.storage_path = storage_path
@@ -2085,7 +2085,7 @@ class SessionPersistence:
 **How**: Track message token counts, monitor context usage, and proactively truncate or compact before hitting limits.
 
 ```python
-# pyclaw/core/context.py
+# pyclawops/core/context.py
 class ContextManager:
     def __init__(self, session: Session, max_tokens: int):
         self.session = session
@@ -2112,10 +2112,10 @@ class ContextManager:
 
 **How**: Asyncio tasks per agent that run at configured intervals, checking for updates or performing background work.
 
-> **Status**: Already implemented in `pyclaw/pulse/` module.
+> **Status**: Already implemented in `pyclawops/pulse/` module.
 
 ```python
-# pyclaw/pulse/runner.py
+# pyclawops/pulse/runner.py
 class PulseRunner:
     def __init__(self, agent: Agent, config: PulseConfig):
         self.agent = agent
@@ -2138,10 +2138,10 @@ class PulseRunner:
 
 **How**: Job queue with persistence (SQLite), scheduler runs jobs at configured times.
 
-> **Status**: Already implemented in `pyclaw/jobs/` module.
+> **Status**: Already implemented in `pyclawops/jobs/` module.
 
 ```python
-# pyclaw/jobs/scheduler.py
+# pyclawops/jobs/scheduler.py
 class JobScheduler:
     def __init__(self, job_store: JobStore):
         self.job_store = job_store
@@ -2192,14 +2192,14 @@ class JobScheduler:
 ### 9.1 FastAPI Application
 
 ```python
-# pyclaw/api/app.py
+# pyclawops/api/app.py
 from fastapi import FastAPI, HTTPException, Depends
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from pydantic import BaseModel
 from typing import List, Optional
 import jwt
 
-app = FastAPI(title="pyclaw API", version="0.1.0")
+app = FastAPI(title="pyclawops API", version="0.1.0")
 security = HTTPBearer()
 
 # Request/Response Models
@@ -2337,7 +2337,7 @@ async def search_memory(
 
 ### 11.1 Config Conversion
 
-Provide a tool to convert OpenClaw JSON config to pyclaw YAML:
+Provide a tool to convert OpenClaw JSON config to pyclawops YAML:
 
 ```python
 # scripts/convert_config.py
@@ -2349,8 +2349,8 @@ def convert_config(input_file: Path, output_file: Path):
     with open(input_file) as f:
         config = json.load(f)
     
-    # Convert to pyclaw format
-    pyclaw_config = {
+    # Convert to pyclawops format
+    pyclawops_config = {
         "version": "1.0",
         "gateway": {...},
         "security": {...},
@@ -2358,7 +2358,7 @@ def convert_config(input_file: Path, output_file: Path):
     }
     
     with open(output_file, "w") as f:
-        yaml.dump(pyclaw_config, f, default_flow_style=False)
+        yaml.dump(pyclawops_config, f, default_flow_style=False)
 ```
 
 ### 11.2 Data Migration
@@ -2371,7 +2371,7 @@ def convert_config(input_file: Path, output_file: Path):
 
 ## 12. Key Differences from OpenClaw
 
-| Aspect | OpenClaw | pyclaw |
+| Aspect | OpenClaw | pyclawops |
 |--------|----------|--------|
 | Language | TypeScript | Python |
 | Package Manager | npm | uv |
@@ -2412,7 +2412,7 @@ def convert_config(input_file: Path, output_file: Path):
 ```python
 # tests/test_approvals.py
 import pytest
-from pyclaw.security.approvals import ExecApprovalSystem, ApprovalRequest
+from pyclawops.security.approvals import ExecApprovalSystem, ApprovalRequest
 
 @pytest.fixture
 def approval_system():

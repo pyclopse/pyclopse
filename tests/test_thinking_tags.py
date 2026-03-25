@@ -5,7 +5,7 @@ Tests for <thinking> tag stripping in AgentRunner.
 import pytest
 from unittest.mock import AsyncMock, MagicMock, patch
 
-from pyclaw.agents.runner import strip_thinking_tags
+from pyclawops.agents.runner import strip_thinking_tags
 
 
 # ---------------------------------------------------------------------------
@@ -73,7 +73,7 @@ class TestStripThinkingTags:
 class TestAgentRunnerThinkingStrip:
 
     def _make_runner(self, show_thinking=False):
-        from pyclaw.agents.runner import AgentRunner
+        from pyclawops.agents.runner import AgentRunner
         runner = AgentRunner(
             agent_name="test",
             instruction="You are helpful.",
@@ -91,7 +91,7 @@ class TestAgentRunnerThinkingStrip:
         )
         runner._app = mock_app
 
-        with patch("pyclaw.core.concurrency.get_manager") as mock_mgr:
+        with patch("pyclawops.core.concurrency.get_manager") as mock_mgr:
             mock_mgr.return_value.acquire.return_value.__aenter__ = AsyncMock(return_value=None)
             mock_mgr.return_value.acquire.return_value.__aexit__ = AsyncMock(return_value=False)
             result = await runner.run("question")
@@ -108,7 +108,7 @@ class TestAgentRunnerThinkingStrip:
         )
         runner._app = mock_app
 
-        with patch("pyclaw.core.concurrency.get_manager") as mock_mgr:
+        with patch("pyclawops.core.concurrency.get_manager") as mock_mgr:
             mock_mgr.return_value.acquire.return_value.__aenter__ = AsyncMock(return_value=None)
             mock_mgr.return_value.acquire.return_value.__aexit__ = AsyncMock(return_value=False)
             result = await runner.run("question")
@@ -122,7 +122,7 @@ class TestAgentRunnerThinkingStrip:
         mock_app.send = AsyncMock(return_value="Plain response with no tags.")
         runner._app = mock_app
 
-        with patch("pyclaw.core.concurrency.get_manager") as mock_mgr:
+        with patch("pyclawops.core.concurrency.get_manager") as mock_mgr:
             mock_mgr.return_value.acquire.return_value.__aenter__ = AsyncMock(return_value=None)
             mock_mgr.return_value.acquire.return_value.__aexit__ = AsyncMock(return_value=False)
             result = await runner.run("question")
@@ -130,6 +130,6 @@ class TestAgentRunnerThinkingStrip:
         assert result == "Plain response with no tags."
 
     def test_show_thinking_default_is_false(self):
-        from pyclaw.agents.runner import AgentRunner
+        from pyclawops.agents.runner import AgentRunner
         runner = AgentRunner("test", "instruction")
         assert runner.show_thinking is False

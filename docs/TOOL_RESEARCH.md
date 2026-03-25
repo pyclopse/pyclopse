@@ -1,6 +1,6 @@
 # Tool Context Research
 
-Research into on-demand tool discovery and context management for pyclaw agents.
+Research into on-demand tool discovery and context management for pyclawops agents.
 The core problem: LLM providers require tool schemas in every request — sending all
 schemas on every call burns tokens and scales poorly.
 
@@ -77,8 +77,8 @@ embedded tool descriptions, inject only top-k most relevant schemas.
 - Shines at 50+ tools; overkill for small sets
 
 ### Option 4: Intent-based MCP server selection
-Split into small domain MCP servers: `pyclaw-base`, `pyclaw-jobs`, `pyclaw-config`,
-`pyclaw-memory`. Before calling FastAgent, pyclaw scans the message with
+Split into small domain MCP servers: `pyclawops-base`, `pyclawops-jobs`, `pyclawops-config`,
+`pyclawops-memory`. Before calling FastAgent, pyclawops scans the message with
 keyword/regex heuristics and selects which servers to attach.
 - Extra turns: 0 | Token cost: Low, dynamic | Complexity: Low-Medium
 - Deterministic, transparent, no new dependencies
@@ -222,7 +222,7 @@ Options:
 ## Recommendation for Pyclaw
 
 **Short term (low effort, immediate token savings):**
-Option 4 (intent-based MCP server selection) — split the pyclaw MCP server into
+Option 4 (intent-based MCP server selection) — split the pyclawops MCP server into
 domain servers, select which to attach per-message in AgentRunner. Pure Python,
 no protocol changes, works today.
 

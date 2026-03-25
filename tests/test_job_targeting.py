@@ -5,10 +5,10 @@ _job_notify routing, and /job add --channel --chat parsing.
 
 import pytest
 from datetime import datetime
-from pyclaw.utils.time import now
+from pyclawops.utils.time import now
 from unittest.mock import AsyncMock, MagicMock
 
-from pyclaw.jobs.models import (
+from pyclawops.jobs.models import (
     Job, JobRun, JobStatus,
     CommandRun, CronSchedule, IntervalSchedule,
     DeliverAnnounce, DeliverWebhook, DeliverNone,
@@ -84,8 +84,8 @@ class TestJobModelDeliverFields:
 class TestJobNotifyRouting:
 
     def _make_gateway_for_notify(self, default_chat_id="default_chat"):
-        from pyclaw.core.gateway import Gateway
-        from pyclaw.config.schema import Config, AgentsConfig, SecurityConfig, JobsConfig
+        from pyclawops.core.gateway import Gateway
+        from pyclawops.config.schema import Config, AgentsConfig, SecurityConfig, JobsConfig
 
         gw = Gateway.__new__(Gateway)
         gw._logger = MagicMock()
@@ -213,8 +213,8 @@ class TestJobAddTargetParsing:
     """Test that /job add strips --channel/--chat flags and stores them on Job.deliver."""
 
     def _make_gateway_with_scheduler(self):
-        from pyclaw.core.gateway import Gateway
-        from pyclaw.config.schema import Config, AgentsConfig, SecurityConfig
+        from pyclawops.core.gateway import Gateway
+        from pyclawops.config.schema import Config, AgentsConfig, SecurityConfig
 
         gw = Gateway.__new__(Gateway)
         gw._logger = MagicMock()
@@ -298,8 +298,8 @@ class TestJobListTargetDisplay:
 
     @pytest.mark.asyncio
     async def test_list_shows_target_when_set(self):
-        from pyclaw.core.gateway import Gateway
-        from pyclaw.config.schema import Config, AgentsConfig, SecurityConfig
+        from pyclawops.core.gateway import Gateway
+        from pyclawops.config.schema import Config, AgentsConfig, SecurityConfig
 
         gw = Gateway.__new__(Gateway)
         gw._logger = MagicMock()
@@ -323,8 +323,8 @@ class TestJobListTargetDisplay:
 
     @pytest.mark.asyncio
     async def test_list_omits_target_when_not_set(self):
-        from pyclaw.core.gateway import Gateway
-        from pyclaw.config.schema import Config, AgentsConfig, SecurityConfig
+        from pyclawops.core.gateway import Gateway
+        from pyclawops.config.schema import Config, AgentsConfig, SecurityConfig
 
         gw = Gateway.__new__(Gateway)
         gw._logger = MagicMock()

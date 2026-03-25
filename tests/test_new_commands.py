@@ -15,7 +15,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 # ── helpers ───────────────────────────────────────────────────────────────────
 
 def _make_runner(initialized=True, session_id="sess-abc"):
-    from pyclaw.agents.runner import AgentRunner
+    from pyclawops.agents.runner import AgentRunner
     runner = AgentRunner.__new__(AgentRunner)
     runner.agent_name = "main"
     runner.session_id = session_id
@@ -28,8 +28,8 @@ def _make_runner(initialized=True, session_id="sess-abc"):
 
 
 def _make_gateway(agent_id="main", session_id="sess-abc", runner=None, channel="telegram"):
-    from pyclaw.core.gateway import Gateway
-    from pyclaw.config.schema import (
+    from pyclawops.core.gateway import Gateway
+    from pyclawops.config.schema import (
         Config, AgentsConfig, ChannelsConfig, TelegramConfig, SlackConfig,
     )
 
@@ -50,7 +50,7 @@ def _make_gateway(agent_id="main", session_id="sess-abc", runner=None, channel="
     session.last_channel = channel
     session.last_user_id = "u1"
     session.user_id = "u1"
-    from pyclaw.utils.time import now
+    from pyclawops.utils.time import now
     session.created_at = now()
     session.updated_at = now()
 
@@ -67,13 +67,13 @@ def _make_gateway(agent_id="main", session_id="sess-abc", runner=None, channel="
 
 
 def _make_ctx(channel="telegram", runner=None):
-    from pyclaw.core.commands import CommandContext
+    from pyclawops.core.commands import CommandContext
     gw, session, agent = _make_gateway(channel=channel, runner=runner)
     return CommandContext(gateway=gw, session=session, sender_id="u1", channel=channel)
 
 
 def _registry(gw):
-    from pyclaw.core.commands import CommandRegistry, register_builtin_commands
+    from pyclawops.core.commands import CommandRegistry, register_builtin_commands
     r = CommandRegistry()
     register_builtin_commands(r, gw)
     return r
@@ -86,7 +86,7 @@ async def test_mcp_routes_to_acp():
     runner = _make_runner()
     gw, session, _ = _make_gateway(runner=runner)
     ctx = _make_ctx.__wrapped__ if hasattr(_make_ctx, "__wrapped__") else None
-    from pyclaw.core.commands import CommandContext
+    from pyclawops.core.commands import CommandContext
     ctx = CommandContext(gateway=gw, session=session, sender_id="u1", channel="telegram")
     result = await _registry(gw).dispatch("/mcp list", ctx)
     runner.acp_execute.assert_called_once_with("mcp", "list")
@@ -96,7 +96,7 @@ async def test_mcp_routes_to_acp():
 async def test_cards_routes_to_acp():
     runner = _make_runner()
     gw, session, _ = _make_gateway(runner=runner)
-    from pyclaw.core.commands import CommandContext
+    from pyclawops.core.commands import CommandContext
     ctx = CommandContext(gateway=gw, session=session, sender_id="u1", channel="telegram")
     await _registry(gw).dispatch("/cards", ctx)
     runner.acp_execute.assert_called_once_with("cards", "")
@@ -106,7 +106,7 @@ async def test_cards_routes_to_acp():
 async def test_card_routes_to_acp():
     runner = _make_runner()
     gw, session, _ = _make_gateway(runner=runner)
-    from pyclaw.core.commands import CommandContext
+    from pyclawops.core.commands import CommandContext
     ctx = CommandContext(gateway=gw, session=session, sender_id="u1", channel="telegram")
     await _registry(gw).dispatch("/card myagent", ctx)
     runner.acp_execute.assert_called_once_with("card", "myagent")
@@ -116,7 +116,7 @@ async def test_card_routes_to_acp():
 async def test_agent_routes_to_acp():
     runner = _make_runner()
     gw, session, _ = _make_gateway(runner=runner)
-    from pyclaw.core.commands import CommandContext
+    from pyclawops.core.commands import CommandContext
     ctx = CommandContext(gateway=gw, session=session, sender_id="u1", channel="telegram")
     await _registry(gw).dispatch("/agent info", ctx)
     runner.acp_execute.assert_called_once_with("agent", "info")
@@ -125,7 +125,7 @@ async def test_agent_routes_to_acp():
 @pytest.mark.asyncio
 async def test_acp_passthrough_no_runner_returns_message():
     gw, session, _ = _make_gateway(runner=None)
-    from pyclaw.core.commands import CommandContext
+    from pyclawops.core.commands import CommandContext
     ctx = CommandContext(gateway=gw, session=session, sender_id="u1", channel="telegram")
     result = await _registry(gw).dispatch("/mcp list", ctx)
     assert result is not None
@@ -138,7 +138,7 @@ async def test_acp_passthrough_no_runner_returns_message():
 async def test_bash_no_args_returns_usage():
     runner = _make_runner()
     gw, session, _ = _make_gateway(runner=runner)
-    from pyclaw.core.commands import CommandContext
+    from pyclawops.core.commands import CommandContext
     ctx = CommandContext(gateway=gw, session=session, sender_id="u1", channel="telegram")
     result = await _registry(gw).dispatch("/bash", ctx)
     assert "usage" in result.lower() or "bash" in result.lower()
@@ -148,7 +148,7 @@ async def test_bash_no_args_returns_usage():
 async def test_bash_runs_command_and_sends_to_agent():
     runner = _make_runner()
     gw, session, _ = _make_gateway(runner=runner)
-    from pyclaw.core.commands import CommandContext
+    from pyclawops.core.commands import CommandContext
 
     ctx = CommandContext(gateway=gw, session=session, sender_id="u1", channel="telegram")
     agent = gw._agent_manager.get_agent("main")
@@ -170,7 +170,7 @@ async def test_bash_runs_command_and_sends_to_agent():
 async def test_bash_timeout_returns_error():
     runner = _make_runner()
     gw, session, _ = _make_gateway(runner=runner)
-    from pyclaw.core.commands import CommandContext
+    from pyclawops.core.commands import CommandContext
     import asyncio
 
     ctx = CommandContext(gateway=gw, session=session, sender_id="u1", channel="telegram")
@@ -183,13 +183,13 @@ async def test_bash_timeout_returns_error():
 @pytest.mark.asyncio
 async def test_bash_no_session_returns_raw_output():
     """Without a session, /bash still runs and returns the raw output."""
-    from pyclaw.core.gateway import Gateway
-    from pyclaw.config.schema import Config, AgentsConfig
+    from pyclawops.core.gateway import Gateway
+    from pyclawops.config.schema import Config, AgentsConfig
     gw = Gateway.__new__(Gateway)
     gw._logger = MagicMock()
     gw._config = Config(agents=AgentsConfig())
     gw._agent_manager = None
-    from pyclaw.core.commands import CommandContext, CommandRegistry, register_builtin_commands
+    from pyclawops.core.commands import CommandContext, CommandRegistry, register_builtin_commands
     ctx = CommandContext(gateway=gw, session=None, sender_id="u1", channel="telegram")
     registry = CommandRegistry()
     register_builtin_commands(registry, gw)
@@ -202,7 +202,7 @@ async def test_bash_no_session_returns_raw_output():
 @pytest.mark.asyncio
 async def test_allowlist_list_empty():
     gw, session, _ = _make_gateway(channel="telegram")
-    from pyclaw.core.commands import CommandContext
+    from pyclawops.core.commands import CommandContext
     ctx = CommandContext(gateway=gw, session=session, sender_id="u1", channel="telegram")
     result = await _registry(gw).dispatch("/allowlist list", ctx)
     assert "empty" in result.lower() or "all" in result.lower()
@@ -211,7 +211,7 @@ async def test_allowlist_list_empty():
 @pytest.mark.asyncio
 async def test_allowlist_add_telegram():
     gw, session, _ = _make_gateway(channel="telegram")
-    from pyclaw.core.commands import CommandContext
+    from pyclawops.core.commands import CommandContext
     ctx = CommandContext(gateway=gw, session=session, sender_id="u1", channel="telegram")
     result = await _registry(gw).dispatch("/allowlist add 12345", ctx)
     assert "12345" in result
@@ -221,7 +221,7 @@ async def test_allowlist_add_telegram():
 @pytest.mark.asyncio
 async def test_allowlist_add_duplicate_is_idempotent():
     gw, session, _ = _make_gateway(channel="telegram")
-    from pyclaw.core.commands import CommandContext
+    from pyclawops.core.commands import CommandContext
     ctx = CommandContext(gateway=gw, session=session, sender_id="u1", channel="telegram")
     await _registry(gw).dispatch("/allowlist add 12345", ctx)
     await _registry(gw).dispatch("/allowlist add 12345", ctx)
@@ -232,7 +232,7 @@ async def test_allowlist_add_duplicate_is_idempotent():
 async def test_allowlist_remove_telegram():
     gw, session, _ = _make_gateway(channel="telegram")
     gw._config.channels.telegram.allowed_users.append(12345)
-    from pyclaw.core.commands import CommandContext
+    from pyclawops.core.commands import CommandContext
     ctx = CommandContext(gateway=gw, session=session, sender_id="u1", channel="telegram")
     result = await _registry(gw).dispatch("/allowlist remove 12345", ctx)
     assert "12345" in result
@@ -243,7 +243,7 @@ async def test_allowlist_remove_telegram():
 async def test_allowlist_list_shows_users():
     gw, session, _ = _make_gateway(channel="telegram")
     gw._config.channels.telegram.allowed_users.extend([111, 222])
-    from pyclaw.core.commands import CommandContext
+    from pyclawops.core.commands import CommandContext
     ctx = CommandContext(gateway=gw, session=session, sender_id="u1", channel="telegram")
     result = await _registry(gw).dispatch("/allowlist", ctx)
     assert "111" in result
@@ -253,7 +253,7 @@ async def test_allowlist_list_shows_users():
 @pytest.mark.asyncio
 async def test_allowlist_slack_add():
     gw, session, _ = _make_gateway(channel="slack")
-    from pyclaw.core.commands import CommandContext
+    from pyclawops.core.commands import CommandContext
     ctx = CommandContext(gateway=gw, session=session, sender_id="u1", channel="slack")
     result = await _registry(gw).dispatch("/allowlist add U123ABC", ctx)
     assert "U123ABC" in result
@@ -263,7 +263,7 @@ async def test_allowlist_slack_add():
 @pytest.mark.asyncio
 async def test_allowlist_unsupported_channel():
     gw, session, _ = _make_gateway(channel="discord")
-    from pyclaw.core.commands import CommandContext
+    from pyclawops.core.commands import CommandContext
     ctx = CommandContext(gateway=gw, session=session, sender_id="u1", channel="discord")
     result = await _registry(gw).dispatch("/allowlist add 123", ctx)
     assert "not supported" in result.lower()
@@ -275,7 +275,7 @@ async def test_allowlist_unsupported_channel():
 async def test_reasoning_status_default_off():
     runner = _make_runner()
     gw, session, _ = _make_gateway(runner=runner)
-    from pyclaw.core.commands import CommandContext
+    from pyclawops.core.commands import CommandContext
     ctx = CommandContext(gateway=gw, session=session, sender_id="u1", channel="telegram")
     result = await _registry(gw).dispatch("/reasoning status", ctx)
     assert "off" in result.lower()
@@ -285,7 +285,7 @@ async def test_reasoning_status_default_off():
 async def test_reasoning_on_sets_context_and_runner():
     runner = _make_runner()
     gw, session, _ = _make_gateway(runner=runner)
-    from pyclaw.core.commands import CommandContext
+    from pyclawops.core.commands import CommandContext
     ctx = CommandContext(gateway=gw, session=session, sender_id="u1", channel="telegram")
     result = await _registry(gw).dispatch("/reasoning on", ctx)
     assert session.context.get("show_thinking") is True
@@ -297,7 +297,7 @@ async def test_reasoning_on_sets_context_and_runner():
 async def test_reasoning_stream_same_as_on():
     runner = _make_runner()
     gw, session, _ = _make_gateway(runner=runner)
-    from pyclaw.core.commands import CommandContext
+    from pyclawops.core.commands import CommandContext
     ctx = CommandContext(gateway=gw, session=session, sender_id="u1", channel="telegram")
     await _registry(gw).dispatch("/reasoning stream", ctx)
     assert session.context.get("show_thinking") is True
@@ -309,7 +309,7 @@ async def test_reasoning_off_clears():
     runner.show_thinking = True
     gw, session, _ = _make_gateway(runner=runner)
     session.context["show_thinking"] = True
-    from pyclaw.core.commands import CommandContext
+    from pyclawops.core.commands import CommandContext
     ctx = CommandContext(gateway=gw, session=session, sender_id="u1", channel="telegram")
     await _registry(gw).dispatch("/reasoning off", ctx)
     assert session.context.get("show_thinking") is False
@@ -319,7 +319,7 @@ async def test_reasoning_off_clears():
 @pytest.mark.asyncio
 async def test_reasoning_no_session():
     gw, _, _ = _make_gateway()
-    from pyclaw.core.commands import CommandContext
+    from pyclawops.core.commands import CommandContext
     ctx = CommandContext(gateway=gw, session=None, sender_id="u1", channel="telegram")
     result = await _registry(gw).dispatch("/reasoning on", ctx)
     assert "session" in result.lower()
@@ -331,7 +331,7 @@ async def test_reasoning_no_session():
 async def test_session_shows_info():
     runner = _make_runner()
     gw, session, _ = _make_gateway(runner=runner)
-    from pyclaw.core.commands import CommandContext
+    from pyclawops.core.commands import CommandContext
     ctx = CommandContext(gateway=gw, session=session, sender_id="u1", channel="telegram")
     result = await _registry(gw).dispatch("/session", ctx)
     assert "sess-abc" in result
@@ -342,7 +342,7 @@ async def test_session_shows_info():
 async def test_session_timeout_sets_context():
     runner = _make_runner()
     gw, session, _ = _make_gateway(runner=runner)
-    from pyclaw.core.commands import CommandContext
+    from pyclawops.core.commands import CommandContext
     ctx = CommandContext(gateway=gw, session=session, sender_id="u1", channel="telegram")
     result = await _registry(gw).dispatch("/session timeout 60", ctx)
     assert session.context.get("idle_timeout_minutes") == 60
@@ -353,7 +353,7 @@ async def test_session_timeout_sets_context():
 async def test_session_window_sets_context():
     runner = _make_runner()
     gw, session, _ = _make_gateway(runner=runner)
-    from pyclaw.core.commands import CommandContext
+    from pyclawops.core.commands import CommandContext
     ctx = CommandContext(gateway=gw, session=session, sender_id="u1", channel="telegram")
     result = await _registry(gw).dispatch("/session window 20", ctx)
     assert session.context.get("window_size") == 20
@@ -363,7 +363,7 @@ async def test_session_window_sets_context():
 @pytest.mark.asyncio
 async def test_session_no_session():
     gw, _, _ = _make_gateway()
-    from pyclaw.core.commands import CommandContext
+    from pyclawops.core.commands import CommandContext
     ctx = CommandContext(gateway=gw, session=None, sender_id="u1", channel="telegram")
     result = await _registry(gw).dispatch("/session", ctx)
     assert "session" in result.lower()
@@ -373,7 +373,7 @@ async def test_session_no_session():
 async def test_session_invalid_timeout():
     runner = _make_runner()
     gw, session, _ = _make_gateway(runner=runner)
-    from pyclaw.core.commands import CommandContext
+    from pyclawops.core.commands import CommandContext
     ctx = CommandContext(gateway=gw, session=session, sender_id="u1", channel="telegram")
     result = await _registry(gw).dispatch("/session timeout notanumber", ctx)
     assert "usage" in result.lower() or "timeout" in result.lower()

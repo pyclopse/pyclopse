@@ -13,44 +13,44 @@ from unittest.mock import AsyncMock, MagicMock, patch, call
 # ── Schema ────────────────────────────────────────────────────────────────────
 
 def test_agent_config_reasoning_effort_default():
-    from pyclaw.config.schema import AgentConfig
+    from pyclawops.config.schema import AgentConfig
     cfg = AgentConfig()
     assert cfg.reasoning_effort is None
 
 
 def test_agent_config_reasoning_effort_set():
-    from pyclaw.config.schema import AgentConfig
+    from pyclawops.config.schema import AgentConfig
     cfg = AgentConfig.model_validate({"model": "sonnet", "reasoningEffort": "high"})
     assert cfg.reasoning_effort == "high"
 
 
 def test_agent_config_text_verbosity_default():
-    from pyclaw.config.schema import AgentConfig
+    from pyclawops.config.schema import AgentConfig
     cfg = AgentConfig()
     assert cfg.text_verbosity is None
 
 
 def test_agent_config_text_verbosity_set():
-    from pyclaw.config.schema import AgentConfig
+    from pyclawops.config.schema import AgentConfig
     cfg = AgentConfig.model_validate({"model": "sonnet", "textVerbosity": "low"})
     assert cfg.text_verbosity == "low"
 
 
 def test_agent_config_service_tier_default():
-    from pyclaw.config.schema import AgentConfig
+    from pyclawops.config.schema import AgentConfig
     cfg = AgentConfig()
     assert cfg.service_tier is None
 
 
 def test_agent_config_service_tier_set():
-    from pyclaw.config.schema import AgentConfig
+    from pyclawops.config.schema import AgentConfig
     cfg = AgentConfig.model_validate({"model": "sonnet", "serviceTier": "flex"})
     assert cfg.service_tier == "flex"
 
 
 def test_agent_config_all_fa_settings_snake_case():
     """snake_case aliases also accepted."""
-    from pyclaw.config.schema import AgentConfig
+    from pyclawops.config.schema import AgentConfig
     cfg = AgentConfig.model_validate({
         "model": "sonnet",
         "reasoning_effort": "medium",
@@ -65,7 +65,7 @@ def test_agent_config_all_fa_settings_snake_case():
 # ── AgentRunner stores settings ───────────────────────────────────────────────
 
 def test_agent_runner_stores_reasoning_effort():
-    from pyclaw.agents.runner import AgentRunner
+    from pyclawops.agents.runner import AgentRunner
     runner = AgentRunner.__new__(AgentRunner)
     runner.__init__(
         agent_name="test",
@@ -76,7 +76,7 @@ def test_agent_runner_stores_reasoning_effort():
 
 
 def test_agent_runner_stores_text_verbosity():
-    from pyclaw.agents.runner import AgentRunner
+    from pyclawops.agents.runner import AgentRunner
     runner = AgentRunner(
         agent_name="test",
         instruction="hi",
@@ -86,7 +86,7 @@ def test_agent_runner_stores_text_verbosity():
 
 
 def test_agent_runner_stores_service_tier():
-    from pyclaw.agents.runner import AgentRunner
+    from pyclawops.agents.runner import AgentRunner
     runner = AgentRunner(
         agent_name="test",
         instruction="hi",
@@ -96,7 +96,7 @@ def test_agent_runner_stores_service_tier():
 
 
 def test_agent_runner_defaults_are_none():
-    from pyclaw.agents.runner import AgentRunner
+    from pyclawops.agents.runner import AgentRunner
     runner = AgentRunner(agent_name="test", instruction="hi")
     assert runner.reasoning_effort is None
     assert runner.text_verbosity is None
@@ -107,7 +107,7 @@ def test_agent_runner_defaults_are_none():
 
 def test_apply_fa_model_settings_skips_when_all_none():
     """No FA calls when all settings are None."""
-    from pyclaw.agents.runner import AgentRunner
+    from pyclawops.agents.runner import AgentRunner
     runner = AgentRunner(agent_name="test", instruction="hi")
     mock_app = MagicMock()
     runner._app = mock_app
@@ -118,7 +118,7 @@ def test_apply_fa_model_settings_skips_when_all_none():
 
 
 def test_apply_fa_model_settings_reasoning_effort():
-    from pyclaw.agents.runner import AgentRunner
+    from pyclawops.agents.runner import AgentRunner
     runner = AgentRunner(agent_name="test", instruction="hi", reasoning_effort="high")
     runner._log_prefix = "[test]"
 
@@ -137,7 +137,7 @@ def test_apply_fa_model_settings_reasoning_effort():
 
 
 def test_apply_fa_model_settings_text_verbosity():
-    from pyclaw.agents.runner import AgentRunner
+    from pyclawops.agents.runner import AgentRunner
     runner = AgentRunner(agent_name="test", instruction="hi", text_verbosity="low")
     runner._log_prefix = "[test]"
 
@@ -153,7 +153,7 @@ def test_apply_fa_model_settings_text_verbosity():
 
 
 def test_apply_fa_model_settings_service_tier():
-    from pyclaw.agents.runner import AgentRunner
+    from pyclawops.agents.runner import AgentRunner
     runner = AgentRunner(agent_name="test", instruction="hi", service_tier="flex")
     runner._log_prefix = "[test]"
 
@@ -170,7 +170,7 @@ def test_apply_fa_model_settings_service_tier():
 
 def test_apply_fa_model_settings_swallows_exceptions():
     """Exceptions do not propagate — runner still usable."""
-    from pyclaw.agents.runner import AgentRunner
+    from pyclawops.agents.runner import AgentRunner
     runner = AgentRunner(agent_name="test", instruction="hi", service_tier="flex")
     runner._log_prefix = "[test]"
 
@@ -188,8 +188,8 @@ def test_apply_fa_model_settings_swallows_exceptions():
 
 def test_agent_init_wires_fa_settings_to_base_runner():
     """Agent._init_fastagent() passes FA settings to AgentRunner."""
-    from pyclaw.config.schema import AgentConfig
-    from pyclaw.core.agent import Agent
+    from pyclawops.config.schema import AgentConfig
+    from pyclawops.core.agent import Agent
 
     cfg = AgentConfig.model_validate({
         "model": "sonnet",
@@ -199,13 +199,13 @@ def test_agent_init_wires_fa_settings_to_base_runner():
         "useFastagent": True,
     })
 
-    with patch("pyclaw.core.agent.FASTAGENT_AVAILABLE", True), \
-         patch("pyclaw.core.agent.get_factory") as mock_factory, \
-         patch("pyclaw.agents.runner.AgentRunner") as MockRunner:
+    with patch("pyclawops.core.agent.FASTAGENT_AVAILABLE", True), \
+         patch("pyclawops.core.agent.get_factory") as mock_factory, \
+         patch("pyclawops.agents.runner.AgentRunner") as MockRunner:
         mock_factory.return_value.create_agent.return_value = MagicMock()
         mock_runner_inst = MagicMock()
         mock_runner_inst.model = "sonnet"
-        mock_runner_inst.servers = ["pyclaw"]
+        mock_runner_inst.servers = ["pyclawops"]
         mock_runner_inst.tools_config = {}
         MockRunner.return_value = mock_runner_inst
 
@@ -220,8 +220,8 @@ def test_agent_init_wires_fa_settings_to_base_runner():
 
 def test_get_session_runner_inherits_fa_settings():
     """_get_session_runner() forwards FA settings from base runner."""
-    from pyclaw.config.schema import AgentConfig
-    from pyclaw.core.agent import Agent
+    from pyclawops.config.schema import AgentConfig
+    from pyclawops.core.agent import Agent
 
     cfg = AgentConfig.model_validate({
         "model": "sonnet",
@@ -229,14 +229,14 @@ def test_get_session_runner_inherits_fa_settings():
         "reasoningEffort": "low",
     })
 
-    with patch("pyclaw.core.agent.FASTAGENT_AVAILABLE", True), \
-         patch("pyclaw.core.agent.get_factory") as mock_factory, \
-         patch("pyclaw.agents.runner.AgentRunner") as MockRunner:
+    with patch("pyclawops.core.agent.FASTAGENT_AVAILABLE", True), \
+         patch("pyclawops.core.agent.get_factory") as mock_factory, \
+         patch("pyclawops.agents.runner.AgentRunner") as MockRunner:
         mock_factory.return_value.create_agent.return_value = MagicMock()
         # base runner stub
         base_runner = MagicMock()
         base_runner.model = "sonnet"
-        base_runner.servers = ["pyclaw"]
+        base_runner.servers = ["pyclawops"]
         base_runner.tools_config = {}
         base_runner.show_thinking = False
         base_runner.api_key = None

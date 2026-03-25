@@ -17,7 +17,7 @@ from typing import Dict
 
 import pytest
 
-from pyclaw.agents.acp_runner import AcpRunner, ClaudeCodeRunner, OpenCodeRunner
+from pyclawops.agents.acp_runner import AcpRunner, ClaudeCodeRunner, OpenCodeRunner
 
 # ---------------------------------------------------------------------------
 # Per-test timeouts (seconds)
@@ -48,14 +48,14 @@ HAS_ANTHROPIC_KEY = bool(os.environ.get("ANTHROPIC_API_KEY"))
 
 
 def _get_minimax_key() -> str:
-    """Read MiniMax API key from env, pyclaw config, or macOS keychain."""
+    """Read MiniMax API key from env, pyclawops config, or macOS keychain."""
     key = os.environ.get("MINIMAX_API_KEY") or os.environ.get("GENERIC_API_KEY") or ""
     if key:
         return key
-    # Try pyclaw config file
+    # Try pyclawops config file
     try:
         import yaml  # type: ignore
-        cfg_path = Path.home() / ".pyclaw" / "config" / "pyclaw.yaml"
+        cfg_path = Path.home() / ".pyclawops" / "config" / "pyclawops.yaml"
         if cfg_path.exists():
             data = yaml.safe_load(cfg_path.read_text()) or {}
             key = data.get("providers", {}).get("minimax", {}).get("api_key", "")
@@ -67,7 +67,7 @@ def _get_minimax_key() -> str:
     try:
         import subprocess
         key = subprocess.check_output(
-            ["security", "find-generic-password", "-s", "pyclaw", "-a", "minimax-api-key", "-w"],
+            ["security", "find-generic-password", "-s", "pyclawops", "-a", "minimax-api-key", "-w"],
             text=True, stderr=subprocess.DEVNULL,
         ).strip()
     except Exception:
@@ -111,14 +111,14 @@ class TestAcpRunnerFastAgent:
     """Tests using fast-agent-acp with MiniMax as the ACP subprocess."""
 
     # fast-agent-acp needs to find fastagent.config.yaml; use the user's
-    # ~/.pyclaw/ config dir (symlinked from there) or the project root.
+    # ~/.pyclawops/ config dir (symlinked from there) or the project root.
     FA_CONFIG = str(
         next(
             (
                 p
                 for p in [
-                    Path.home() / ".pyclaw" / "fastagent.config.yaml",
-                    Path("/Volumes/ai_models/mac_data/localai/github/pyclaw/fastagent.config.yaml"),
+                    Path.home() / ".pyclawops" / "fastagent.config.yaml",
+                    Path("/Volumes/ai_models/mac_data/localai/github/pyclawops/fastagent.config.yaml"),
                 ]
                 if p.exists()
             ),
@@ -413,7 +413,7 @@ class TestOpenCodeRunner:
 
 def test_imports():
     """All runner classes import without errors."""
-    from pyclaw.agents.acp_runner import AcpRunner, ClaudeCodeRunner, OpenCodeRunner, PyclawAcpClient
+    from pyclawops.agents.acp_runner import AcpRunner, ClaudeCodeRunner, OpenCodeRunner, PyclawAcpClient
 
     assert AcpRunner is not None
     assert ClaudeCodeRunner is not None
@@ -423,7 +423,7 @@ def test_imports():
 
 def test_acp_client_instantiation():
     """PyclawAcpClient can be instantiated with defaults."""
-    from pyclaw.agents.acp_runner import PyclawAcpClient
+    from pyclawops.agents.acp_runner import PyclawAcpClient
 
     client = PyclawAcpClient()
     assert client._chunk_callback is None

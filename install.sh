@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
-# pyclaw installer
+# pyclawops installer
 # Usage: bash install.sh [--beta] [--version 0.2.1]
 set -e
 
-REPO_SSH="git@github.com:jondecker76/pyclaw.git"
+REPO="https://github.com/jondecker76/pyclawops.git"
 BETA=false
 VERSION=""
 
@@ -33,23 +33,22 @@ elif [ -n "$VERSION" ]; then
     LABEL="version ${REF}"
 else
     echo "Checking for latest release..."
-    REF=$(git ls-remote --tags --sort=-v:refname "$REPO_SSH" 'v*' \
+    REF=$(git ls-remote --tags --sort=-v:refname "$REPO" 'v*' \
         | grep -oE 'v[0-9]+\.[0-9]+\.[0-9]+$' \
         | head -1)
     if [ -z "$REF" ]; then
-        echo "✗ Could not find any release tags. Check your SSH access to GitHub."
-        echo "  Run: ssh -T git@github.com"
+        echo "✗ Could not find any release tags."
         exit 1
     fi
     LABEL="latest stable release ($REF)"
 fi
 
-echo "Installing pyclaw $LABEL..."
-uv tool install "git+ssh://$REPO_SSH@$REF"
+echo "Installing pyclawops $LABEL..."
+uv tool install "git+$REPO@$REF"
 
 echo ""
-echo "✓ pyclaw installed successfully."
+echo "✓ pyclawops installed successfully."
 echo ""
 echo "Next steps:"
-echo "  pyclaw init       # create ~/.pyclaw/config.yaml"
-echo "  pyclaw --help     # see all commands"
+echo "  pyclawops init       # create ~/.pyclawops/config.yaml"
+echo "  pyclawops --help     # see all commands"

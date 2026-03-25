@@ -1,4 +1,4 @@
-"""Basic test script for pyclaw.
+"""Basic test script for pyclawops.
 
 This script demonstrates:
 1. Loading config
@@ -11,11 +11,11 @@ import asyncio
 from dataclasses import dataclass
 from typing import Optional, List, Dict, Any
 
-from pyclaw.config.loader import ConfigLoader
-from pyclaw.core.session import Session
-from pyclaw.core.router import IncomingMessage, OutgoingMessage
-from pyclaw.providers import Message as ProviderMessage
-from pyclaw.providers import ChatResponse
+from pyclawops.config.loader import ConfigLoader
+from pyclawops.core.session import Session
+from pyclawops.core.router import IncomingMessage, OutgoingMessage
+from pyclawops.providers import Message as ProviderMessage
+from pyclawops.providers import ChatResponse
 
 
 class MockProvider:
@@ -81,12 +81,12 @@ class MockSessionManager:
 async def main():
     """Run the basic test."""
     print("=" * 50)
-    print("PyClaw Basic Test")
+    print("PyClawOps Basic Test")
     print("=" * 50)
     
     # 1. Load config
     print("\n[1] Loading config...")
-    config_path = "~/.pyclaw/config.yaml"
+    config_path = "~/.pyclawops/config.yaml"
     loader = ConfigLoader(config_path)
     
     try:
@@ -105,8 +105,8 @@ async def main():
     print("\n[2] Creating test agent...")
     
     # Using the real Agent class with minimal setup
-    from pyclaw.core.agent import Agent
-    from pyclaw.config.schema import AgentConfig, ToolsConfig
+    from pyclawops.core.agent import Agent
+    from pyclawops.config.schema import AgentConfig, ToolsConfig
     
     agent_config = AgentConfig(
         name="TestAgent",

@@ -2,7 +2,7 @@
 Tests for config MCP tools: config_get, config_set, config_delete,
 config_validate, config_reload, config_schema.
 
-These tests launch the pyclaw MCP server via stdio (PYCLAW_MCP_TRANSPORT=stdio)
+These tests launch the pyclawops MCP server via stdio (PYCLAW_MCP_TRANSPORT=stdio)
 and verify the config tools work correctly against a temp config file.
 """
 import json
@@ -32,7 +32,7 @@ agents:
 """
 
 
-async def _pyclaw_session(env_overrides: dict | None = None):
+async def _pyclawops_session(env_overrides: dict | None = None):
     env = {
         **os.environ,
         "PYCLAW_EXEC_SECURITY": "all",
@@ -42,7 +42,7 @@ async def _pyclaw_session(env_overrides: dict | None = None):
         env.update(env_overrides)
     return StdioServerParameters(
         command="uv",
-        args=["run", "python", "-m", "pyclaw.tools.server"],
+        args=["run", "python", "-m", "pyclawops.tools.server"],
         env=env,
     )
 
@@ -58,7 +58,7 @@ async def _call(session: ClientSession, tool: str, args: dict) -> str:
 
 @pytest.mark.asyncio
 async def test_config_schema_full():
-    params = await _pyclaw_session()
+    params = await _pyclawops_session()
     async with stdio_client(params) as (r, w):
         async with ClientSession(r, w) as session:
             await session.initialize()
@@ -71,7 +71,7 @@ async def test_config_schema_full():
 
 @pytest.mark.asyncio
 async def test_config_schema_section_gateway():
-    params = await _pyclaw_session()
+    params = await _pyclawops_session()
     async with stdio_client(params) as (r, w):
         async with ClientSession(r, w) as session:
             await session.initialize()
@@ -84,7 +84,7 @@ async def test_config_schema_section_gateway():
 
 @pytest.mark.asyncio
 async def test_config_schema_unknown_section():
-    params = await _pyclaw_session()
+    params = await _pyclawops_session()
     async with stdio_client(params) as (r, w):
         async with ClientSession(r, w) as session:
             await session.initialize()
@@ -99,7 +99,7 @@ async def test_config_schema_unknown_section():
 
 @pytest.mark.asyncio
 async def test_config_validate_finds_real_config():
-    params = await _pyclaw_session()
+    params = await _pyclawops_session()
     async with stdio_client(params) as (r, w):
         async with ClientSession(r, w) as session:
             await session.initialize()
@@ -116,7 +116,7 @@ async def test_config_validate_finds_real_config():
 async def test_config_set_and_validate():
     """Write a temp config, set a value, validate the result."""
     with tempfile.TemporaryDirectory() as tmpdir:
-        cfg_path = Path(tmpdir) / "pyclaw.yaml"
+        cfg_path = Path(tmpdir) / "pyclawops.yaml"
         cfg_path.write_text(_MINIMAL_CONFIG)
 
         # Point PYCLAW config search to our temp file via env (override search)
@@ -125,18 +125,18 @@ async def test_config_set_and_validate():
         # can point cwd to tmpdir using the server's working dir.
         params = StdioServerParameters(
             command="uv",
-            args=["run", "python", "-m", "pyclaw.tools.server"],
+            args=["run", "python", "-m", "pyclawops.tools.server"],
             env={
                 **os.environ,
                 "PYCLAW_MCP_TRANSPORT": "stdio",
                 "PYCLAW_EXEC_SECURITY": "all",
-                # Override HOME so ~/.pyclaw doesn't shadow our temp config
+                # Override HOME so ~/.pyclawops doesn't shadow our temp config
                 "HOME": tmpdir,
             },
         )
-        # Create ~/.pyclaw/ equivalent under tmpdir
-        (Path(tmpdir) / ".pyclaw").mkdir()
-        (Path(tmpdir) / ".pyclaw" / "config.yaml").write_text(_MINIMAL_CONFIG)
+        # Create ~/.pyclawops/ equivalent under tmpdir
+        (Path(tmpdir) / ".pyclawops").mkdir()
+        (Path(tmpdir) / ".pyclawops" / "config.yaml").write_text(_MINIMAL_CONFIG)
 
         async with stdio_client(params) as (r, w):
             async with ClientSession(r, w) as session:
@@ -163,7 +163,7 @@ async def test_config_set_and_validate():
                 # Verify round-trip by reading the file back
                 import yaml
                 saved = yaml.safe_load(
-                    (Path(tmpdir) / ".pyclaw" / "config.yaml").read_text()
+                    (Path(tmpdir) / ".pyclawops" / "config.yaml").read_text()
                 )
                 assert saved["agents"]["assistant"]["model"] == "claude-opus-4-6"
                 assert abs(saved["agents"]["assistant"]["temperature"] - 0.3) < 1e-6
@@ -173,13 +173,13 @@ async def test_config_set_and_validate():
 async def test_config_set_bool():
     """Set a boolean value using JSON true/false."""
     with tempfile.TemporaryDirectory() as tmpdir:
-        (Path(tmpdir) / ".pyclaw").mkdir()
-        cfg = Path(tmpdir) / ".pyclaw" / "config.yaml"
+        (Path(tmpdir) / ".pyclawops").mkdir()
+        cfg = Path(tmpdir) / ".pyclawops" / "config.yaml"
         cfg.write_text(_MINIMAL_CONFIG)
 
         params = StdioServerParameters(
             command="uv",
-            args=["run", "python", "-m", "pyclaw.tools.server"],
+            args=["run", "python", "-m", "pyclawops.tools.server"],
             env={**os.environ, "PYCLAW_MCP_TRANSPORT": "stdio",
                  "PYCLAW_EXEC_SECURITY": "all", "HOME": tmpdir},
         )
@@ -201,13 +201,13 @@ async def test_config_set_bool():
 async def test_config_delete_key():
     """Delete an existing key from the config."""
     with tempfile.TemporaryDirectory() as tmpdir:
-        (Path(tmpdir) / ".pyclaw").mkdir()
-        cfg = Path(tmpdir) / ".pyclaw" / "config.yaml"
+        (Path(tmpdir) / ".pyclawops").mkdir()
+        cfg = Path(tmpdir) / ".pyclawops" / "config.yaml"
         cfg.write_text(_MINIMAL_CONFIG + "\n  extra_field: to_remove\n")
 
         params = StdioServerParameters(
             command="uv",
-            args=["run", "python", "-m", "pyclaw.tools.server"],
+            args=["run", "python", "-m", "pyclawops.tools.server"],
             env={**os.environ, "PYCLAW_MCP_TRANSPORT": "stdio",
                  "PYCLAW_EXEC_SECURITY": "all", "HOME": tmpdir},
         )
@@ -235,12 +235,12 @@ async def test_config_delete_key():
 async def test_config_delete_nonexistent_key():
     """Deleting a key that doesn't exist returns an error."""
     with tempfile.TemporaryDirectory() as tmpdir:
-        (Path(tmpdir) / ".pyclaw").mkdir()
-        (Path(tmpdir) / ".pyclaw" / "config.yaml").write_text(_MINIMAL_CONFIG)
+        (Path(tmpdir) / ".pyclawops").mkdir()
+        (Path(tmpdir) / ".pyclawops" / "config.yaml").write_text(_MINIMAL_CONFIG)
 
         params = StdioServerParameters(
             command="uv",
-            args=["run", "python", "-m", "pyclaw.tools.server"],
+            args=["run", "python", "-m", "pyclawops.tools.server"],
             env={**os.environ, "PYCLAW_MCP_TRANSPORT": "stdio",
                  "PYCLAW_EXEC_SECURITY": "all", "HOME": tmpdir},
         )
@@ -257,13 +257,13 @@ async def test_config_delete_nonexistent_key():
 async def test_config_set_creates_nested_path():
     """config_set can create new nested keys that don't exist yet."""
     with tempfile.TemporaryDirectory() as tmpdir:
-        (Path(tmpdir) / ".pyclaw").mkdir()
-        cfg = Path(tmpdir) / ".pyclaw" / "config.yaml"
+        (Path(tmpdir) / ".pyclawops").mkdir()
+        cfg = Path(tmpdir) / ".pyclawops" / "config.yaml"
         cfg.write_text(_MINIMAL_CONFIG)
 
         params = StdioServerParameters(
             command="uv",
-            args=["run", "python", "-m", "pyclaw.tools.server"],
+            args=["run", "python", "-m", "pyclawops.tools.server"],
             env={**os.environ, "PYCLAW_MCP_TRANSPORT": "stdio",
                  "PYCLAW_EXEC_SECURITY": "all", "HOME": tmpdir},
         )
@@ -284,7 +284,7 @@ async def test_config_set_creates_nested_path():
 @pytest.mark.asyncio
 async def test_config_schema_section_security():
     """config_schema returns the security section schema."""
-    params = await _pyclaw_session()
+    params = await _pyclawops_session()
     async with stdio_client(params) as (r, w):
         async with ClientSession(r, w) as session:
             await session.initialize()

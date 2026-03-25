@@ -15,7 +15,7 @@ Covers:
 import pytest
 from unittest.mock import AsyncMock, MagicMock, patch
 
-from pyclaw.channels.plugin import ChannelPlugin, GatewayHandle
+from pyclawops.channels.plugin import ChannelPlugin, GatewayHandle
 from tests.fixtures.channel_plugins import EchoPlugin, AnotherPlugin
 
 _ECHO_SPEC = "tests.fixtures.channel_plugins:EchoPlugin"
@@ -89,40 +89,40 @@ class TestGatewayHandle:
 class TestLoadFromSpecs:
 
     def test_loads_valid_spec(self):
-        from pyclaw.channels.loader import load_from_specs
+        from pyclawops.channels.loader import load_from_specs
         plugins = load_from_specs([_ECHO_SPEC])
         assert len(plugins) == 1
         assert isinstance(plugins[0], EchoPlugin)
 
     def test_malformed_spec_returns_empty(self):
-        from pyclaw.channels.loader import load_from_specs
+        from pyclawops.channels.loader import load_from_specs
         plugins = load_from_specs(["no_colon_here"])
         assert plugins == []
 
     def test_nonexistent_module_returns_empty(self):
-        from pyclaw.channels.loader import load_from_specs
+        from pyclawops.channels.loader import load_from_specs
         plugins = load_from_specs(["no_such_module_xyz:SomeClass"])
         assert plugins == []
 
     def test_nonexistent_class_returns_empty(self):
-        from pyclaw.channels.loader import load_from_specs
+        from pyclawops.channels.loader import load_from_specs
         plugins = load_from_specs(["tests.fixtures.channel_plugins:NoSuchClass"])
         assert plugins == []
 
     def test_wrong_base_class_returns_empty(self):
-        from pyclaw.channels.loader import load_from_specs
+        from pyclawops.channels.loader import load_from_specs
         plugins = load_from_specs(["builtins:str"])
         assert plugins == []
 
     def test_multiple_specs(self):
-        from pyclaw.channels.loader import load_from_specs
+        from pyclawops.channels.loader import load_from_specs
         plugins = load_from_specs([_ECHO_SPEC, _ANOTHER_SPEC])
         assert len(plugins) == 2
         names = {p.name for p in plugins}
         assert names == {"echo", "another"}
 
     def test_one_bad_spec_does_not_prevent_others(self):
-        from pyclaw.channels.loader import load_from_specs
+        from pyclawops.channels.loader import load_from_specs
         plugins = load_from_specs(["no_such_module:Bad", _ECHO_SPEC])
         assert len(plugins) == 1
         assert plugins[0].name == "echo"
@@ -135,13 +135,13 @@ class TestLoadFromSpecs:
 class TestDiscoverEntryPoints:
 
     def test_returns_empty_when_no_entry_points(self):
-        from pyclaw.channels.loader import discover_entry_points
+        from pyclawops.channels.loader import discover_entry_points
         with patch("importlib.metadata.entry_points", return_value=[]):
             plugins = discover_entry_points()
         assert plugins == []
 
     def test_loads_valid_entry_point(self):
-        from pyclaw.channels.loader import discover_entry_points
+        from pyclawops.channels.loader import discover_entry_points
 
         ep = MagicMock()
         ep.name = "echo"
@@ -155,7 +155,7 @@ class TestDiscoverEntryPoints:
         assert isinstance(plugins[0], EchoPlugin)
 
     def test_skips_non_plugin_entry_point(self):
-        from pyclaw.channels.loader import discover_entry_points
+        from pyclawops.channels.loader import discover_entry_points
 
         ep = MagicMock()
         ep.name = "bad"
@@ -167,7 +167,7 @@ class TestDiscoverEntryPoints:
         assert plugins == []
 
     def test_gracefully_handles_load_error(self):
-        from pyclaw.channels.loader import discover_entry_points
+        from pyclawops.channels.loader import discover_entry_points
 
         ep = MagicMock()
         ep.name = "failing"
@@ -179,7 +179,7 @@ class TestDiscoverEntryPoints:
         assert plugins == []
 
     def test_gracefully_handles_discovery_error(self):
-        from pyclaw.channels.loader import discover_entry_points
+        from pyclawops.channels.loader import discover_entry_points
         with patch("importlib.metadata.entry_points", side_effect=Exception("broken")):
             plugins = discover_entry_points()
         assert plugins == []
@@ -192,7 +192,7 @@ class TestDiscoverEntryPoints:
 class TestLoadAll:
 
     def test_deduplicates_same_class_from_entry_points_and_specs(self):
-        from pyclaw.channels.loader import load_all
+        from pyclawops.channels.loader import load_all
 
         ep = MagicMock()
         ep.name = "echo"
@@ -206,7 +206,7 @@ class TestLoadAll:
         assert isinstance(plugins[0], EchoPlugin)
 
     def test_different_classes_both_loaded(self):
-        from pyclaw.channels.loader import load_all
+        from pyclawops.channels.loader import load_all
 
         with patch("importlib.metadata.entry_points", return_value=[]):
             plugins = load_all([_ECHO_SPEC, _ANOTHER_SPEC])
@@ -214,7 +214,7 @@ class TestLoadAll:
         assert len(plugins) == 2
 
     def test_entry_point_wins_over_spec_on_dedup(self):
-        from pyclaw.channels.loader import load_all
+        from pyclawops.channels.loader import load_all
 
         ep = MagicMock()
         ep.name = "echo"
@@ -235,17 +235,17 @@ class TestLoadAll:
 class TestPluginsConfigChannels:
 
     def test_defaults_to_empty_list(self):
-        from pyclaw.config.schema import PluginsConfig
+        from pyclawops.config.schema import PluginsConfig
         cfg = PluginsConfig()
         assert cfg.channels == []
 
     def test_accepts_channel_specs(self):
-        from pyclaw.config.schema import PluginsConfig
+        from pyclawops.config.schema import PluginsConfig
         cfg = PluginsConfig(channels=["mypackage:MyPlugin"])
         assert cfg.channels == ["mypackage:MyPlugin"]
 
     def test_embedded_in_config(self):
-        from pyclaw.config.schema import Config
+        from pyclawops.config.schema import Config
         cfg = Config.model_validate({
             "plugins": {
                 "channels": ["mypackage:MyPlugin", "another:Plugin"],
@@ -261,8 +261,8 @@ class TestPluginsConfigChannels:
 class TestGatewayChannelPluginWiring:
 
     def _make_gateway(self, specs=None):
-        from pyclaw.core.gateway import Gateway
-        from pyclaw.config.schema import Config, AgentsConfig, SecurityConfig, PluginsConfig
+        from pyclawops.core.gateway import Gateway
+        from pyclawops.config.schema import Config, AgentsConfig, SecurityConfig, PluginsConfig
         import time
 
         gw = Gateway.__new__(Gateway)
@@ -334,7 +334,7 @@ class TestGatewayChannelPluginWiring:
             async def send(self, uid, text, **kw): pass
 
         gw = self._make_gateway()
-        with patch("pyclaw.channels.loader.load_all", return_value=[_BadPlugin()]):
+        with patch("pyclawops.channels.loader.load_all", return_value=[_BadPlugin()]):
             await gw._init_channel_plugins()
 
         assert "bad" not in gw._channels
@@ -352,7 +352,7 @@ class TestGatewayChannelPluginWiring:
     async def test_stop_calls_plugin_stop(self):
         plugin = EchoPlugin()
 
-        from pyclaw.core.gateway import Gateway
+        from pyclawops.core.gateway import Gateway
         gw = Gateway.__new__(Gateway)
         gw._logger = MagicMock()
         gw._channels = {"echo": plugin}
@@ -373,7 +373,7 @@ class TestGatewayChannelPluginWiring:
             async def stop(self): raise RuntimeError("network error")
             async def send(self, uid, text, **kw): pass
 
-        from pyclaw.core.gateway import Gateway
+        from pyclawops.core.gateway import Gateway
         gw = Gateway.__new__(Gateway)
         gw._logger = MagicMock()
         gw._channels = {"fails": _StopFails()}

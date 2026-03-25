@@ -4,7 +4,7 @@ import time
 
 import pytest
 
-from pyclaw.core.concurrency import (
+from pyclawops.core.concurrency import (
     ModelConcurrencyManager,
     get_manager,
     init_manager,

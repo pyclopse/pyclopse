@@ -8,19 +8,19 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from pyclaw.memory.vault.agent import (
+from pyclawops.memory.vault.agent import (
     FastAgentMemoryAgent,
     _fmt_existing_facts,
     _fmt_transcript,
     _parse_extraction_response,
 )
-from pyclaw.memory.vault.models import (
+from pyclawops.memory.vault.models import (
     ExtractionAction,
     ExtractionResult,
     FactExtraction,
     VaultFact,
 )
-from pyclaw.memory.vault.registry import TypeSchemaRegistry
+from pyclawops.memory.vault.registry import TypeSchemaRegistry
 
 
 # ---------------------------------------------------------------------------
@@ -333,7 +333,7 @@ def mock_runner():
 async def test_extract_from_conversation_uses_runner(mock_runner, registry):
     agent = FastAgentMemoryAgent(model="generic.test-model")
 
-    with patch("pyclaw.memory.vault.agent.FastAgentMemoryAgent._get_runner", return_value=mock_runner):
+    with patch("pyclawops.memory.vault.agent.FastAgentMemoryAgent._get_runner", return_value=mock_runner):
         result = await agent.extract_from_conversation(
             agent_id="test-agent",
             session_id="sess-001",
@@ -354,7 +354,7 @@ async def test_extract_from_conversation_uses_runner(mock_runner, registry):
 async def test_extract_from_document_uses_runner(mock_runner, registry):
     agent = FastAgentMemoryAgent(model="generic.test-model")
 
-    with patch("pyclaw.memory.vault.agent.FastAgentMemoryAgent._get_runner", return_value=mock_runner):
+    with patch("pyclawops.memory.vault.agent.FastAgentMemoryAgent._get_runner", return_value=mock_runner):
         result = await agent.extract_from_document(
             agent_id="test-agent",
             document_path="/memory/notes.md",
@@ -383,7 +383,7 @@ async def test_extract_passes_existing_facts_in_prompt(registry):
     mock_r.run = AsyncMock(side_effect=_fake_run)
 
     agent = FastAgentMemoryAgent(model="generic.test-model")
-    with patch("pyclaw.memory.vault.agent.FastAgentMemoryAgent._get_runner", return_value=mock_r):
+    with patch("pyclawops.memory.vault.agent.FastAgentMemoryAgent._get_runner", return_value=mock_r):
         await agent.extract_from_conversation(
             agent_id="a",
             session_id="s",
@@ -403,7 +403,7 @@ async def test_extract_skip_reason_propagated(mock_runner, registry):
     }))
 
     agent = FastAgentMemoryAgent(model="generic.test-model")
-    with patch("pyclaw.memory.vault.agent.FastAgentMemoryAgent._get_runner", return_value=mock_runner):
+    with patch("pyclawops.memory.vault.agent.FastAgentMemoryAgent._get_runner", return_value=mock_runner):
         result = await agent.extract_from_conversation(
             agent_id="a", session_id="s",
             messages=[{"role": "user", "content": "why is this broken"}],

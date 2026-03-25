@@ -4,12 +4,12 @@ Tests for the session reaper added to SessionManager.
 
 import asyncio
 from datetime import datetime, timedelta
-from pyclaw.utils.time import now
+from pyclawops.utils.time import now
 
 import pytest
 
-from pyclaw.core.session import SessionManager
-from pyclaw.config.schema import JobsConfig
+from pyclawops.core.session import SessionManager
+from pyclawops.config.schema import JobsConfig
 
 
 # ---------------------------------------------------------------------------

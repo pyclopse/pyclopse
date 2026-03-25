@@ -16,9 +16,9 @@ import pytest
 # without touching FastAgent or the full Gateway init
 # ---------------------------------------------------------------------------
 
-from pyclaw.config.schema import AgentConfig
-from pyclaw.core.session import Session
-from pyclaw.core.router import IncomingMessage
+from pyclawops.config.schema import AgentConfig
+from pyclawops.core.session import Session
+from pyclawops.core.router import IncomingMessage
 
 
 def _make_agent_config(**kwargs) -> AgentConfig:
@@ -72,13 +72,13 @@ def _make_mock_runner(response: str = "mocked response") -> MagicMock:
 
 def _make_agent(fast_agent_runner=None, config=None):
     """Build an Agent dataclass instance with mocked internals."""
-    from pyclaw.core.agent import Agent
+    from pyclawops.core.agent import Agent
 
     if config is None:
         config = _make_agent_config()
 
     # Build with no session_manager so we don't need a DB
-    with patch("pyclaw.core.agent.FASTAGENT_AVAILABLE", False):
+    with patch("pyclawops.core.agent.FASTAGENT_AVAILABLE", False):
         agent = Agent(
             id="agent-1",
             name="test-agent",
@@ -105,7 +105,7 @@ class TestPerSessionRunners:
 
         mock_runner_instance = _make_mock_runner()
 
-        with patch("pyclaw.agents.runner.AgentRunner", return_value=mock_runner_instance) as MockRunner:
+        with patch("pyclawops.agents.runner.AgentRunner", return_value=mock_runner_instance) as MockRunner:
             result = agent._get_session_runner("session-abc-123")
 
         MockRunner.assert_called_once()
@@ -119,7 +119,7 @@ class TestPerSessionRunners:
 
         mock_runner_instance = _make_mock_runner()
 
-        with patch("pyclaw.agents.runner.AgentRunner", return_value=mock_runner_instance):
+        with patch("pyclawops.agents.runner.AgentRunner", return_value=mock_runner_instance):
             first = agent._get_session_runner("session-xyz")
             second = agent._get_session_runner("session-xyz")
 
@@ -140,7 +140,7 @@ class TestPerSessionRunners:
             call_count += 1
             return runner_a if call_count == 1 else runner_b
 
-        with patch("pyclaw.agents.runner.AgentRunner", side_effect=side_effect):
+        with patch("pyclawops.agents.runner.AgentRunner", side_effect=side_effect):
             result_a = agent._get_session_runner("session-aaa")
             result_b = agent._get_session_runner("session-bbb")
 
@@ -167,7 +167,7 @@ class TestPerSessionRunners:
 
         mock_runner_instance = _make_mock_runner()
 
-        with patch("pyclaw.agents.runner.AgentRunner", return_value=mock_runner_instance) as MockRunner:
+        with patch("pyclawops.agents.runner.AgentRunner", return_value=mock_runner_instance) as MockRunner:
             agent._get_session_runner("session-12345678-extra")
 
         kwargs = MockRunner.call_args.kwargs
@@ -194,7 +194,7 @@ class TestHandleWithFastagent:
         session = _make_session("sess-aabbccdd")
         mock_runner_instance = _make_mock_runner(response="hello back")
 
-        with patch("pyclaw.agents.runner.AgentRunner", return_value=mock_runner_instance):
+        with patch("pyclawops.agents.runner.AgentRunner", return_value=mock_runner_instance):
             result = await agent._handle_with_fastagent("hello", session)
 
         # Verify run was called with a str, NOT a list
@@ -218,7 +218,7 @@ class TestHandleWithFastagent:
 
         mock_runner_instance = _make_mock_runner(response="agent reply")
 
-        with patch("pyclaw.agents.runner.AgentRunner", return_value=mock_runner_instance):
+        with patch("pyclawops.agents.runner.AgentRunner", return_value=mock_runner_instance):
             response = await agent.handle_message(incoming, session)
 
         assert response is not None
@@ -258,7 +258,7 @@ class TestHistoryInjection:
 
         mock_runner_instance = _make_mock_runner(response="ok")
 
-        with patch("pyclaw.agents.runner.AgentRunner", return_value=mock_runner_instance) as MockRunner:
+        with patch("pyclawops.agents.runner.AgentRunner", return_value=mock_runner_instance) as MockRunner:
             await agent._handle_with_fastagent("hello", session)
 
         # Verify AgentRunner was constructed with the history_path
@@ -275,7 +275,7 @@ class TestHistoryInjection:
 
         mock_runner_instance = _make_mock_runner(response="ok")
 
-        with patch("pyclaw.agents.runner.AgentRunner", return_value=mock_runner_instance) as MockRunner:
+        with patch("pyclawops.agents.runner.AgentRunner", return_value=mock_runner_instance) as MockRunner:
             await agent._handle_with_fastagent("first", session)
             await agent._handle_with_fastagent("second", session)
 
@@ -292,7 +292,7 @@ class TestHistoryInjection:
 
         mock_runner_instance = _make_mock_runner(response="ok")
 
-        with patch("pyclaw.agents.runner.AgentRunner", return_value=mock_runner_instance) as MockRunner:
+        with patch("pyclawops.agents.runner.AgentRunner", return_value=mock_runner_instance) as MockRunner:
             await agent._handle_with_fastagent("hello", session)
 
         _, kwargs = MockRunner.call_args
@@ -325,8 +325,8 @@ def _make_gateway_for_telegram(allowed_users: Optional[List[int]] = None):
     Build a Gateway instance with all internals stubbed out,
     configured for Telegram tests.
     """
-    from pyclaw.core.gateway import Gateway
-    from pyclaw.config.schema import (
+    from pyclawops.core.gateway import Gateway
+    from pyclawops.config.schema import (
         Config,
         ChannelsConfig,
         TelegramConfig,
@@ -545,8 +545,8 @@ class TestHandleMessageAgentLookup:
     @pytest.mark.asyncio
     async def test_uses_first_agent_not_hardcoded_default(self):
         """handle_message picks the first key from agent_manager.agents."""
-        from pyclaw.core.gateway import Gateway
-        from pyclaw.config.schema import (
+        from pyclawops.core.gateway import Gateway
+        from pyclawops.config.schema import (
             Config,
             ChannelsConfig,
             AgentsConfig,
@@ -614,8 +614,8 @@ class TestHandleMessageAgentLookup:
     @pytest.mark.asyncio
     async def test_falls_back_to_default_when_no_agents(self):
         """handle_message uses 'default' as agent_id when agent_manager is empty."""
-        from pyclaw.core.gateway import Gateway
-        from pyclaw.config.schema import Config
+        from pyclawops.core.gateway import Gateway
+        from pyclawops.config.schema import Config
 
         gw = Gateway.__new__(Gateway)
         gw._is_running = True

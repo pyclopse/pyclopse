@@ -1,4 +1,4 @@
-# Example pyclaw agents configuration
+# Example pyclawops agents configuration
 # This YAML config compiles to FastAgent decorator code
 
 # Default agent (used when no specific agent is specified)

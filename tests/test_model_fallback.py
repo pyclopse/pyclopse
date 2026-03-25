@@ -17,13 +17,13 @@ from unittest.mock import AsyncMock, MagicMock, patch
 # ── Schema ────────────────────────────────────────────────────────────────────
 
 def test_agent_config_fallbacks_default():
-    from pyclaw.config.schema import AgentConfig
+    from pyclawops.config.schema import AgentConfig
     cfg = AgentConfig()
     assert cfg.fallbacks == []
 
 
 def test_agent_config_fallbacks_set():
-    from pyclaw.config.schema import AgentConfig
+    from pyclawops.config.schema import AgentConfig
     cfg = AgentConfig.model_validate({
         "model": "sonnet",
         "fallbacks": ["claude-haiku", "gpt-4o"],
@@ -49,8 +49,8 @@ def _make_session(agent_id="main", fallback_index=0, model_override=None):
 
 def _make_agent(fallbacks=None, model="primary-model"):
     """Return an Agent stub with configurable fallbacks and a mock runner factory."""
-    from pyclaw.core.agent import Agent
-    from pyclaw.config.schema import AgentConfig
+    from pyclawops.core.agent import Agent
+    from pyclawops.config.schema import AgentConfig
 
     cfg = AgentConfig.model_validate({
         "model": model,
@@ -72,7 +72,7 @@ def _make_agent(fallbacks=None, model="primary-model"):
     # Base runner mock
     base_runner = MagicMock()
     base_runner.model = model
-    base_runner.servers = ["pyclaw"]
+    base_runner.servers = ["pyclawops"]
     base_runner.tools_config = {}
     base_runner.show_thinking = False
     base_runner.api_key = None

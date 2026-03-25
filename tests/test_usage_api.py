@@ -11,7 +11,7 @@ from fastapi.testclient import TestClient
 # ---------------------------------------------------------------------------
 
 def _make_gateway(messages_total=0, by_agent=None, by_channel=None):
-    from pyclaw.core.gateway import Gateway
+    from pyclawops.core.gateway import Gateway
     gw = Gateway.__new__(Gateway)
     gw._initialized = True
     gw._is_running = True
@@ -26,7 +26,7 @@ def _make_gateway(messages_total=0, by_agent=None, by_channel=None):
 
 
 def _make_app(gateway):
-    from pyclaw.api.app import create_app, set_gateway
+    from pyclawops.api.app import create_app, set_gateway
     set_gateway(gateway)
     return create_app(gateway)
 
@@ -86,8 +86,8 @@ class TestUsageCounterWiring:
 
     @pytest.mark.asyncio
     async def test_handle_message_increments_total(self):
-        from pyclaw.core.gateway import Gateway
-        from pyclaw.config.schema import Config, AgentsConfig, SecurityConfig
+        from pyclawops.core.gateway import Gateway
+        from pyclawops.config.schema import Config, AgentsConfig, SecurityConfig
 
         gw = Gateway.__new__(Gateway)
         gw._logger = MagicMock()
@@ -131,8 +131,8 @@ class TestUsageCounterWiring:
 
     @pytest.mark.asyncio
     async def test_handle_message_accumulates_counts(self):
-        from pyclaw.core.gateway import Gateway
-        from pyclaw.config.schema import Config, AgentsConfig, SecurityConfig
+        from pyclawops.core.gateway import Gateway
+        from pyclawops.config.schema import Config, AgentsConfig, SecurityConfig
 
         gw = Gateway.__new__(Gateway)
         gw._logger = MagicMock()

@@ -7,7 +7,7 @@ from pathlib import Path
 
 # ── helpers ───────────────────────────────────────────────────────────────────
 
-def _make_pyclaw_config(
+def _make_pyclawops_config(
     mcp_port: int = 8081,
     timezone: str = None,
     anthropic_key: str = None,
@@ -46,73 +46,73 @@ def _make_pyclaw_config(
     return cfg
 
 
-def _make_runner(servers=None, pyclaw_config=None, model="sonnet",
+def _make_runner(servers=None, pyclawops_config=None, model="sonnet",
                  api_key=None, base_url=None, session_id=None):
-    from pyclaw.agents.runner import AgentRunner
+    from pyclawops.agents.runner import AgentRunner
     r = AgentRunner.__new__(AgentRunner)
     r.agent_name = "test-agent"
     r.owner_name = "main"
     r.session_id = session_id
     r._log_prefix = "[main]"
     r.model = model
-    r.servers = servers if servers is not None else ["pyclaw"]
-    r.pyclaw_config = pyclaw_config
+    r.servers = servers if servers is not None else ["pyclawops"]
+    r.pyclawops_config = pyclawops_config
     r.api_key = api_key
     r.base_url = base_url
     return r
 
 
-# ── pyclaw server URL ─────────────────────────────────────────────────────────
+# ── pyclawops server URL ─────────────────────────────────────────────────────────
 
-def test_pyclaw_server_url_from_mcp_port():
-    runner = _make_runner(pyclaw_config=_make_pyclaw_config(mcp_port=9999))
+def test_pyclawops_server_url_from_mcp_port():
+    runner = _make_runner(pyclawops_config=_make_pyclawops_config(mcp_port=9999))
     settings = runner._build_fa_settings()
-    assert settings.mcp.servers["pyclaw"].url == "http://localhost:9999/mcp"
+    assert settings.mcp.servers["pyclawops"].url == "http://localhost:9999/mcp"
 
 
-def test_pyclaw_server_default_port_without_config():
-    runner = _make_runner(pyclaw_config=None)
+def test_pyclawops_server_default_port_without_config():
+    runner = _make_runner(pyclawops_config=None)
     settings = runner._build_fa_settings()
-    assert settings.mcp.servers["pyclaw"].url == "http://localhost:8081/mcp"
+    assert settings.mcp.servers["pyclawops"].url == "http://localhost:8081/mcp"
 
 
-def test_pyclaw_server_headers_include_agent_name():
-    runner = _make_runner(pyclaw_config=_make_pyclaw_config())
+def test_pyclawops_server_headers_include_agent_name():
+    runner = _make_runner(pyclawops_config=_make_pyclawops_config())
     settings = runner._build_fa_settings()
-    assert settings.mcp.servers["pyclaw"].headers["x-agent-name"] == "main"
+    assert settings.mcp.servers["pyclawops"].headers["x-agent-name"] == "main"
 
 
-def test_pyclaw_server_headers_include_session_id():
-    runner = _make_runner(pyclaw_config=_make_pyclaw_config(), session_id="sess-123abc")
+def test_pyclawops_server_headers_include_session_id():
+    runner = _make_runner(pyclawops_config=_make_pyclawops_config(), session_id="sess-123abc")
     settings = runner._build_fa_settings()
-    assert settings.mcp.servers["pyclaw"].headers["x-session-id"] == "sess-123abc"
+    assert settings.mcp.servers["pyclawops"].headers["x-session-id"] == "sess-123abc"
 
 
-def test_pyclaw_server_no_session_id_header_omitted():
-    runner = _make_runner(pyclaw_config=_make_pyclaw_config(), session_id=None)
+def test_pyclawops_server_no_session_id_header_omitted():
+    runner = _make_runner(pyclawops_config=_make_pyclawops_config(), session_id=None)
     settings = runner._build_fa_settings()
-    assert "x-session-id" not in (settings.mcp.servers["pyclaw"].headers or {})
+    assert "x-session-id" not in (settings.mcp.servers["pyclawops"].headers or {})
 
 
 # ── standard servers ──────────────────────────────────────────────────────────
 
 def test_fetch_server_defined_when_requested():
-    runner = _make_runner(servers=["pyclaw", "fetch"], pyclaw_config=_make_pyclaw_config())
+    runner = _make_runner(servers=["pyclawops", "fetch"], pyclawops_config=_make_pyclawops_config())
     settings = runner._build_fa_settings()
     assert "fetch" in settings.mcp.servers
     assert settings.mcp.servers["fetch"].command == "uvx"
 
 
 def test_fetch_server_not_defined_when_not_requested():
-    runner = _make_runner(servers=["pyclaw"], pyclaw_config=_make_pyclaw_config())
+    runner = _make_runner(servers=["pyclawops"], pyclawops_config=_make_pyclawops_config())
     settings = runner._build_fa_settings()
     assert "fetch" not in settings.mcp.servers
 
 
 def test_time_server_with_timezone():
     runner = _make_runner(
-        servers=["pyclaw", "time"],
-        pyclaw_config=_make_pyclaw_config(timezone="Europe/London"),
+        servers=["pyclawops", "time"],
+        pyclawops_config=_make_pyclawops_config(timezone="Europe/London"),
     )
     settings = runner._build_fa_settings()
     args = settings.mcp.servers["time"].args
@@ -121,7 +121,7 @@ def test_time_server_with_timezone():
 
 
 def test_filesystem_server_defined_when_requested():
-    runner = _make_runner(servers=["pyclaw", "filesystem"], pyclaw_config=_make_pyclaw_config())
+    runner = _make_runner(servers=["pyclawops", "filesystem"], pyclawops_config=_make_pyclawops_config())
     settings = runner._build_fa_settings()
     assert "filesystem" in settings.mcp.servers
     assert settings.mcp.servers["filesystem"].command == "npx"
@@ -131,8 +131,8 @@ def test_filesystem_server_defined_when_requested():
 
 def test_chrome_devtools_added_when_enabled_and_requested():
     runner = _make_runner(
-        servers=["pyclaw", "chrome-devtools"],
-        pyclaw_config=_make_pyclaw_config(chrome_enabled=True, chrome_auto_connect=True),
+        servers=["pyclawops", "chrome-devtools"],
+        pyclawops_config=_make_pyclawops_config(chrome_enabled=True, chrome_auto_connect=True),
     )
     settings = runner._build_fa_settings()
     assert "chrome-devtools" in settings.mcp.servers
@@ -142,8 +142,8 @@ def test_chrome_devtools_added_when_enabled_and_requested():
 
 def test_chrome_devtools_skipped_when_not_enabled():
     runner = _make_runner(
-        servers=["pyclaw", "chrome-devtools"],
-        pyclaw_config=_make_pyclaw_config(chrome_enabled=False),
+        servers=["pyclawops", "chrome-devtools"],
+        pyclawops_config=_make_pyclawops_config(chrome_enabled=False),
     )
     settings = runner._build_fa_settings()
     assert "chrome-devtools" not in settings.mcp.servers
@@ -151,8 +151,8 @@ def test_chrome_devtools_skipped_when_not_enabled():
 
 def test_chrome_devtools_browser_url_in_args():
     runner = _make_runner(
-        servers=["pyclaw", "chrome-devtools"],
-        pyclaw_config=_make_pyclaw_config(
+        servers=["pyclawops", "chrome-devtools"],
+        pyclawops_config=_make_pyclawops_config(
             chrome_enabled=True,
             chrome_browser_url="http://127.0.0.1:9222",
         ),
@@ -166,21 +166,21 @@ def test_chrome_devtools_browser_url_in_args():
 # ── provider credentials ──────────────────────────────────────────────────────
 
 def test_anthropic_key_in_settings():
-    runner = _make_runner(pyclaw_config=_make_pyclaw_config(anthropic_key="sk-ant-abc"))
+    runner = _make_runner(pyclawops_config=_make_pyclawops_config(anthropic_key="sk-ant-abc"))
     settings = runner._build_fa_settings()
     assert settings.anthropic is not None
     assert settings.anthropic.api_key == "sk-ant-abc"
 
 
 def test_openai_key_in_settings():
-    runner = _make_runner(pyclaw_config=_make_pyclaw_config(openai_key="sk-oai-xyz"))
+    runner = _make_runner(pyclawops_config=_make_pyclawops_config(openai_key="sk-oai-xyz"))
     settings = runner._build_fa_settings()
     assert settings.openai is not None
     assert settings.openai.api_key == "sk-oai-xyz"
 
 
 def test_google_key_in_settings():
-    runner = _make_runner(pyclaw_config=_make_pyclaw_config(google_key="AIza-google"))
+    runner = _make_runner(pyclawops_config=_make_pyclawops_config(google_key="AIza-google"))
     settings = runner._build_fa_settings()
     assert settings.google is not None
     assert settings.google.api_key == "AIza-google"
@@ -188,7 +188,7 @@ def test_google_key_in_settings():
 
 def test_generic_provider_in_settings():
     runner = _make_runner(
-        pyclaw_config=_make_pyclaw_config(generic_key="mm-key", generic_url="https://api.minimax.io"),
+        pyclawops_config=_make_pyclawops_config(generic_key="mm-key", generic_url="https://api.minimax.io"),
     )
     settings = runner._build_fa_settings()
     assert settings.generic is not None
@@ -197,7 +197,7 @@ def test_generic_provider_in_settings():
 
 
 def test_no_providers_no_provider_blocks():
-    runner = _make_runner(pyclaw_config=_make_pyclaw_config())
+    runner = _make_runner(pyclawops_config=_make_pyclawops_config())
     settings = runner._build_fa_settings()
     assert settings.anthropic is None
     assert settings.openai is None
@@ -206,10 +206,10 @@ def test_no_providers_no_provider_blocks():
 
 
 def test_generic_fallback_from_api_key_field():
-    """Without pyclaw_config, generic provider falls back to self.api_key/base_url."""
+    """Without pyclawops_config, generic provider falls back to self.api_key/base_url."""
     runner = _make_runner(
         model="generic.MiniMax-M2.5",
-        pyclaw_config=None,
+        pyclawops_config=None,
         api_key="fallback-key",
         base_url="https://fallback.api/v1",
     )
@@ -222,7 +222,7 @@ def test_generic_fallback_from_api_key_field():
 # ── logger always silenced ────────────────────────────────────────────────────
 
 def test_logger_always_silent():
-    runner = _make_runner(pyclaw_config=_make_pyclaw_config())
+    runner = _make_runner(pyclawops_config=_make_pyclawops_config())
     settings = runner._build_fa_settings()
     assert settings.logger.progress_display is False
     assert settings.logger.show_chat is False
@@ -232,7 +232,7 @@ def test_logger_always_silent():
 
 
 def test_default_model_is_passthrough():
-    runner = _make_runner(pyclaw_config=_make_pyclaw_config())
+    runner = _make_runner(pyclawops_config=_make_pyclawops_config())
     settings = runner._build_fa_settings()
     assert settings.default_model == "passthrough"
 
@@ -242,10 +242,10 @@ def test_default_model_is_passthrough():
 def test_unknown_server_skipped(caplog):
     import logging
     runner = _make_runner(
-        servers=["pyclaw", "my-unknown-server"],
-        pyclaw_config=_make_pyclaw_config(),
+        servers=["pyclawops", "my-unknown-server"],
+        pyclawops_config=_make_pyclawops_config(),
     )
-    with caplog.at_level(logging.WARNING, logger="pyclaw.agents.runner"):
+    with caplog.at_level(logging.WARNING, logger="pyclawops.agents.runner"):
         settings = runner._build_fa_settings()
     assert "my-unknown-server" not in settings.mcp.servers
     assert "my-unknown-server" in caplog.text

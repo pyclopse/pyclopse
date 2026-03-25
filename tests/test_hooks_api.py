@@ -5,7 +5,7 @@ from fastapi.testclient import TestClient
 
 
 def _make_gateway(hooks: dict | None = None):
-    from pyclaw.core.gateway import Gateway
+    from pyclawops.core.gateway import Gateway
     gw = Gateway.__new__(Gateway)
     gw._initialized = True
     gw._is_running = True
@@ -24,7 +24,7 @@ def _make_gateway(hooks: dict | None = None):
 
 
 def _make_app(gateway):
-    from pyclaw.api.app import create_app, set_gateway
+    from pyclawops.api.app import create_app, set_gateway
     set_gateway(gateway)
     return create_app(gateway)
 

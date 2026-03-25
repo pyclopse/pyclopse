@@ -1,9 +1,9 @@
-# Example pyclaw configuration
-# Copy to ~/.pyclaw/config.yaml and customize
+# Example pyclawops configuration
+# Copy to ~/.pyclawops/config.yaml and customize
 #
 # Inline secret syntax: use ${source:id} anywhere a string is expected.
 #   ${env:MY_VAR}          — read from environment variable MY_VAR
-#   ${keychain:My Account} — read from system keychain (service=pyclaw)
+#   ${keychain:My Account} — read from system keychain (service=pyclawops)
 #   ${file:~/.secret}      — read from a file (trimmed)
 #   ${SOME_VAR}            — legacy bare form, reads env var SOME_VAR
 
@@ -16,7 +16,7 @@ version: "1.0"
 #   providers:
 #     keychain:
 #       source: keychain
-#       service: pyclaw      # macOS Keychain service name (default: pyclaw)
+#       service: pyclawops      # macOS Keychain service name (default: pyclawops)
 #       backend: auto        # auto | keyring | macos
 #
 #     vault:
@@ -35,7 +35,7 @@ version: "1.0"
 # Session management
 # ─────────────────────────────────────────────
 sessions:
-  persist_dir: "~/.pyclaw/sessions"
+  persist_dir: "~/.pyclawops/sessions"
   ttl_hours: 24              # sessions idle > this many hours are reaped
   reaper_interval_minutes: 60
 
@@ -69,7 +69,7 @@ security:
     enabled: true
     type: "docker"      # docker | none
     docker:
-      image: "pyclaw-sandbox:latest"
+      image: "pyclawops-sandbox:latest"
       network: "none"
       memoryLimit: "512m"
       cpuLimit: 1.0
@@ -80,7 +80,7 @@ security:
 
   audit:
     enabled: true
-    log_file: "~/.pyclaw/logs/audit.log"
+    log_file: "~/.pyclawops/logs/audit.log"
     retention_days: 90
 
   # Global denylist — always blocked regardless of per-channel allowedUsers
@@ -90,8 +90,8 @@ security:
 # Memory (per-agent markdown journals + optional vector search)
 # ─────────────────────────────────────────────
 memory:
-  backend: "file"         # file backend stores daily journals in ~/.pyclaw/agents/
-  # persist_dir: "~/.pyclaw/agents"
+  backend: "file"         # file backend stores daily journals in ~/.pyclawops/agents/
+  # persist_dir: "~/.pyclawops/agents"
 
   # Vector search via embeddings (optional).
   # When enabled, memory_search ranks results by cosine similarity.
@@ -127,7 +127,7 @@ memory:
 #       enabled: false    # inject MEMORY.md into agent context at gateway:startup
 #   custom:
 #     - event: "message:received"
-#       handler: "~/.pyclaw/hooks/my_hook.py"
+#       handler: "~/.pyclawops/hooks/my_hook.py"
 #       priority: 10
 #       description: "My custom hook"
 
@@ -209,9 +209,9 @@ agents:
     request_params:
       reasoning_split: true
     # MCP servers this agent can use.
-    # Built-in names: pyclaw (all tools + self-knowledge), fetch, time, filesystem, chrome-devtools
+    # Built-in names: pyclawops (all tools + self-knowledge), fetch, time, filesystem, chrome-devtools
     mcpServers:
-      - pyclaw
+      - pyclawops
       - fetch
       - time
       - filesystem
@@ -230,7 +230,7 @@ agents:
     request_params:
       reasoning_split: true
     mcpServers:
-      - pyclaw
+      - pyclawops
       - self
       - fetch
       - time
@@ -241,7 +241,7 @@ agents:
 # ─────────────────────────────────────────────
 jobs:
   enabled: true
-  persist_file: "~/.pyclaw/jobs.json"
+  persist_file: "~/.pyclawops/jobs.json"
 
 # ─────────────────────────────────────────────
 # Channels
@@ -272,7 +272,7 @@ channels:
 # ─────────────────────────────────────────────
 plugins:
   # Load channel plugins by Python import spec "module:ClassName"
-  # Plugins can also be discovered via entry points group "pyclaw.channels"
+  # Plugins can also be discovered via entry points group "pyclawops.channels"
   channels: []
   # channels:
   #   - "mypackage.channels:DiscordPlugin"
@@ -290,7 +290,7 @@ tui:
 # ─────────────────────────────────────────────
 # nodes:
 #   enabled: true
-#   node_id: "pyclaw-main"
+#   node_id: "pyclawops-main"
 #   requireApproval: true
 #   # secretKey: "${env:NODE_SECRET}"
 #   whitelist:

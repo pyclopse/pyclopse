@@ -24,11 +24,11 @@ import pytest
 
 _SESSION_MEMORY_HANDLER = (
     Path(__file__).parent.parent
-    / "pyclaw/hooks/bundled/session-memory/handler.py"
+    / "pyclawops/hooks/bundled/session-memory/handler.py"
 )
 _BOOT_MD_HANDLER = (
     Path(__file__).parent.parent
-    / "pyclaw/hooks/bundled/boot-md/handler.py"
+    / "pyclawops/hooks/bundled/boot-md/handler.py"
 )
 
 
@@ -209,12 +209,12 @@ class TestBootMdHandler:
         assert "boot-md: failed" in err
 
     @pytest.mark.asyncio
-    async def test_pyclaw_config_dir_boot_md_takes_precedence(self, tmp_path):
-        """~/.pyclaw/BOOT.md is found before ~/BOOT.md."""
-        pyclaw_dir = tmp_path / ".pyclaw"
-        pyclaw_dir.mkdir()
-        pyclaw_boot = pyclaw_dir / "BOOT.md"
-        pyclaw_boot.write_text("pyclaw boot content")
+    async def test_pyclawops_config_dir_boot_md_takes_precedence(self, tmp_path):
+        """~/.pyclawops/BOOT.md is found before ~/BOOT.md."""
+        pyclawops_dir = tmp_path / ".pyclawops"
+        pyclawops_dir.mkdir()
+        pyclawops_boot = pyclawops_dir / "BOOT.md"
+        pyclawops_boot.write_text("pyclawops boot content")
         home_boot = tmp_path / "BOOT.md"
         home_boot.write_text("home boot content")
 
@@ -251,7 +251,7 @@ class TestHookLoaderSubprocessWiring:
 
     def test_make_subprocess_handler_uses_sys_executable(self):
         """_make_subprocess_handler must use sys.executable, not the raw script path."""
-        from pyclaw.hooks.loader import _make_subprocess_handler, HookInfo
+        from pyclawops.hooks.loader import _make_subprocess_handler, HookInfo
 
         info = HookInfo(
             name="test-hook",
@@ -277,7 +277,7 @@ class TestHookLoaderSubprocessWiring:
             "ctx = json.loads(sys.stdin.read())\n"
             "print(json.dumps({'agent': ctx.get('agent')}))\n"
         )
-        from pyclaw.hooks.loader import _make_subprocess_handler, HookInfo
+        from pyclawops.hooks.loader import _make_subprocess_handler, HookInfo
         info = HookInfo(
             name="echo",
             description="",
@@ -294,7 +294,7 @@ class TestHookLoaderSubprocessWiring:
     async def test_subprocess_handler_returns_none_on_nonzero_exit(self, tmp_path):
         script = tmp_path / "fail.py"
         script.write_text("import sys\nsys.exit(1)\n")
-        from pyclaw.hooks.loader import _make_subprocess_handler, HookInfo
+        from pyclawops.hooks.loader import _make_subprocess_handler, HookInfo
         info = HookInfo(
             name="fail",
             description="",
@@ -311,7 +311,7 @@ class TestHookLoaderSubprocessWiring:
     async def test_subprocess_handler_returns_none_when_stdout_empty(self, tmp_path):
         script = tmp_path / "silent.py"
         script.write_text("import sys\nsys.stdin.read()\n")  # read stdin, exit 0, no output
-        from pyclaw.hooks.loader import _make_subprocess_handler, HookInfo
+        from pyclawops.hooks.loader import _make_subprocess_handler, HookInfo
         info = HookInfo(
             name="silent",
             description="",
@@ -328,8 +328,8 @@ class TestHookLoaderSubprocessWiring:
     async def test_subprocess_handler_timeout_returns_none(self, tmp_path):
         script = tmp_path / "slow.py"
         script.write_text("import time\ntime.sleep(60)\n")
-        from pyclaw.hooks.loader import _make_subprocess_handler, HookInfo
-        import pyclaw.hooks.loader as loader_mod
+        from pyclawops.hooks.loader import _make_subprocess_handler, HookInfo
+        import pyclawops.hooks.loader as loader_mod
 
         info = HookInfo(
             name="slow",

@@ -11,7 +11,7 @@ from unittest.mock import AsyncMock, MagicMock
 # ---------------------------------------------------------------------------
 
 def _split(text, limit=4000):
-    from pyclaw.core.gateway import Gateway
+    from pyclawops.core.gateway import Gateway
     return Gateway._split_message(text, limit=limit)
 
 
@@ -90,8 +90,8 @@ class TestSplitMessage:
 # ---------------------------------------------------------------------------
 
 def _make_gateway(response_text):
-    from pyclaw.core.gateway import Gateway
-    from pyclaw.config.schema import (
+    from pyclawops.core.gateway import Gateway
+    from pyclawops.config.schema import (
         Config, ChannelsConfig, TelegramConfig, AgentsConfig, SecurityConfig,
     )
 

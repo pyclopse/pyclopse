@@ -1,8 +1,8 @@
 """
-Comprehensive tests for pyclaw tool system.
+Comprehensive tests for pyclawops tool system.
 
 Tests:
-  - pyclaw MCP server (bash, web_search, send_message, sessions_*, memory_*, session_status)
+  - pyclawops MCP server (bash, web_search, send_message, sessions_*, memory_*, session_status)
   - External MCP servers (time, fetch, filesystem)
   - Tool policy engine (ToolPolicy)
   - Security enforcement (allowlist, blocked patterns)
@@ -19,7 +19,7 @@ import pytest
 from mcp import ClientSession, StdioServerParameters
 from mcp.client.stdio import stdio_client
 
-from pyclaw.tools.policy import ToolGroup, ToolPolicy, TOOL_GROUPS, TOOL_PROFILES
+from pyclawops.tools.policy import ToolGroup, ToolPolicy, TOOL_GROUPS, TOOL_PROFILES
 
 
 # ---------------------------------------------------------------------------
@@ -31,8 +31,8 @@ async def _call(session: ClientSession, tool: str, args: dict) -> str:
     return result.content[0].text if result.content else ""
 
 
-async def _pyclaw_session(env_overrides: dict | None = None):
-    """Context manager: open a pyclaw MCP server session via stdio."""
+async def _pyclawops_session(env_overrides: dict | None = None):
+    """Context manager: open a pyclawops MCP server session via stdio."""
     env = {
         **os.environ,
         "PYCLAW_EXEC_SECURITY": "all",
@@ -43,7 +43,7 @@ async def _pyclaw_session(env_overrides: dict | None = None):
         env.update(env_overrides)
     params = StdioServerParameters(
         command="uv",
-        args=["run", "python", "-m", "pyclaw.tools.server"],
+        args=["run", "python", "-m", "pyclawops.tools.server"],
         env=env,
     )
     return params
@@ -114,12 +114,12 @@ class TestToolPolicy:
 
 
 # ---------------------------------------------------------------------------
-# pyclaw MCP server: tool listing
+# pyclawops MCP server: tool listing
 # ---------------------------------------------------------------------------
 
 @pytest.mark.asyncio
-async def test_pyclaw_server_lists_tools():
-    params = await _pyclaw_session()
+async def test_pyclawops_server_lists_tools():
+    params = await _pyclawops_session()
     async with stdio_client(params) as (r, w):
         async with ClientSession(r, w) as session:
             await session.initialize()
@@ -134,22 +134,22 @@ async def test_pyclaw_server_lists_tools():
 
 
 # ---------------------------------------------------------------------------
-# pyclaw MCP server: bash tool
+# pyclawops MCP server: bash tool
 # ---------------------------------------------------------------------------
 
 @pytest.mark.asyncio
 async def test_bash_echo():
-    params = await _pyclaw_session()
+    params = await _pyclawops_session()
     async with stdio_client(params) as (r, w):
         async with ClientSession(r, w) as session:
             await session.initialize()
-            out = await _call(session, "bash", {"command": "echo 'hello pyclaw'"})
-            assert "hello pyclaw" in out
+            out = await _call(session, "bash", {"command": "echo 'hello pyclawops'"})
+            assert "hello pyclawops" in out
 
 
 @pytest.mark.asyncio
 async def test_bash_multiline():
-    params = await _pyclaw_session()
+    params = await _pyclawops_session()
     async with stdio_client(params) as (r, w):
         async with ClientSession(r, w) as session:
             await session.initialize()
@@ -161,7 +161,7 @@ async def test_bash_multiline():
 
 @pytest.mark.asyncio
 async def test_bash_exit_code():
-    params = await _pyclaw_session()
+    params = await _pyclawops_session()
     async with stdio_client(params) as (r, w):
         async with ClientSession(r, w) as session:
             await session.initialize()
@@ -171,7 +171,7 @@ async def test_bash_exit_code():
 
 @pytest.mark.asyncio
 async def test_bash_stderr():
-    params = await _pyclaw_session()
+    params = await _pyclawops_session()
     async with stdio_client(params) as (r, w):
         async with ClientSession(r, w) as session:
             await session.initialize()
@@ -182,7 +182,7 @@ async def test_bash_stderr():
 @pytest.mark.asyncio
 async def test_bash_cwd():
     with tempfile.TemporaryDirectory() as tmp:
-        params = await _pyclaw_session()
+        params = await _pyclawops_session()
         async with stdio_client(params) as (r, w):
             async with ClientSession(r, w) as session:
                 await session.initialize()
@@ -193,7 +193,7 @@ async def test_bash_cwd():
 
 @pytest.mark.asyncio
 async def test_bash_timeout():
-    params = await _pyclaw_session({"PYCLAW_EXEC_TIMEOUT": "2"})
+    params = await _pyclawops_session({"PYCLAW_EXEC_TIMEOUT": "2"})
     async with stdio_client(params) as (r, w):
         async with ClientSession(r, w) as session:
             await session.initialize()
@@ -203,7 +203,7 @@ async def test_bash_timeout():
 
 @pytest.mark.asyncio
 async def test_bash_background():
-    params = await _pyclaw_session()
+    params = await _pyclawops_session()
     async with stdio_client(params) as (r, w):
         async with ClientSession(r, w) as session:
             await session.initialize()
@@ -215,12 +215,12 @@ async def test_bash_background():
 
 
 # ---------------------------------------------------------------------------
-# pyclaw MCP server: bash security
+# pyclawops MCP server: bash security
 # ---------------------------------------------------------------------------
 
 @pytest.mark.asyncio
 async def test_bash_blocked_rm_rf():
-    params = await _pyclaw_session()
+    params = await _pyclawops_session()
     async with stdio_client(params) as (r, w):
         async with ClientSession(r, w) as session:
             await session.initialize()
@@ -230,7 +230,7 @@ async def test_bash_blocked_rm_rf():
 
 @pytest.mark.asyncio
 async def test_bash_allowlist_blocks_unlisted():
-    params = await _pyclaw_session({
+    params = await _pyclawops_session({
         "PYCLAW_EXEC_SECURITY": "allowlist",
         "PYCLAW_SAFE_BINS": "echo,ls",
     })
@@ -247,7 +247,7 @@ async def test_bash_allowlist_blocks_unlisted():
 
 @pytest.mark.asyncio
 async def test_bash_none_security_blocks_all():
-    params = await _pyclaw_session({"PYCLAW_EXEC_SECURITY": "none"})
+    params = await _pyclawops_session({"PYCLAW_EXEC_SECURITY": "none"})
     async with stdio_client(params) as (r, w):
         async with ClientSession(r, w) as session:
             await session.initialize()
@@ -256,12 +256,12 @@ async def test_bash_none_security_blocks_all():
 
 
 # ---------------------------------------------------------------------------
-# pyclaw MCP server: web_search
+# pyclawops MCP server: web_search
 # ---------------------------------------------------------------------------
 
 @pytest.mark.asyncio
 async def test_web_search_returns_results():
-    params = await _pyclaw_session()
+    params = await _pyclawops_session()
     async with stdio_client(params) as (r, w):
         async with ClientSession(r, w) as session:
             await session.initialize()
@@ -275,7 +275,7 @@ async def test_web_search_returns_results():
 
 @pytest.mark.asyncio
 async def test_web_search_max_results():
-    params = await _pyclaw_session()
+    params = await _pyclawops_session()
     async with stdio_client(params) as (r, w):
         async with ClientSession(r, w) as session:
             await session.initialize()
@@ -287,12 +287,12 @@ async def test_web_search_max_results():
 
 
 # ---------------------------------------------------------------------------
-# pyclaw MCP server: sessions tools
+# pyclawops MCP server: sessions tools
 # ---------------------------------------------------------------------------
 
 @pytest.mark.asyncio
 async def test_sessions_list_no_dir():
-    params = await _pyclaw_session()
+    params = await _pyclawops_session()
     async with stdio_client(params) as (r, w):
         async with ClientSession(r, w) as session:
             await session.initialize()
@@ -303,7 +303,7 @@ async def test_sessions_list_no_dir():
 
 @pytest.mark.asyncio
 async def test_sessions_history_not_found():
-    params = await _pyclaw_session()
+    params = await _pyclawops_session()
     async with stdio_client(params) as (r, w):
         async with ClientSession(r, w) as session:
             await session.initialize()
@@ -314,12 +314,12 @@ async def test_sessions_history_not_found():
 
 
 # ---------------------------------------------------------------------------
-# pyclaw MCP server: session_status
+# pyclawops MCP server: session_status
 # ---------------------------------------------------------------------------
 
 @pytest.mark.asyncio
 async def test_session_status():
-    params = await _pyclaw_session()
+    params = await _pyclawops_session()
     async with stdio_client(params) as (r, w):
         async with ClientSession(r, w) as session:
             await session.initialize()
@@ -329,12 +329,12 @@ async def test_session_status():
 
 
 # ---------------------------------------------------------------------------
-# pyclaw MCP server: memory tools (clawvault optional)
+# pyclawops MCP server: memory tools (clawvault optional)
 # ---------------------------------------------------------------------------
 
 @pytest.mark.asyncio
 async def test_memory_search_graceful_without_clawvault():
-    params = await _pyclaw_session()
+    params = await _pyclawops_session()
     async with stdio_client(params) as (r, w):
         async with ClientSession(r, w) as session:
             await session.initialize()
@@ -347,7 +347,7 @@ async def test_memory_search_graceful_without_clawvault():
 
 @pytest.mark.asyncio
 async def test_memory_get_graceful_without_clawvault():
-    params = await _pyclaw_session()
+    params = await _pyclawops_session()
     async with stdio_client(params) as (r, w):
         async with ClientSession(r, w) as session:
             await session.initialize()
@@ -454,11 +454,11 @@ async def test_filesystem_write_read():
                 test_file = str(Path(real_tmp) / "test.txt")
                 await session.call_tool("write_file", {
                     "path": test_file,
-                    "content": "Hello from pyclaw tests!",
+                    "content": "Hello from pyclawops tests!",
                 })
 
                 out = await _call(session, "read_file", {"path": test_file})
-                assert "Hello from pyclaw tests!" in out
+                assert "Hello from pyclawops tests!" in out
 
                 out = await _call(session, "list_directory", {"path": real_tmp})
                 assert "test.txt" in out

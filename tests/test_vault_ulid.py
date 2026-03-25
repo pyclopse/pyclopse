@@ -2,7 +2,7 @@
 
 import time
 
-from pyclaw.memory.vault.ulid import generate, timestamp
+from pyclawops.memory.vault.ulid import generate, timestamp
 
 
 class TestUlidGenerate:

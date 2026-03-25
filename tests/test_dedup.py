@@ -8,7 +8,7 @@ from unittest.mock import MagicMock
 
 
 def _make_gateway():
-    from pyclaw.core.gateway import Gateway
+    from pyclawops.core.gateway import Gateway
     gw = Gateway.__new__(Gateway)
     gw._seen_message_ids = {}
     gw._dedup_ttl_seconds = 60

@@ -4,8 +4,8 @@ from __future__ import annotations
 
 import pytest
 
-from pyclaw.memory.vault.models import TypeSchema
-from pyclaw.memory.vault.registry import BUILTIN_TYPES, TypeSchemaRegistry
+from pyclawops.memory.vault.models import TypeSchema
+from pyclawops.memory.vault.registry import BUILTIN_TYPES, TypeSchemaRegistry
 
 
 class TestBuiltinTypes:

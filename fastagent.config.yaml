@@ -14,7 +14,7 @@ mcp:
       - ${HOME}
       - /tmp
       command: node
-    pyclaw:
+    pyclawops:
       url: http://localhost:8081/mcp
     time:
       args:

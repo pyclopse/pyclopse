@@ -7,15 +7,15 @@ from pathlib import Path
 
 import pytest
 
-from pyclaw.memory.vault.models import (
+from pyclawops.memory.vault.models import (
     RetrievalProfile,
     VaultFact,
     VaultFactState,
 )
-from pyclaw.memory.vault.retrieval import ContextAssembler, infer_profile
-from pyclaw.memory.vault.search import FallbackSearchBackend
-from pyclaw.memory.vault.store import VaultStore
-from pyclaw.memory.vault.ulid import generate as gen_ulid
+from pyclawops.memory.vault.retrieval import ContextAssembler, infer_profile
+from pyclawops.memory.vault.search import FallbackSearchBackend
+from pyclawops.memory.vault.store import VaultStore
+from pyclawops.memory.vault.ulid import generate as gen_ulid
 
 
 def make_crystallized_fact(**kwargs) -> VaultFact:
@@ -109,12 +109,12 @@ class TestContextAssembler:
         output = assembler.format_for_injection(ctx)
 
         assert "<vault_context" in output
-        assert "pyclaw-vault" in output
+        assert "pyclawops-vault" in output
         assert "</vault_context>" in output
 
     async def test_format_empty_context_returns_empty_string(self, tmp_path):
         assembler, _ = self._make_assembler(tmp_path)
-        from pyclaw.memory.vault.models import VaultContext
+        from pyclawops.memory.vault.models import VaultContext
         ctx = VaultContext(facts=[], document_refs=[], profile=RetrievalProfile.DEFAULT, query="test")
         result = assembler.format_for_injection(ctx)
         assert result == ""
@@ -198,14 +198,14 @@ class TestContextAssembler:
         assert expired.id not in {f.id for f in ctx.facts}
 
     async def test_assemble_returns_vault_context(self, tmp_path):
-        from pyclaw.memory.vault.models import VaultContext
+        from pyclawops.memory.vault.models import VaultContext
         assembler, _ = self._make_assembler(tmp_path)
         ctx = await assembler.assemble("test query")
         assert isinstance(ctx, VaultContext)
 
     def test_format_includes_type_and_claim(self, tmp_path):
         assembler, store = self._make_assembler(tmp_path)
-        from pyclaw.memory.vault.models import VaultContext
+        from pyclawops.memory.vault.models import VaultContext
 
         fact = make_crystallized_fact(
             claim="User always uses tabs",

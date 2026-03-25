@@ -1,7 +1,7 @@
-"""Tests for the pyclaw reflection registry and decorators."""
+"""Tests for the pyclawops reflection registry and decorators."""
 
 import pytest
-from pyclaw.reflect.registry import (
+from pyclawops.reflect.registry import (
     CATEGORY_COMMAND,
     CATEGORY_EVENT,
     CATEGORY_SYSTEM,
@@ -11,7 +11,7 @@ from pyclaw.reflect.registry import (
     register,
     _registry,
 )
-from pyclaw.reflect.decorators import (
+from pyclawops.reflect.decorators import (
     reflect_command,
     reflect_event,
     reflect_system,
@@ -154,7 +154,7 @@ def test_reflect_command_function_call_form():
 
 def test_query_no_args_returns_overview():
     result = query()
-    assert "pyclaw" in result.lower()
+    assert "pyclawops" in result.lower()
     # Should mention the architecture
     assert "Gateway" in result or "gateway" in result
 

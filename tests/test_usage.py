@@ -1,4 +1,4 @@
-"""Tests for pyclaw.core.usage — UsageMonitor, UsageRegistry, init_registry."""
+"""Tests for pyclawops.core.usage — UsageMonitor, UsageRegistry, init_registry."""
 
 from __future__ import annotations
 
@@ -6,7 +6,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from pyclaw.core.usage import (
+from pyclawops.core.usage import (
     ThrottledError,
     UsageMonitor,
     UsageRegistry,
@@ -270,7 +270,7 @@ class TestThrottledError:
 
 class TestInitRegistry:
     def _make_usage_cfg(self, endpoint="https://example.com/usage"):
-        from pyclaw.config.schema import UsageConfig
+        from pyclawops.config.schema import UsageConfig
         return UsageConfig(
             enabled=True,
             endpoint=endpoint,
@@ -279,7 +279,7 @@ class TestInitRegistry:
         )
 
     def test_creates_monitor_for_generic_provider_with_usage(self):
-        from pyclaw.config.schema import GenericProviderConfig, ProvidersConfig
+        from pyclawops.config.schema import GenericProviderConfig, ProvidersConfig
         usage_cfg = self._make_usage_cfg()
         pcfg = GenericProviderConfig(
             enabled=True,
@@ -296,7 +296,7 @@ class TestInitRegistry:
         assert reg.get("myprovider") is not None
 
     def test_skips_provider_without_usage(self):
-        from pyclaw.config.schema import GenericProviderConfig, ProvidersConfig
+        from pyclawops.config.schema import GenericProviderConfig, ProvidersConfig
         pcfg = GenericProviderConfig(enabled=True, api_key="k", usage=None)
         providers = ProvidersConfig()
         providers.model_extra["nousage"] = pcfg
@@ -305,7 +305,7 @@ class TestInitRegistry:
         assert reg.get("nousage") is None
 
     def test_skips_disabled_usage(self):
-        from pyclaw.config.schema import GenericProviderConfig, ProvidersConfig, UsageConfig
+        from pyclawops.config.schema import GenericProviderConfig, ProvidersConfig, UsageConfig
         usage_cfg = UsageConfig(enabled=False, endpoint="https://x.com/u")
         pcfg = GenericProviderConfig(enabled=True, api_key="k", usage=usage_cfg)
         providers = ProvidersConfig()
@@ -315,7 +315,7 @@ class TestInitRegistry:
         assert reg.get("disabled") is None
 
     def test_uses_provider_api_key_when_usage_key_omitted(self):
-        from pyclaw.config.schema import GenericProviderConfig, ProvidersConfig
+        from pyclawops.config.schema import GenericProviderConfig, ProvidersConfig
         usage_cfg = self._make_usage_cfg()
         assert usage_cfg.api_key is None
         pcfg = GenericProviderConfig(
@@ -332,7 +332,7 @@ class TestInitRegistry:
         assert monitor._api_key == "provider-key"
 
     def test_usage_api_key_overrides_provider_key(self):
-        from pyclaw.config.schema import GenericProviderConfig, ProvidersConfig, UsageConfig
+        from pyclawops.config.schema import GenericProviderConfig, ProvidersConfig, UsageConfig
         usage_cfg = UsageConfig(
             enabled=True,
             endpoint="https://x.com/u",
@@ -352,7 +352,7 @@ class TestInitRegistry:
         assert monitor._api_key == "usage-specific-key"
 
     def test_empty_providers_returns_empty_registry(self):
-        from pyclaw.config.schema import ProvidersConfig
+        from pyclawops.config.schema import ProvidersConfig
         reg = init_registry(ProvidersConfig())
         assert reg.status() == {}
 
@@ -363,7 +363,7 @@ class TestInitRegistry:
 
 class TestUsageConfigSchema:
     def test_defaults(self):
-        from pyclaw.config.schema import UsageConfig
+        from pyclawops.config.schema import UsageConfig
         cfg = UsageConfig(endpoint="https://x.com/u")
         assert cfg.enabled is True
         assert cfg.check_interval == 300
@@ -373,7 +373,7 @@ class TestUsageConfigSchema:
         assert cfg.throttle.normal == 90
 
     def test_camelcase_aliases(self):
-        from pyclaw.config.schema import UsageConfig
+        from pyclawops.config.schema import UsageConfig
         cfg = UsageConfig.model_validate({
             "endpoint": "https://x.com/u",
             "checkInterval": 120,
@@ -391,7 +391,7 @@ class TestUsageConfigSchema:
         assert cfg.percent_path == "pct"
 
     def test_generic_provider_with_usage(self):
-        from pyclaw.config.schema import GenericProviderConfig
+        from pyclawops.config.schema import GenericProviderConfig
         cfg = GenericProviderConfig.model_validate({
             "api_key": "k",
             "api_url": "https://x.com",
@@ -407,7 +407,7 @@ class TestUsageConfigSchema:
         assert cfg.usage.throttle.normal == 85
 
     def test_generic_provider_without_usage_is_none(self):
-        from pyclaw.config.schema import GenericProviderConfig
+        from pyclawops.config.schema import GenericProviderConfig
         cfg = GenericProviderConfig.model_validate({"api_key": "k"})
         assert cfg.usage is None
 
@@ -418,7 +418,7 @@ class TestUsageConfigSchema:
 
 class TestJobPriority:
     def test_default_priority_is_normal(self):
-        from pyclaw.jobs.models import Job
+        from pyclawops.jobs.models import Job
         from datetime import datetime, timezone
 
         job_data = {
@@ -433,7 +433,7 @@ class TestJobPriority:
         assert job.priority == "normal"
 
     def test_custom_priority(self):
-        from pyclaw.jobs.models import Job
+        from pyclawops.jobs.models import Job
         from datetime import datetime, timezone
 
         job_data = {

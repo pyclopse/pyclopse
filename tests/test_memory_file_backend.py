@@ -2,7 +2,7 @@
 import pytest
 from pathlib import Path
 
-from pyclaw.memory.file_backend import FileMemoryBackend
+from pyclawops.memory.file_backend import FileMemoryBackend
 
 
 # ---------------------------------------------------------------------------
@@ -11,7 +11,7 @@ from pyclaw.memory.file_backend import FileMemoryBackend
 
 @pytest.fixture
 def agent_dir(tmp_path) -> Path:
-    """Simulates ~/.pyclaw/agents/myagent/."""
+    """Simulates ~/.pyclawops/agents/myagent/."""
     d = tmp_path / "agents" / "myagent"
     d.mkdir(parents=True)
     return d
@@ -337,18 +337,18 @@ class TestParsing:
 
 class TestMemoryConfigSchema:
     def test_default_backend_is_file(self):
-        from pyclaw.config.schema import MemoryConfig
+        from pyclawops.config.schema import MemoryConfig
         assert MemoryConfig().backend == "file"
 
     def test_inject_curated_default_true(self):
-        from pyclaw.config.schema import MemoryConfig
+        from pyclawops.config.schema import MemoryConfig
         assert MemoryConfig().file.inject_curated is True
 
     def test_inject_curated_camelcase(self):
-        from pyclaw.config.schema import MemoryConfig
+        from pyclawops.config.schema import MemoryConfig
         cfg = MemoryConfig.model_validate({"file": {"injectCurated": False}})
         assert cfg.file.inject_curated is False
 
     def test_no_base_dir_field(self):
-        from pyclaw.config.schema import FileMemoryConfig
+        from pyclawops.config.schema import FileMemoryConfig
         assert not hasattr(FileMemoryConfig(), "base_dir")

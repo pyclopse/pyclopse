@@ -8,7 +8,7 @@ from fastapi.testclient import TestClient
 @pytest.fixture
 def client():
     """FastAPI test client with a mock gateway."""
-    from pyclaw.api.app import create_app
+    from pyclawops.api.app import create_app
     mock_gateway = MagicMock()
     mock_gateway.config = MagicMock()
     mock_gateway.config.gateway.cors_origins = ["*"]
@@ -41,7 +41,7 @@ def test_get_topic_overview(client):
     """/topic/overview returns the overview doc."""
     response = client.get("/api/v1/self/topic/overview")
     assert response.status_code == 200
-    assert "pyclaw" in response.text.lower()
+    assert "pyclawops" in response.text.lower()
 
 
 def test_get_topic_nested(client):

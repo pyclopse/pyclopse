@@ -1,10 +1,10 @@
-"""Tests for pyclaw.self.loader.DocLoader."""
+"""Tests for pyclawops.self.loader.DocLoader."""
 
 import pytest
 from pathlib import Path
 from unittest.mock import patch
 
-from pyclaw.self.loader import DocLoader, _KNOWLEDGE_DIR, _PACKAGE_DIR
+from pyclawops.self.loader import DocLoader, _KNOWLEDGE_DIR, _PACKAGE_DIR
 
 
 # ---------------------------------------------------------------------------
@@ -48,7 +48,7 @@ def test_read_existing_topic():
     """read() returns content for a known topic."""
     loader = DocLoader()
     result = loader.read("overview")
-    assert "pyclaw" in result.lower()
+    assert "pyclawops" in result.lower()
     assert not result.startswith("[NOT FOUND]")
     assert not result.startswith("[ERROR]")
 
@@ -80,7 +80,7 @@ def test_read_not_found_includes_suggestion():
 def test_read_rejects_path_traversal():
     """read() rejects paths that would escape the knowledge directory."""
     loader = DocLoader()
-    result = loader.read("../../pyclaw/__init__.py")
+    result = loader.read("../../pyclawops/__init__.py")
     assert result.startswith("[ERROR]")
     assert "escape" in result.lower()
 
@@ -131,7 +131,7 @@ def test_source_not_found():
 
 
 def test_source_rejects_path_traversal():
-    """source() rejects paths that escape the pyclaw package."""
+    """source() rejects paths that escape the pyclawops package."""
     loader = DocLoader()
     result = loader.source("../../../etc/passwd")
     assert result.startswith("[ERROR]")
@@ -177,7 +177,7 @@ def test_list_topics_uses_forward_slashes():
 
 
 def test_package_dir_exists():
-    """_PACKAGE_DIR resolves to the actual pyclaw package directory."""
+    """_PACKAGE_DIR resolves to the actual pyclawops package directory."""
     assert _PACKAGE_DIR.exists()
     assert (_PACKAGE_DIR / "__init__.py").exists()
 

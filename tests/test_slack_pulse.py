@@ -14,8 +14,8 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 def _make_minimal_gateway(slack_enabled=True, bot_token="xoxb-test"):
     """Build a bare-minimum Gateway stub for testing _init_channels Slack logic."""
-    from pyclaw.core.gateway import Gateway
-    from pyclaw.config.schema import (
+    from pyclawops.core.gateway import Gateway
+    from pyclawops.config.schema import (
         Config, ChannelsConfig, SlackConfig, AgentsConfig, SecurityConfig, PluginsConfig,
     )
 
@@ -51,7 +51,7 @@ class TestInitChannelsSlack:
     async def test_no_client_when_disabled(self):
         gw = _make_minimal_gateway(slack_enabled=False, bot_token="xoxb-test")
 
-        with patch("pyclaw.channels.loader.load_all", return_value=[]):
+        with patch("pyclawops.channels.loader.load_all", return_value=[]):
             await gw._init_channels()
 
         assert gw._slack_web_client is None
@@ -60,7 +60,7 @@ class TestInitChannelsSlack:
     async def test_no_client_when_no_token(self):
         gw = _make_minimal_gateway(slack_enabled=True, bot_token=None)
 
-        with patch("pyclaw.channels.loader.load_all", return_value=[]):
+        with patch("pyclawops.channels.loader.load_all", return_value=[]):
             await gw._init_channels()
 
         assert gw._slack_web_client is None
@@ -72,7 +72,7 @@ class TestInitChannelsSlack:
 
         # slack_sdk is not installed in this test environment; _init_channels
         # should catch the ImportError and leave _slack_web_client as None.
-        with patch("pyclaw.channels.loader.load_all", return_value=[]):
+        with patch("pyclawops.channels.loader.load_all", return_value=[]):
             await gw._init_channels()  # must not raise
 
         assert gw._slack_web_client is None

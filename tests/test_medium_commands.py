@@ -16,7 +16,7 @@ from pathlib import Path
 # ── helpers ───────────────────────────────────────────────────────────────────
 
 def _make_runner(session_id="sess-abc"):
-    from pyclaw.agents.runner import AgentRunner
+    from pyclawops.agents.runner import AgentRunner
     runner = AgentRunner.__new__(AgentRunner)
     runner.agent_name = "main"
     runner.session_id = session_id
@@ -29,8 +29,8 @@ def _make_runner(session_id="sess-abc"):
 
 
 def _make_gateway(agent_id="main", session_id="sess-abc", runner=None, thread_bindings=None):
-    from pyclaw.core.gateway import Gateway
-    from pyclaw.config.schema import Config, AgentsConfig, ChannelsConfig, TelegramConfig, SlackConfig
+    from pyclawops.core.gateway import Gateway
+    from pyclawops.config.schema import Config, AgentsConfig, ChannelsConfig, TelegramConfig, SlackConfig
 
     gw = Gateway.__new__(Gateway)
     gw._logger = MagicMock()
@@ -42,7 +42,7 @@ def _make_gateway(agent_id="main", session_id="sess-abc", runner=None, thread_bi
     sl = SlackConfig(allowed_users=[], denied_users=[])
     gw._config = Config(agents=AgentsConfig(), channels=ChannelsConfig(telegram=tg, slack=sl))
 
-    from pyclaw.utils.time import now
+    from pyclawops.utils.time import now
     session = MagicMock()
     session.id = session_id
     session.agent_id = agent_id
@@ -65,7 +65,7 @@ def _make_gateway(agent_id="main", session_id="sess-abc", runner=None, thread_bi
 
 
 def _ctx(gw, session, channel="telegram", thread_id=None):
-    from pyclaw.core.commands import CommandContext
+    from pyclawops.core.commands import CommandContext
     return CommandContext(
         gateway=gw, session=session,
         sender_id="u1", channel=channel, thread_id=thread_id,
@@ -73,14 +73,14 @@ def _ctx(gw, session, channel="telegram", thread_id=None):
 
 
 def _registry(gw):
-    from pyclaw.core.commands import CommandRegistry, register_builtin_commands
+    from pyclawops.core.commands import CommandRegistry, register_builtin_commands
     r = CommandRegistry()
     register_builtin_commands(r, gw)
     return r
 
 
 async def _dispatch(cmd_text, gw, session, channel="telegram", thread_id=None):
-    from pyclaw.core.commands import CommandContext
+    from pyclawops.core.commands import CommandContext
     ctx = CommandContext(
         gateway=gw, session=session,
         sender_id="u1", channel=channel, thread_id=thread_id,
@@ -168,7 +168,7 @@ async def test_exec_reset():
 
 
 async def test_exec_no_session():
-    from pyclaw.core.commands import CommandContext, CommandRegistry, register_builtin_commands
+    from pyclawops.core.commands import CommandContext, CommandRegistry, register_builtin_commands
     gw, _, _ = _make_gateway()
     r = CommandRegistry()
     register_builtin_commands(r, gw)
@@ -213,7 +213,7 @@ async def test_send_invalid():
 
 
 async def test_send_no_session():
-    from pyclaw.core.commands import CommandContext, CommandRegistry, register_builtin_commands
+    from pyclawops.core.commands import CommandContext, CommandRegistry, register_builtin_commands
     gw, _, _ = _make_gateway()
     r = CommandRegistry()
     register_builtin_commands(r, gw)
@@ -258,7 +258,7 @@ async def test_focus_no_thread_id():
 
 
 async def test_focus_no_session():
-    from pyclaw.core.commands import CommandContext, CommandRegistry, register_builtin_commands
+    from pyclawops.core.commands import CommandContext, CommandRegistry, register_builtin_commands
     gw, _, _ = _make_gateway()
     r = CommandRegistry()
     register_builtin_commands(r, gw)
@@ -345,7 +345,7 @@ async def test_status_no_runner_no_context_line():
     gw, session, _ = _make_gateway(runner=None)
     _mock_get_status(gw)
     result = await _dispatch("/status", gw, session)
-    assert "pyclaw" in result.lower() or "running" in result.lower()
+    assert "pyclawops" in result.lower() or "running" in result.lower()
     assert "Context:" not in result
 
 

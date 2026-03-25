@@ -1,5 +1,5 @@
 """Stable module path for channel plugin test fixtures."""
-from pyclaw.channels.plugin import ChannelPlugin, GatewayHandle
+from pyclawops.channels.plugin import ChannelPlugin, GatewayHandle
 
 
 class EchoPlugin(ChannelPlugin):

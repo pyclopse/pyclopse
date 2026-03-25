@@ -1,12 +1,12 @@
-# pyclaw Architecture
+# pyclawops Architecture
 
-pyclaw is a modular AI agent platform that connects LLM agents to messaging channels, tools, memory, and scheduling. All subsystems are wired together by the **Gateway**.
+pyclawops is a modular AI agent platform that connects LLM agents to messaging channels, tools, memory, and scheduling. All subsystems are wired together by the **Gateway**.
 
 ---
 
 ## Subsystems
 
-### 1. Gateway (`pyclaw/core/gateway.py`)
+### 1. Gateway (`pyclawops/core/gateway.py`)
 
 The central orchestrator. Owns and initialises every other subsystem, manages the async lifecycle (`start()` / `stop()`), routes inbound messages from channels through the agent and back out, and fires hook events at each stage.
 
@@ -20,27 +20,27 @@ The central orchestrator. Owns and initialises every other subsystem, manages th
 
 ---
 
-### 2. Router (`pyclaw/core/router.py`)
+### 2. Router (`pyclawops/core/router.py`)
 
 Lightweight value-object layer: `IncomingMessage` and `OutgoingMessage` dataclasses plus `MessageRouter` for routing decisions. The Gateway uses it to decide which agent / session should handle a message.
 
 ---
 
-### 3. Session Manager (`pyclaw/core/session.py`)
+### 3. Session Manager (`pyclawops/core/session.py`)
 
-Persists user sessions to disk (`~/.pyclaw/sessions/`). Each session holds a chat history, optional model override, and arbitrary context dict. A background **reaper task** evicts sessions idle longer than `sessions.ttl_hours`.
+Persists user sessions to disk (`~/.pyclawops/sessions/`). Each session holds a chat history, optional model override, and arbitrary context dict. A background **reaper task** evicts sessions idle longer than `sessions.ttl_hours`.
 
 **Config:** `sessions.persist_dir`, `sessions.ttl_hours`, `sessions.reaper_interval_minutes`
 
 ---
 
-### 4. Agent Manager & Factory (`pyclaw/core/agent.py`, `pyclaw/agents/factory.py`)
+### 4. Agent Manager & Factory (`pyclawops/core/agent.py`, `pyclawops/agents/factory.py`)
 
 `AgentManager` owns the map of named agents (from config `agents:` block) and creates `Agent` wrappers on demand. `AgentFactory` decides whether to build a FastAgent-backed runner or fall back to a direct provider call.
 
 ---
 
-### 5. Agent Runner (`pyclaw/agents/runner.py`)
+### 5. Agent Runner (`pyclawops/agents/runner.py`)
 
 Wraps FastAgent for a single named agent. Handles:
 - Model initialisation and MCP server wiring
@@ -52,31 +52,31 @@ Wraps FastAgent for a single named agent. Handles:
 
 ---
 
-### 6. Command Registry (`pyclaw/core/commands.py`)
+### 6. Command Registry (`pyclawops/core/commands.py`)
 
 Dispatches slash commands (`/help`, `/reset`, `/status`, `/model`, `/job`, ...). Built-in commands are registered at Gateway startup. Plugins can add custom commands.
 
 ---
 
-### 7. Concurrency Manager (`pyclaw/core/concurrency.py`)
+### 7. Concurrency Manager (`pyclawops/core/concurrency.py`)
 
 Per-model semaphore pool. Config: `concurrency.default` (global cap) and `concurrency.models.<model_name>` overrides. `AgentRunner.run()` acquires the semaphore for its model before calling FastAgent.
 
 ---
 
-### 8. Prompt Builder (`pyclaw/core/prompt_builder.py`)
+### 8. Prompt Builder (`pyclawops/core/prompt_builder.py`)
 
 Assembles the system prompt for an agent from static `system_prompt` config plus injected context (memory, date, session info, etc.).
 
 ---
 
-### 9. Compaction (`pyclaw/core/compaction.py`)
+### 9. Compaction (`pyclawops/core/compaction.py`)
 
 Token-budget management: when conversation history grows beyond a threshold, older messages are summarised and replaced to keep the context window within limits.
 
 ---
 
-## Channel Adapters (`pyclaw/channels/`)
+## Channel Adapters (`pyclawops/channels/`)
 
 Each channel adapter receives messages from an external platform and calls back into the Gateway.
 
@@ -99,11 +99,11 @@ Each channel adapter receives messages from an external platform and calls back 
 
 ---
 
-## Config & Secrets (`pyclaw/config/`)
+## Config & Secrets (`pyclawops/config/`)
 
 ### Config Loader (`loader.py`)
 
-Reads `~/.pyclaw/config/pyclaw.yaml` (or the path given at startup). Resolves inline secret references (`${env:X}`, `${keychain:X}`, `${file:X}`) before handing the dict to Pydantic.
+Reads `~/.pyclawops/config/pyclawops.yaml` (or the path given at startup). Resolves inline secret references (`${env:X}`, `${keychain:X}`, `${file:X}`) before handing the dict to Pydantic.
 
 ### Config Schema (`schema.py`)
 
@@ -112,13 +112,13 @@ Pydantic models for the full config tree: `GatewayConfig`, `AgentConfig`, `Teleg
 - Supports both `camelCase` and `snake_case` keys via `AliasChoices`
 - `AgentConfig.request_params: Dict[str, Any]` — forwarded to provider API call
 
-### Secrets Manager (`pyclaw/secrets/manager.py`)
+### Secrets Manager (`pyclawops/secrets/manager.py`)
 
 Resolves `${source:id}` placeholders. Backends: environment variables, macOS Keychain (`security` CLI), plain files. Used exclusively by `ConfigLoader` during config load.
 
 ---
 
-## Security (`pyclaw/security/`)
+## Security (`pyclawops/security/`)
 
 ### Exec Approvals (`approvals.py`)
 
@@ -130,15 +130,15 @@ Wraps shell execution in Docker when `security.sandbox.enabled=true`. Limits net
 
 ### Audit Logger (`audit.py`)
 
-Appends JSON-lines audit records to `~/.pyclaw/logs/audit.log`. Records every inbound message, tool execution, and outbound reply. Configurable retention via `security.audit.retention_days`.
+Appends JSON-lines audit records to `~/.pyclawops/logs/audit.log`. Records every inbound message, tool execution, and outbound reply. Configurable retention via `security.audit.retention_days`.
 
 ---
 
-## Jobs & Scheduling (`pyclaw/jobs/`)
+## Jobs & Scheduling (`pyclawops/jobs/`)
 
 ### Job Scheduler (`scheduler.py`)
 
-Cron-style job runner. Jobs are defined with a cron expression, an agent name, a prompt, and an optional delivery target (`target_channel` / `target_chat_id`). Jobs survive restarts via `~/.pyclaw/jobs.json`. Created via `/job add` slash command or the HTTP API.
+Cron-style job runner. Jobs are defined with a cron expression, an agent name, a prompt, and an optional delivery target (`target_channel` / `target_chat_id`). Jobs survive restarts via `~/.pyclawops/jobs.json`. Created via `/job add` slash command or the HTTP API.
 
 ### Job Models (`models.py`)
 
@@ -146,7 +146,7 @@ Cron-style job runner. Jobs are defined with a cron expression, an agent name, a
 
 ---
 
-## Pulse / Heartbeat (`pyclaw/pulse/`)
+## Pulse / Heartbeat (`pyclawops/pulse/`)
 
 Periodic agent invocations on a configurable schedule. Each agent config can define a `heartbeat` block with `enabled`, `every` (e.g. `30m`), `prompt`, and optional `activeHours`. `PulseRunner` runs each agent's heartbeat as an independent `asyncio.Task`.
 
@@ -163,7 +163,7 @@ heartbeat:
 
 ---
 
-## Memory (`pyclaw/memory/`)
+## Memory (`pyclawops/memory/`)
 
 Long-term persistent memory for agents. Supports multiple backends and optional vector search.
 
@@ -171,10 +171,10 @@ Long-term persistent memory for agents. Supports multiple backends and optional 
 |---|---|
 | `service.py` | `MemoryService` — high-level CRUD + search API |
 | `backend.py` | `MemoryBackend` ABC |
-| `file_backend.py` | Daily markdown journal files in `~/.pyclaw/agents/` |
+| `file_backend.py` | Daily markdown journal files in `~/.pyclawops/agents/` |
 | `clawvault.py` | Key/value store with optional vector search |
 | `embeddings.py` | Embedding providers (OpenAI, Gemini, local/Ollama) |
-| `client.py` | Async HTTP client that calls the pyclaw MCP server memory tools |
+| `client.py` | Async HTTP client that calls the pyclawops MCP server memory tools |
 
 **Config:** `memory.backend` (`file` | `clawvault`), `memory.embedding.enabled`, `memory.embedding.provider`.
 
@@ -182,7 +182,7 @@ Hook events `memory:read/write/delete/search/list` are **interceptable** — a p
 
 ---
 
-## Hooks (`pyclaw/hooks/`)
+## Hooks (`pyclawops/hooks/`)
 
 Event-driven extension system. Two handler contracts:
 
@@ -228,17 +228,17 @@ Reads `hooks.bundled` and `hooks.custom` from config, wraps file-based handlers 
 
 ---
 
-## Todos (`pyclaw/todos/`)
+## Todos (`pyclawops/todos/`)
 
-Lightweight task list for agents. `TodoStore` persists todos to `~/.pyclaw/todos.json`. Exposed via the MCP tool server and the `/api/v1/todos` HTTP endpoint.
+Lightweight task list for agents. `TodoStore` persists todos to `~/.pyclawops/todos.json`. Exposed via the MCP tool server and the `/api/v1/todos` HTTP endpoint.
 
 ---
 
-## Tools & MCP Server (`pyclaw/tools/`)
+## Tools & MCP Server (`pyclawops/tools/`)
 
 ### MCP Server (`server.py`)
 
-A `fastmcp`-based MCP server exposing pyclaw-native tools to FastAgent. Runs as a subprocess; the gateway's own FastAgent instances connect to it via HTTP.
+A `fastmcp`-based MCP server exposing pyclawops-native tools to FastAgent. Runs as a subprocess; the gateway's own FastAgent instances connect to it via HTTP.
 
 **Tools exposed:**
 
@@ -269,7 +269,7 @@ Evaluates whether a requested tool/binary is allowed given the current security 
 
 ---
 
-## Providers (`pyclaw/providers/`)
+## Providers (`pyclawops/providers/`)
 
 Thin provider wrappers used for non-FastAgent paths (direct API calls, fallback).
 
@@ -284,7 +284,7 @@ For FastAgent-backed agents the provider is selected by the model string (e.g. `
 
 ---
 
-## Workflows (`pyclaw/workflows/`)
+## Workflows (`pyclawops/workflows/`)
 
 Higher-level multi-agent patterns built on top of `AgentRunner`.
 
@@ -296,7 +296,7 @@ Higher-level multi-agent patterns built on top of `AgentRunner`.
 
 ---
 
-## HTTP API (`pyclaw/api/`)
+## HTTP API (`pyclawops/api/`)
 
 REST API served alongside the gateway. Mounted at `/api/v1/`.
 
@@ -317,9 +317,9 @@ REST API served alongside the gateway. Mounted at `/api/v1/`.
 
 ---
 
-## TUI (`pyclaw/tui/`)
+## TUI (`pyclawops/tui/`)
 
-Textual-based terminal UI. Run with `pyclaw run --tui`.
+Textual-based terminal UI. Run with `pyclawops run --tui`.
 
 | Module | Purpose |
 |---|---|
@@ -332,13 +332,13 @@ Streaming is rendered in-place via `_stream_replace_lines` — chunks replace th
 
 ---
 
-## Skills Registry (`pyclaw/skills/`)
+## Skills Registry (`pyclawops/skills/`)
 
 Named capability bundles that agents can be granted. `SkillsRegistry` maps skill profile names (`minimal`, `full`, etc.) to sets of MCP tool names. Agents declare `tools.profile` in config; the registry resolves which tools are enabled.
 
 ---
 
-## Utilities (`pyclaw/utils/`)
+## Utilities (`pyclawops/utils/`)
 
 | Module | Purpose |
 |---|---|
@@ -347,19 +347,19 @@ Named capability bundles that agents can be granted. `SkillsRegistry` maps skill
 
 ---
 
-## Entry Point (`pyclaw/__main__.py`)
+## Entry Point (`pyclawops/__main__.py`)
 
 CLI entry point. Commands:
-- `pyclaw run` — start the gateway (HTTP + channels)
-- `pyclaw run --tui` — start with terminal UI
-- `pyclaw tools` — start the MCP tool server standalone
-- `pyclaw config` — show/validate config
+- `pyclawops run` — start the gateway (HTTP + channels)
+- `pyclawops run --tui` — start with terminal UI
+- `pyclawops tools` — start the MCP tool server standalone
+- `pyclawops config` — show/validate config
 
 ---
 
 ## Configuration Reference
 
-Full config lives at `~/.pyclaw/config/pyclaw.yaml`. See `examples/config.yaml` for an annotated reference. Key top-level sections:
+Full config lives at `~/.pyclawops/config/pyclawops.yaml`. See `examples/config.yaml` for an annotated reference. Key top-level sections:
 
 ```
 version, concurrency, sessions, gateway, security, memory, hooks, providers,
@@ -368,5 +368,5 @@ agents, jobs, channels, plugins, tui, nodes
 
 Inline secret syntax anywhere a string is expected:
 - `${env:MY_VAR}` — environment variable
-- `${keychain:My Account}` — macOS Keychain (service = `pyclaw`)
+- `${keychain:My Account}` — macOS Keychain (service = `pyclawops`)
 - `${file:~/.secret}` — file contents (trimmed)
