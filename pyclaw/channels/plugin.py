@@ -46,11 +46,13 @@ Plugins are discovered in two ways (tried in order):
 
 from abc import ABC, abstractmethod
 from typing import Optional, TYPE_CHECKING
+from pyclaw.reflect import reflect_system
 
 if TYPE_CHECKING:
     pass
 
 
+@reflect_system("channels")
 class GatewayHandle:
     """Narrow gateway interface given to channel plugins.
 
@@ -90,6 +92,7 @@ class GatewayHandle:
         raise NotImplementedError  # replaced by _GatewayHandleImpl at runtime
 
 
+@reflect_system("channels")
 class ChannelPlugin(ABC):
     """Abstract base class for gateway-integrated channel plugins.
 

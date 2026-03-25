@@ -27,9 +27,8 @@ Tools provided:
   audit_log_search - search audit log entries by field/keyword
   workflow_chain   - run a sequential chain of agent steps
   workflow_parallel - run agents in parallel (fan-out/fan-in)
-  self_topics      - list all pyclaw knowledge topics
-  self_read        - read a pyclaw documentation topic
-  self_source      - read pyclaw source code with line numbers
+  reflect          - query pyclaw architecture (overview / systems / events / commands / config)
+  reflect_source   - read pyclaw source code with line numbers
 """
 import asyncio
 import json
@@ -47,6 +46,42 @@ from fastmcp.server.middleware import Middleware, MiddlewareContext
 logger = logging.getLogger(__name__)
 
 mcp = FastMCP("pyclaw")
+
+
+# Register the MCP server itself in the reflection registry
+from pyclaw.reflect import reflect_system as _reflect_system
+
+
+@_reflect_system("mcp-server")
+class _PyclawMCPServer:
+    """FastMCP tool server — exposes all pyclaw-native tools to FastAgent.
+
+    Runs on port 8081 (configurable via ``PYCLAW_MCP_PORT``).  FastAgent
+    connects to it during agent initialization to discover and call tools.
+
+    Transport: HTTP (default) or stdio (``PYCLAW_MCP_TRANSPORT=stdio``).
+    FastMCP owns the uvicorn lifecycle — never replace with direct uvicorn
+    calls.
+
+    Tool categories:
+        bash / exec     — shell execution with exec-approval policy
+        sessions_*      — session listing, history, messaging
+        memory_*        — ClawVault CRUD + vector search
+        job_*           — job scheduler CRUD + run-now + history
+        subagent_*      — subagent spawn / list / kill / steer
+        todo_*          — todo store CRUD
+        config_*        — config get / set / delete / validate / reload
+        skills_*        — skill discovery and reading
+        a2a_*           — agent-to-agent card / message tools
+        vault_*         — ClawVault raw fact / recall tools
+        audit_log_*     — audit log tail / search
+        workflow_*      — chain and parallel workflow helpers
+        reflect / reflect_source — live architecture reflection (this module)
+
+    The gateway injects ``X-Agent-Name`` in request headers so tools can
+    identify the calling agent (used for per-agent memory routing, vault
+    lookup, etc.).
+    """
 
 
 # ---------------------------------------------------------------------------
@@ -2417,62 +2452,57 @@ async def secret_get(name: str) -> str:
 
 
 # ---------------------------------------------------------------------------
-# Self-knowledge tools
+# Reflection tools
 # ---------------------------------------------------------------------------
 
-_self_loader = None
-
-
-def _get_self_loader():
-    global _self_loader
-    if _self_loader is None:
-        from pyclaw.self.loader import DocLoader
-        _self_loader = DocLoader()
-    return _self_loader
-
 
 @mcp.tool()
-def self_topics() -> str:
-    """List all available pyclaw self-knowledge topics.
+def reflect(category: str = "", name: str = "") -> str:
+    """Query pyclaw's live architecture reflection registry.
 
-    Returns the full topic index. Call this first to discover what documentation
-    is available before calling self_read(). Topics are grouped by category:
-    architecture/, systems/, and development/.
+    Returns structured documentation about pyclaw's internals, derived from
+    decorator-annotated source code at import time — always up to date.
 
-    Example:
-        self_topics()
-    """
-    return _get_self_loader().topics()
+    Call patterns:
 
-
-@mcp.tool()
-def self_read(topic: str) -> str:
-    """Read pyclaw documentation for a specific topic.
-
-    Returns the full markdown documentation for the requested topic. Use
-    self_topics() first to see what topics are available.
+        reflect()                              → architecture overview
+        reflect(category="system")             → list all registered systems
+        reflect(category="system", name="gateway")   → gateway system detail
+        reflect(category="event")              → list all hook events
+        reflect(category="event", name="hook-events") → event constants detail
+        reflect(category="command")            → list all slash commands
+        reflect(category="command", name="/reset")   → /reset command detail
+        reflect(category="config")             → list config sections
+        reflect(category="config", name="agents")    → agents config schema
+        reflect(name="jobs")                   → cross-category search for "jobs"
 
     Args:
-        topic: Path relative to the knowledge base root, without .md extension.
-               Examples: 'overview', 'architecture/gateway', 'systems/jobs',
-               'development/testing'
+        category: One of "system", "event", "command", "config".
+                  Omit to get the architecture overview.
+        name:     Name of a specific entry within the category.
+                  Omit to list all entries in the category.
+                  If both category and name are omitted, returns the overview.
 
     Example:
-        self_read('architecture/sessions')
-        self_read('systems/jobs')
-        self_read('development/conventions')
+        reflect()
+        reflect(category="system", name="agent-runner")
+        reflect(category="config", name="gateway")
     """
-    return _get_self_loader().read(topic)
+    from pyclaw.reflect import query as _reflect_query
+    return _reflect_query(
+        category=category if category else None,
+        name=name if name else None,
+    )
 
 
 @mcp.tool()
-def self_source(module: str) -> str:
+def reflect_source(module: str) -> str:
     """Read pyclaw source code with line numbers.
 
     Returns the source of any file within the pyclaw package, with line numbers
     prepended to each line. Only paths within the pyclaw package are accessible.
 
-    Use this for fine-grained implementation detail after using self_read() for
+    Use this for fine-grained implementation detail. Pair with reflect() for
     conceptual understanding.
 
     Args:
@@ -2481,10 +2511,12 @@ def self_source(module: str) -> str:
                 'jobs/scheduler.py', 'tools/server.py'
 
     Example:
-        self_source('core/gateway.py')
-        self_source('hooks/registry.py')
+        reflect_source('core/gateway.py')
+        reflect_source('hooks/registry.py')
+        reflect_source('reflect/registry.py')
     """
-    return _get_self_loader().source(module)
+    from pyclaw.self.loader import DocLoader
+    return DocLoader().source(module)
 
 
 # ---------------------------------------------------------------------------

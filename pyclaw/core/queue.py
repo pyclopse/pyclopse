@@ -1,5 +1,6 @@
 """Per-session message queue with configurable processing modes.
 
+
 Modes
 -----
 followup        Process each message in order, one at a time. Respects
@@ -26,6 +27,7 @@ import logging
 import time
 from dataclasses import dataclass, field
 from typing import Any, Callable, Dict, List, Optional
+from pyclaw.reflect import reflect_system
 
 from pyclaw.config.schema import DropPolicy, QueueConfig, QueueMode
 
@@ -50,6 +52,7 @@ class QueuedMessage:
     arrived_at: float = field(default_factory=time.monotonic)
 
 
+@reflect_system("queue")
 class SessionMessageQueue:
     """Per-session queue with a drain loop that applies the configured queue mode.
 

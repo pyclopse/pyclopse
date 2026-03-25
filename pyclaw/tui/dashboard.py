@@ -27,6 +27,7 @@ Key bindings:
 from __future__ import annotations
 
 import json
+from pyclaw.reflect import reflect_system
 import logging
 import queue
 import traceback
@@ -1510,6 +1511,7 @@ class TracesView(Vertical):
 # ─────────────────────────────── Main Dashboard ──────────────────────────────
 
 
+@reflect_system("tui")
 class GatewayDashboard(App):
     """Unified pyclaw gateway dashboard."""
 

@@ -1,6 +1,7 @@
 """Agent management for pyclaw with FastAgent integration."""
 
 import asyncio
+from pyclaw.reflect import reflect_system
 import logging
 import re
 from dataclasses import dataclass, field
@@ -36,6 +37,7 @@ from pyclaw.core.prompt_builder import build_system_prompt, AGENT_FILES
 ToolExecutor = Callable[[str, List[str], str], Awaitable[Dict[str, Any]]]
 
 
+@reflect_system("agents")
 @dataclass
 class Agent:
     """Agent that handles conversations using a FastAgent runner.
@@ -1124,6 +1126,7 @@ def _translate_to_fa_model(raw_model: str, pyclaw_config: Any) -> str:
     return f"{fa_prov}.{model_name}"
 
 
+@reflect_system("agents")
 class AgentManager:
     """Manages multiple Agent instances across the gateway.
 

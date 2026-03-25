@@ -1,6 +1,7 @@
 """Execution approval system for pyclaw."""
 
 import re
+from pyclaw.reflect import reflect_system
 import os
 from dataclasses import dataclass
 from typing import List, Optional, Pattern
@@ -50,6 +51,7 @@ class ApprovalDecision(str, Enum):
     NEEDS_REVIEW = "needs_review"
 
 
+@reflect_system("security")
 class ExecApprovalSystem:
     """Approval system for command executions based on allowlist/denylist rules.
 

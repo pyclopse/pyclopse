@@ -1,6 +1,7 @@
 """Slash command registry for pyclaw gateway."""
 
 import logging
+from pyclaw.reflect import reflect_system
 import os
 from dataclasses import dataclass
 from typing import Any, Callable, Dict, List, Optional
@@ -50,6 +51,7 @@ class Command:
     handler: Callable  # async (args: str, ctx: CommandContext) -> str
 
 
+@reflect_system("commands")
 class CommandRegistry:
     """Registry of slash commands available in pyclaw.
 

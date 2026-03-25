@@ -1,5 +1,6 @@
 """Skill discovery and formatting for pyclaw.
 
+
 Skills follow the agentskills.io specification:
   - Each skill is a directory containing a SKILL.md file
   - SKILL.md has YAML frontmatter with at minimum: name, description
@@ -12,6 +13,7 @@ Directory search order:
 """
 
 from __future__ import annotations
+from pyclaw.reflect import reflect_system
 
 import logging
 from dataclasses import dataclass, field
@@ -25,6 +27,7 @@ _SKILL_DIR_TOKEN = "{skill_dir}"
 
 
 @dataclass
+@reflect_system("skills")
 class SkillInfo:
     """A discovered skill with its parsed metadata and on-disk location.
 

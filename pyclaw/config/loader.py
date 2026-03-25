@@ -1,6 +1,7 @@
 """Configuration loader - loads and validates YAML config files."""
 
 import os
+from pyclaw.reflect import reflect_system
 import yaml
 from pathlib import Path
 from typing import Optional, Union, Dict, Any
@@ -138,6 +139,7 @@ def find_config_file(search_paths: Optional[list] = None) -> Optional[Path]:
     return None
 
 
+@reflect_system("config")
 class ConfigLoader:
     """Loads and manages pyclaw configuration.
 

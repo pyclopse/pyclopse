@@ -1,6 +1,7 @@
 """Job scheduler for pyclaw."""
 
 import asyncio
+from pyclaw.reflect import reflect_system
 import logging
 import os
 import uuid
@@ -17,6 +18,7 @@ from .models import (
 )
 
 
+@reflect_system("jobs")
 class JobScheduler:
     """Async job scheduler supporting cron, interval, and one-shot jobs.
 

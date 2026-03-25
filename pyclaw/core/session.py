@@ -1,6 +1,7 @@
 """Session management for pyclaw."""
 
 import asyncio
+from pyclaw.reflect import reflect_system
 import json
 import logging
 import secrets
@@ -33,6 +34,7 @@ def _generate_session_id() -> str:
     return f"{now().strftime('%Y-%m-%d')}-{suffix}"
 
 
+@reflect_system("sessions")
 @dataclass
 class Session:
     """A conversation session — metadata only; history lives in files on disk.
@@ -186,6 +188,7 @@ class Session:
         )
 
 
+@reflect_system("sessions")
 class SessionManager:
     """Manages conversation sessions with file-based persistence.
 

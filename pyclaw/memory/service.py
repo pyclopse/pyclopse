@@ -8,6 +8,7 @@ service falls back to the configured default backend.
 
 import logging
 from typing import Any, Dict, List, Optional, TYPE_CHECKING
+from pyclaw.reflect import reflect_system
 
 from pyclaw.hooks.events import HookEvent
 
@@ -42,6 +43,7 @@ def set_memory_service(service: "MemoryService") -> None:
     _instance = service
 
 
+@reflect_system("memory")
 class MemoryService:
     """Routes memory CRUD operations through the HookRegistry.
 

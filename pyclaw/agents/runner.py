@@ -1,5 +1,6 @@
 """Agent runner using FastAgent."""
 import asyncio
+from pyclaw.reflect import reflect_system
 import logging
 import os
 import re
@@ -369,6 +370,7 @@ _BUILTIN_SERVERS = frozenset(["pyclaw", "fetch", "time", "filesystem", "chrome-d
 
 
 
+@reflect_system("agent-runner")
 class AgentRunner:
     """Runner for FastAgent-based execution.
 

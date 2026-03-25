@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import logging
 from typing import TYPE_CHECKING, Any
+from pyclaw.reflect import reflect_system
 
 from a2a.server.agent_execution import AgentExecutor, RequestContext
 from a2a.utils import new_agent_text_message
@@ -13,6 +14,7 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 
+@reflect_system("a2a")
 class PyclawAgentExecutor(AgentExecutor):
     """Routes an incoming A2A task message through the pyclaw gateway.
 

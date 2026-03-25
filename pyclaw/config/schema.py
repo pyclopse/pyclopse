@@ -3,6 +3,7 @@
 from pydantic import BaseModel, Field, ConfigDict, AliasChoices, model_validator
 from typing import Optional, List, Dict, Any
 from enum import Enum
+from pyclaw.reflect import reflect_system
 
 from pyclaw.secrets.models import SecretsConfig
 from pyclaw.memory.vault.config import VaultConfig as _VaultConfig
@@ -888,8 +889,29 @@ class GatewayConfig(BaseModel):
     )
 
 
+@reflect_system("config")
 class Config(BaseModel):
-    """Root configuration model."""
+    """Root configuration model.
+
+    Loaded from ``~/.pyclaw/config.yaml`` (or ``--config`` path).  All top-level
+    keys use camelCase in YAML and are mapped via ``validation_alias`` /
+    ``AliasChoices`` to snake_case Pydantic fields.
+
+    Inline secret syntax is resolved by ``ConfigLoader`` before model
+    construction: ``${env:VAR}``, ``${keychain:Name}``, ``${file:path}``.
+
+    Section summary:
+        providers — LLM provider credentials and model lists
+        agents    — per-agent model, MCP servers, tools, vault config
+        channels  — Telegram bots, Slack workspace, allowed/denied users
+        gateway   — host/port, skills dirs, debug flags, A2A config
+        memory    — backend selection (clawvault)
+        security  — exec approval mode, audit logging, sandbox
+        jobs      — scheduler timezone and agents dir
+        sessions  — TTL, daily rollover, max sessions
+
+    See ``reflect(category="config", name=<section>)`` for per-section schema.
+    """
     version: str = "1.0"
     # IANA timezone name (e.g. "America/New_York", "Europe/London").
     # All pyclaw timestamps use this zone.  Omit to use the system local timezone.

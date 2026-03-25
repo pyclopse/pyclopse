@@ -1,6 +1,7 @@
 """File-based hook discovery and loading (HOOK.md + handler script)."""
 
 import asyncio
+from pyclaw.reflect import reflect_system
 import json
 import logging
 from dataclasses import dataclass, field
@@ -48,6 +49,7 @@ class HookInfo:
     enabled: bool = True
 
 
+@reflect_system("hooks")
 class HookLoader:
     """
     Discovers HOOK.md files and registers subprocess-backed handlers.

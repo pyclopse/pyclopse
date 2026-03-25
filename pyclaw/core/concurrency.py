@@ -1,5 +1,4 @@
-"""
-Per-model concurrency limiter.
+"""Per-model concurrency limiter.
 
 Most LLM providers enforce concurrency limits based on plan tier.
 A single asyncio.Semaphore per model is shared across ALL agents,
@@ -19,6 +18,7 @@ import asyncio
 import logging
 from contextlib import asynccontextmanager
 from typing import AsyncIterator, Dict, Optional
+from pyclaw.reflect import reflect_system
 
 from pyclaw.core.usage import ThrottledError, get_registry
 
@@ -28,6 +28,7 @@ logger = logging.getLogger("pyclaw.concurrency")
 _GLOBAL_DEFAULT = 3
 
 
+@reflect_system("concurrency")
 class ModelConcurrencyManager:
     """Shared per-model asyncio semaphores for LLM call throttling.
 

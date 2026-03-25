@@ -1,6 +1,9 @@
 """Hook event name constants."""
 
+from pyclaw.reflect import reflect_event
 
+
+@reflect_event("hook-events")
 class HookEvent:
     """Named hook event constants fired throughout the pyclaw lifecycle.
 

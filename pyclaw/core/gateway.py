@@ -1,6 +1,7 @@
 """Main Gateway class for pyclaw."""
 
 import asyncio
+from pyclaw.reflect import reflect_system
 import logging
 from pathlib import Path
 from typing import Any, Dict, List, Optional
@@ -175,8 +176,28 @@ def _snapshot_ctx_tokens(agent: Any, session: Any) -> None:
         pass  # Never break message handling over a metrics snapshot
 
 
+@reflect_system("gateway")
 class Gateway:
-    """Main Gateway class that orchestrates all pyclaw subsystems."""
+    """Main orchestrator that wires all pyclaw subsystems together.
+
+    The Gateway is the central coordinator.  It owns all subsystem instances,
+    starts/stops the two HTTP servers (MCP on 8081 and REST API on 8080), manages
+    Telegram and Slack polling tasks, and routes inbound messages through the full
+    pipeline: deduplication → allowlist/denylist → session → command → queue →
+    agent → channel reply.
+
+    Typical lifecycle::
+
+        gw = Gateway(config_path)
+        await gw.initialize()
+        await gw.run_forever()  # blocks until Ctrl+C
+        await gw.stop()
+
+    The ``handle_message()`` method is the single entry point for all inbound
+    messages regardless of origin channel.  It returns the agent reply string.
+    Job execution for agent-type jobs flows through ``_agent_executor()``
+    which always strips thinking tags before delivering results.
+    """
 
     def __init__(self, config_path: Optional[str] = None):
         # Configuration

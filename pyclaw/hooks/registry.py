@@ -1,6 +1,7 @@
 """Unified hook registry supporting both Python and file-based handlers."""
 
 import asyncio
+from pyclaw.reflect import reflect_system
 import logging
 from dataclasses import dataclass, field
 from typing import Any, Callable, Dict, List, Optional
@@ -30,6 +31,7 @@ class HookRegistration:
     source: str = "code"    # "code" | "file:<path>"
 
 
+@reflect_system("hooks")
 class HookRegistry:
     """
     Unified hook registry.
