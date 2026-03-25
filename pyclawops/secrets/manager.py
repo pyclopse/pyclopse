@@ -30,20 +30,78 @@ class ResolutionError(Exception):
 
 
 class SecretsManager:
-    """
-    Resolves named secrets from the registry defined in ``secrets:`` config.
+    """Registry-based secret resolution for pyclawops config.
 
-    Typical usage — called by ConfigLoader before Pydantic validation::
+    Secrets are **never** specified inline in config values.  Each secret is
+    registered by name in ``~/.pyclawops/secrets/secrets.yaml`` (or in the
+    ``secrets:`` block inside ``pyclawops.yaml`` as a fallback).  Anywhere in
+    config a value of the form ``${NAME}`` is replaced with the plaintext
+    value resolved for that name.
 
-        manager = SecretsManager(raw_config.get("secrets", {}))
-        resolved_data = manager.resolve_raw(raw_config)
-        config = Config(**resolved_data)
+    The four ``source`` types:
 
-    In config YAML, reference any registered secret by name::
+    ``env``
+        Read from an environment variable.  The var name defaults to the
+        registry key; set ``var:`` to override::
+
+            ANTHROPIC_API_KEY:
+              source: env                # reads $ANTHROPIC_API_KEY
+            OPENAI_KEY:
+              source: env
+              var: OPENAI_API_KEY        # reads $OPENAI_API_KEY
+
+    ``keychain``
+        Read from the OS keychain (macOS ``security`` CLI or the
+        cross-platform ``keyring`` library)::
+
+            TG_BOT_TOKEN:
+              source: keychain
+              account: pyclawops-telegram-bot
+              service: pyclawops        # optional; defaults to "pyclawops"
+
+    ``file``
+        Read from a file.  Omit ``id`` to use the whole file; set ``id`` to a
+        JSON pointer (RFC 6901) to extract a key from a JSON file::
+
+            DB_PASSWORD:
+              source: file
+              path: ~/.pyclawops/secrets/db.txt
+            TRADING_KEY:
+              source: file
+              path: ~/.pyclawops/secrets/tokens.json
+              id: /trading/api_key
+
+    ``exec``
+        Run an external command (1Password CLI, HashiCorp Vault, sops, etc.).
+        With ``jsonOnly: false`` the entire stdout is the secret value.  With
+        ``jsonOnly: true`` (default) a JSON protocol is used::
+
+            OP_SECRET:
+              source: exec
+              command: /opt/homebrew/bin/op
+              id: op://Personal/Bot/token
+              args: [read]
+              jsonOnly: false
+
+    Usage in config::
 
         providers:
-          minimax:
-            api_key: "${MINIMAX_API_KEY}"
+          anthropic:
+            apiKey: "${ANTHROPIC_API_KEY}"
+        channels:
+          telegram:
+            bots:
+              main:
+                botToken: "${TG_BOT_TOKEN}"
+
+    Typical call site (ConfigLoader, before Pydantic validation)::
+
+        manager = SecretsManager(load_secrets_registry(config_path))
+        resolved_data = manager.resolve_raw(raw_yaml_dict)
+        config = Config(**resolved_data)
+
+    Resolution is eager and synchronous; the plaintext snapshot is built once
+    at startup so secret-provider outages never hit hot request paths.
     """
 
     def __init__(self, registry: Optional[Dict[str, Any]] = None) -> None:

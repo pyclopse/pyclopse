@@ -67,7 +67,7 @@ The MCP server uses `FastMCP.run_http_async()` — FastMCP owns the uvicorn life
 | `pyclawops/core/session.py` | Session persistence + TTL-based reaper |
 | `pyclawops/jobs/scheduler.py` | Cron/interval/one-shot job scheduler with `notify_callback`; agent jobs run via `_agent_executor()` in `gateway.py` |
 | `pyclawops/config/schema.py` | Pydantic config schema — all fields use `validation_alias` for camelCase YAML |
-| `pyclawops/config/loader.py` | Loads `~/.pyclawops/config.yaml`; resolves `${source:id}` inline secrets |
+| `pyclawops/config/loader.py` | Loads `~/.pyclawops/config.yaml`; resolves `${NAME}` references via `SecretsManager` |
 | `pyclawops/tui/app.py` | Textual TUI; `pyclawops/tui/screens.py` contains `ChatScreen` with streaming |
 
 ### MCP
@@ -111,7 +111,7 @@ Agent-type jobs run via `_agent_executor()` in `gateway.py`. The job creates an 
 
 YAML uses camelCase keys; Pydantic models use `validation_alias` or `AliasChoices` to accept them. Always test config parsing with `Model.model_validate({"camelCase": val})` not `Model(snake_case=val)`.
 
-Inline secret syntax: `${env:VAR}`, `${keychain:Name}`, `${file:path}` — resolved at load time in `pyclawops/config/loader.py`.
+Inline secret syntax: `${NAME}` — looks up `NAME` in the secrets registry loaded from `~/.pyclawops/secrets/secrets.yaml` (falls back to `secrets:` block in pyclawops.yaml). Each registry entry declares `source: env | keychain | file | exec` and its source-specific options. The reference in config YAML is always just `${NAME}` — no source type is embedded in the reference itself. See `pyclawops/secrets/manager.py` and `pyclawops/secrets/models.py`.
 
 ### Skills System
 

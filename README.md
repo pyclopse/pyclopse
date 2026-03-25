@@ -65,7 +65,7 @@ version: "1.0"
 
 providers:
   anthropic:
-    apiKey: "${env:ANTHROPIC_API_KEY}"
+    apiKey: "${ANTHROPIC_API_KEY}"      # register ANTHROPIC_API_KEY in secrets.yaml
     models:
       claude-sonnet-4-6:
         enabled: true
@@ -238,7 +238,7 @@ The Vault stores atomic semantic facts as individual Markdown files with YAML fr
 |---|---|---|
 | **Format** | YAML validated by Pydantic | YAML validated by Zod |
 | **Key style** | camelCase YAML → snake_case Python via `validation_alias` | camelCase TypeScript throughout |
-| **Inline secrets** | `${env:VAR}`, `${keychain:Name}`, `${file:path}` resolved at load time | No inline syntax; secrets are first-class typed config values |
+| **Inline secrets** | `${NAME}` — looks up `NAME` in the secrets registry (`~/.pyclawops/secrets/secrets.yaml`); registry entries declare `source: env/keychain/file/exec` | No inline syntax; secrets are first-class typed config values |
 | **Scale** | Single YAML file | ~5,000 lines across 86 typed config files |
 
 ### Security & Approvals
@@ -297,14 +297,60 @@ pyclawops reads `~/.pyclawops/config.yaml` (or the path passed to `--config`). T
 
 ### Inline Secrets
 
-Secret values can be stored outside the config file:
+Secrets are never embedded inline in config values. Instead, register each secret by name in `~/.pyclawops/secrets/secrets.yaml` and reference it anywhere in `pyclawops.yaml` as `${NAME}`.
+
+**`~/.pyclawops/secrets/secrets.yaml`** — define where each secret comes from:
 
 ```yaml
-apiKey: "${env:MY_API_KEY}"          # from environment variable
-apiKey: "${keychain:My Key Name}"    # from macOS Keychain (service = "pyclawops")
-apiKey: "${file:~/.my_api_key}"      # from file contents (trimmed)
-apiKey: "${provider:my-provider}"    # from a named secrets provider
+# source: env — read from an environment variable
+ANTHROPIC_API_KEY:
+  source: env                         # reads env var ANTHROPIC_API_KEY (name = var name)
+
+OPENAI_KEY:
+  source: env
+  var: OPENAI_API_KEY                 # reads env var OPENAI_API_KEY, registered as OPENAI_KEY
+
+# source: keychain — read from OS keychain
+TG_BOT_TOKEN:
+  source: keychain
+  account: pyclawops-telegram-bot     # macOS Keychain account name (keyring on Linux)
+  service: pyclawops                  # optional; defaults to "pyclawops"
+
+# source: file — read from a file (entire file, or a JSON pointer into a JSON file)
+DB_PASSWORD:
+  source: file
+  path: ~/.pyclawops/secrets/db.txt   # entire file contents (trimmed)
+
+TRADING_KEY:
+  source: file
+  path: ~/.pyclawops/secrets/tokens.json
+  id: /trading/api_key                # JSON pointer (RFC 6901) into a JSON file
+
+# source: exec — run an external command (1Password CLI, HashiCorp Vault, sops, etc.)
+OP_SECRET:
+  source: exec
+  command: /opt/homebrew/bin/op
+  id: op://Personal/Bot/token
+  args: [read]
+  jsonOnly: false                     # stdout used directly as the secret value
 ```
+
+**`~/.pyclawops/config.yaml`** — reference by name:
+
+```yaml
+providers:
+  anthropic:
+    apiKey: "${ANTHROPIC_API_KEY}"
+channels:
+  telegram:
+    bots:
+      main:
+        botToken: "${TG_BOT_TOKEN}"
+```
+
+The secrets registry can also be placed directly in a `secrets:` block inside `pyclawops.yaml` — useful for simple setups. `~/.pyclawops/secrets/secrets.yaml` takes precedence when both exist.
+
+A `~/.pyclawops/.env` file (or `~/.env` / `./.env`) is loaded automatically at startup via `python-dotenv`. This populates environment variables that `source: env` secrets can read — useful for local development.
 
 ---
 
@@ -316,7 +362,7 @@ Declares LLM provider credentials and per-model concurrency limits. Each provide
 providers:
   anthropic:
     enabled: true
-    apiKey: "${env:ANTHROPIC_API_KEY}"
+    apiKey: "${ANTHROPIC_API_KEY}"
     models:
       claude-sonnet-4-6:
         enabled: true
@@ -324,7 +370,7 @@ providers:
 
   openai:
     enabled: true
-    apiKey: "${env:OPENAI_API_KEY}"
+    apiKey: "${OPENAI_API_KEY}"
     models:
       gpt-4o:
         enabled: true
@@ -334,7 +380,7 @@ providers:
   minimax:
     enabled: true
     fastagent_provider: generic      # use generic OpenAI-compat layer
-    api_key: "${env:MINIMAX_API_KEY}"
+    api_key: "${MINIMAX_API_KEY}"
     api_url: "https://api.minimax.io/v1"
     models:
       MiniMax-M2.7:
@@ -447,10 +493,10 @@ channels:
     deniedUsers: []
     bots:
       main:                           # bot name (arbitrary)
-        botToken: "${env:TELEGRAM_BOT_TOKEN}"
+        botToken: "${TELEGRAM_BOT_TOKEN}"
         agent: main                   # which agent handles this bot
       assistant:
-        botToken: "${env:TELEGRAM_BOT2_TOKEN}"
+        botToken: "${TELEGRAM_BOT2_TOKEN}"
         agent: assistant
 ```
 
@@ -470,8 +516,8 @@ agents:
 channels:
   slack:
     enabled: true
-    botToken: "${env:SLACK_BOT_TOKEN}"
-    appToken: "${env:SLACK_APP_TOKEN}"
+    botToken: "${SLACK_BOT_TOKEN}"
+    appToken: "${SLACK_APP_TOKEN}"
     agent: main
     threading: true                   # each thread = its own session
     allowedUsers: []                  # Slack user IDs are strings ("U123ABC")
@@ -519,7 +565,7 @@ memory:
     enabled: false                    # enable vector search
     provider: openai                  # openai | gemini | local
     model: text-embedding-3-small
-    api_key: "${env:OPENAI_API_KEY}"
+    api_key: "${OPENAI_API_KEY}"
 ```
 
 The `memory:` top-level section controls the **legacy** `FileMemoryBackend`. pyclawops's built-in **Vault** is configured per-agent under `agents[].vault:` (see the [agents](#agents) section and [Memory & Vault](#memory--vault) below).
