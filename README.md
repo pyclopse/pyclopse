@@ -152,11 +152,11 @@ TODO: Put total file size, ram usage, etc. stats here
 |---|---|---|
 |**Sessions**|Only one active session per agent, accessible via different communication channels|Each channel gets it's own session|
 |**Concurrency**|Number of concurrent API calls configurable per model.  Made to work well with coding plans that have concurrency limits.| Lane system which is sequential - one agent's calls block other agents|
-|**Scheduling**|Unified Jobs system handles Cron, SubAgents and ____|Separate Cron, SubAgent and _____ systems|
-|**Memory**|Full Obsidian compatible vault system with QMD support|Basic markdown files with cosine similarity search|
-|**Self Awareness**|Built-in reflection system allows agent's to inspect how the system works.  This is useful for having agents help you self improve your setup.|No self reflection system built in|
-|**Plugins**|Full plugin system supporting HTTP,binary and _____|Full plugin system supporing only ________|
-|**Debugging**|Excellent methods to inspect internal state.  Use the gateway TUI to manage agents, look at their generated system prompt, look at logs, etc. Additionally, agents can be configured to show their thinking text, have notifications delivered to different channels when jobs start and stop, have injected memory sources added to responses.  Very easy to see and understand internal state|?Very limited in this regard?? TODO: follow up on this|
+|**Scheduling**|Unified Jobs system covers cron, interval, one-shot, subagents (isolated AgentRun), shell command execution, and delivery notifications — all in one `jobs.yaml` per agent|Unified cron service with `agentTurn` (isolated agent run) and `systemEvent` (broadcast to active session) payload types; stagger, delivery destinations, failure alerting|
+|**Memory**|Default `FileMemoryBackend` (append-only daily markdown journals per agent, optional vector embeddings) + optional per-agent Vault (structured semantic fact store with ULID IDs, lifecycle states, 13 fact types, hybrid search)|SQLite + sqlite-vec vector extension + FTS5 full-text search; token-based file chunking (400 tokens / 80 overlap); hybrid BM25 + vector search; 6 embedding providers with auto-fallback|
+|**Self Awareness**|Built-in reflection system allows agents to inspect how the system works.  This is useful for having agents help you self-improve your setup.|No self-reflection system built in|
+|**Plugins**|Channels: Python ABC + pip/uv entry-point discovery; Hooks: Python in-process functions; MCP: HTTP transport (FastMCP server hosted in-process)|Channels: TypeScript plugin SDK (npm packages, git repos, bundled modules) with setup wizards, multi-account, and message actions; Hooks: npm packages, git repos, or bundled TypeScript; MCP: stdio (spawned subprocess)|
+|**Debugging**|Textual TUI dashboard: live chat, agent system-prompt inspector, session browser, log viewer, status bar. Show-thinking mode, job start/stop notifications, memory-source annotations in responses. MCP `reflect()` tool lets agents inspect their own architecture.|Custom terminal TUI (pi-tui): live chat, slash commands, status bar, token counter, streaming output. Web Control UI at `/`. WebSocket-first API for real-time agent state.|
 |**A2A Support**|Full A2A support|No A2A support|
 
 ### MCP
@@ -189,16 +189,35 @@ TODO: Put total file size, ram usage, etc. stats here
 
 ### Memory
 
+PyClawOps has **two independent memory systems**. The default `FileMemoryBackend` handles lightweight journaling with optional vector search. The optional per-agent **Vault** is a separate structured fact store — configured under `agents[].vault:`, not `memory.backend`. OpenClaw uses a single SQLite-based system.
+
+#### Default Backend: `FileMemoryBackend`
+
 | | PyClawOps | OpenClaw |
 |---|---|---|
-| **Backend** | ClawVault — custom immutable fact log with ULID IDs | SQLite with FTS5 full-text search + vector embeddings |
-| **Storage model** | Atomic semantic facts with lifecycle states: PROVISIONAL → CRYSTALLIZED → SUPERSEDED → ARCHIVED | Chunk-based (file line ranges); hash-deduplicated |
-| **Semantic typing** | 14 fact types: `user`, `preference`, `fact`, `decision`, `lesson`, `commitment`, `goal`, `person`, `hypothesis`, `absence`, `anti`, `context`, `project`, `rule` | None — chunks are plain text |
-| **Fact links** | `supersedes`, `superseded_by`, `related_to`, `depends_on`, `part_of`, `contradicts` | None |
-| **Confidence** | Confidence score (0.0–1.0) + reinforcement count + surprise score | None |
-| **Embeddings** | Configurable provider | OpenAI, Gemini, Voyage, Mistral, Ollama, or local; fallback chain |
-| **Search** | Semantic retrieval with retrieval profiles (default, planning, incident, handoff, research) | Hybrid BM25 + cosine similarity |
-| **Lifecycle** | Automatic crystallization, forgetting, compression, and reaping tasks | Not applicable |
+| **Backend** | Per-agent append-only markdown daily journals (`~/.pyclawops/agents/{id}/memory/YYYY-MM-DD.md`) + optional `vectors.json` embedding index | SQLite with FTS5 full-text search virtual table + sqlite-vec vector extension |
+| **Storage model** | Dated sections with tag metadata; one file per day per agent | Token-based file chunks (400 tokens, 80-token overlap); hash-deduplicated |
+| **Search** | Keyword frequency + optional cosine similarity (pure Python, no numpy) | Hybrid: BM25 keyword + vector similarity; optional MMR diversity reranking; optional temporal decay |
+| **Embedding providers** | OpenAI, Gemini, local (OpenAI-compat HTTP) | OpenAI, Gemini, Voyage, Mistral, Ollama, local (node-llama-cpp) — auto-fallback chain |
+| **Sync trigger** | Manual via `memory_reindex` MCP tool | File watcher (chokidar), on-session-start, on-search, interval |
+| **Fact typing** | None — freeform markdown | None — plain text chunks |
+
+#### Optional Per-Agent Vault (`agents[].vault:`)
+
+The Vault stores atomic semantic facts as individual Markdown files with YAML frontmatter. It is independent of `FileMemoryBackend` and has no equivalent in OpenClaw.
+
+| | PyClawOps Vault | OpenClaw |
+|---|---|---|
+| **Backend** | One Markdown file per fact; active facts in `vault/facts/`, superseded in `vault/archive/` | No equivalent |
+| **Fact IDs** | ULID (time-sortable, collision-resistant) | — |
+| **Semantic types** | 13 built-in: `user`, `preference`, `fact`, `decision`, `lesson`, `commitment`, `goal`, `person`, `hypothesis`, `absence`, `anti`, `context`, `project` | — |
+| **Lifecycle** | `provisional → crystallized → superseded → archived` | — |
+| **Confidence** | 0.0–1.0 score + reinforcement count + surprise score (tracks corrections) | — |
+| **Fact links** | `supersedes`, `superseded_by`, `related_to` | — |
+| **Temporal** | `event_at`, `valid_from/until`, `expires_at` | — |
+| **Search backends** | `FallbackSearch` (keyword) or `HybridSearch` (BM25 + vector via RRF) | — |
+| **Retrieval profiles** | `default`, `planning`, `incident`, `handoff`, `research` | — |
+| **Ingestion** | Dedicated MemoryAgent LLM pass extracts facts from each conversation turn (cursor-tracked; skips job/a2a channels) | — |
 
 ### Jobs & Scheduling
 
@@ -208,7 +227,7 @@ TODO: Put total file size, ram usage, etc. stats here
 | **Timezone** | System local | IANA timezone with croner expression cache |
 | **Stagger** | Random jitter per schedule | Deterministic SHA256-based offset (stable per job) |
 | **Run types** | `CommandRun` (shell command), `AgentRun` (send message to agent) | `SystemEvent` (broadcast to session), `AgentTurn` (isolated agent run) |
-| **Delivery** | announce (channel post), webhook (HTTP POST), none | announce, webhook, none, plus failure destination channel |
+| **Delivery** | announce (channel post), webhook (HTTP POST), none; agent output can include `[NO_REPLY]` to suppress or `[SUMMARIZE]` to route through a summarizer agent first | announce, webhook, none; separate failure destination channel |
 | **Prompt composition** | Granular `include_*` flags per job: personality, identity, memory, tools, skills, files, model override | Lightweight context flag (`lightContext`) |
 | **Storage** | Per-agent `jobs.yaml` + per-job JSONL run history | Central `cron/jobs.json` (JSON5 with comments) |
 | **Failure handling** | Max retries + consecutive error alerts | Auto-disable after 3 schedule errors + alert threshold |
@@ -258,7 +277,7 @@ TODO: Put total file size, ram usage, etc. stats here
 
 | | PyClawOps | OpenClaw |
 |---|---|---|
-| **Terminal UI** | Yes — Textual dashboard (chat, agents, sessions, logs, status) | No |
+| **Terminal UI** | Yes — Textual dashboard (chat, agents, sessions, logs, status bar) | Yes — custom pi-tui client (live chat, slash commands, status bar, token counter, streaming) |
 | **Web UI** | No | Yes — Control UI served by gateway at `/` |
 
 ---
@@ -267,7 +286,7 @@ TODO: Put total file size, ram usage, etc. stats here
 
 - **Skill format**: `SKILL.md` with YAML frontmatter — same concept and file name.
 - **Cron syntax**: 5-field cron expressions with timezone support.
-- **Core philosophy**: one always-active session per agent, channels as routing metadata, skills as injected context.
+- **Core philosophy**: skills as injected context, channels as metadata-carrying transport, jobs with delivery targeting, hook events at gateway lifecycle points.
 - **Session history import**: `pyclawops import-openclaw` converts OpenClaw JSONL session transcripts to FastAgent history format.
 
 ---
