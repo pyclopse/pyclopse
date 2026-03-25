@@ -1715,7 +1715,8 @@ class GatewayDashboard(App):
         if am:
             agents = list(am.agents.keys())
         if not agents:
-            agents = ["(no agents)"]
+            agent_tabs.add_tab(Tab("(no agents)", id="agent-none"))
+            return
         for agent_id in agents:
             agent_tabs.add_tab(Tab(agent_id, id=f"agent-{agent_id}"))
         if agents:
