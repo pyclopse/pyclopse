@@ -1,8 +1,8 @@
 # PyClawOps
 
-**PyClawOps** is a modular AI agent gateway written in Python. It connects one or more LLM agents — powered by [FastAgent](https://github.com/evalstate/fast-agent) — to messaging channels (Telegram, Slack, TUI, HTTP), tools (via MCP), long-term memory, scheduled jobs, and an extensible hook system. All subsystems are wired together by a central **Gateway** process.
+**PyClawOps** (Pronouced "Pyclopse") is a modular AI agent gateway written in Python. It connects one or more LLM agents — powered by under the hood by the excellent [FastAgent](https://github.com/evalstate/fast-agent) library — to messaging channels (Telegram, Slack, TUI, HTTP), tools (via MCP), long-term memory, scheduled jobs, and an extensible hook system. All subsystems are wired together by a central **Gateway** process.
 
-pyclawops is inspired by [OpenClaw](https://github.com/jondecker76/openclaw) but is a ground-up Python rewrite with its own architecture, idioms, and feature set. See [pyclawops vs OpenClaw](#pyclawops-vs-openclaw) for a detailed comparison.
+PyClawOps is inspired by [OpenClaw](https://github.com/openclaw/openclaw) but is a ground-up Python rewrite with its own architecture, idioms, and feature set. See [PyClawOps vs OpenClaw](#pyclawops-vs-openclaw) for a detailed comparison.
 
 ---
 
@@ -44,7 +44,7 @@ pyclawops is inspired by [OpenClaw](https://github.com/jondecker76/openclaw) but
 
 ### Prerequisites
 
-- Python 3.11+
+- Python 3.13+
 - [uv](https://docs.astral.sh/uv/) — `curl -LsSf https://astral.sh/uv/install.sh | sh`
 - At least one LLM provider API key (Anthropic, OpenAI, MiniMax, etc.)
 
@@ -111,8 +111,9 @@ pyclawops stores all runtime data under `~/.pyclawops/`:
 
 ```
 ~/.pyclawops/
-├── config.yaml                    ← main config
-├── logs/pyclawops.log                ← gateway log (daily rotation)
+├── config
+|   ├── pyclawops.yaml             ← main config
+├── logs/pyclawops.log             ← gateway log (daily rotation)
 ├── agents/{agent_id}/
 │   ├── active_session             ← pointer to current session ID
 │   ├── sessions/{YYYY-MM-DD}-{6}/
@@ -132,7 +133,7 @@ pyclawops stores all runtime data under `~/.pyclawops/`:
 
 ## PyClawOps vs OpenClaw
 
-PyClawOps is **not** a port of OpenClaw. It is an independent Python rewrite inspired by OpenClaw's design philosophy. Both are multi-channel AI agent gateways — the differences are substantial.
+PyClawOps is **not** a port of OpenClaw. It is an independent Python rewrite inspired by OpenClaw's design philosophy. Both are multi-channel AI agent gateways — but the differences are substantial.
 
 ### Language & Agent Framework
 
@@ -141,8 +142,22 @@ PyClawOps is **not** a port of OpenClaw. It is an independent Python rewrite ins
 | **Language** | Python 3.13.5+ (asyncio) | TypeScript (Node.js) |
 | **Package manager** | uv | pnpm |
 | **Agent framework** | [FastAgent](https://github.com/evalstate/fast-agent) (`fast-agent-mcp`) | [PI Framework](https://github.com/mariozechner/pi) (`@mariozechner/pi-agent-core`, `pi-ai`, `pi-coding-agent`) |
-| **LLM providers** | Anthropic, OpenAI, Ollama, MiniMax, VolcEngine, xAI, Bedrock, and any OpenAI-compatible endpoint | Anthropic, OpenAI, Gemini, Ollama, MiniMax, VolcEngine, xAI, Bedrock, Moonshot — via PI's per-provider `StreamFn` wrappers |
-| **Reasoning/thinking** | Delegated to FastAgent; `show_thinking` flag controls display | Explicit levels (FULL, EXTENDED, BASIC, OFF) controlled per session by PI |
+| **LLM providers** | All providers supported by FastAgent | All providers supported by PI `StreamFn` wrappers |
+
+### System Resource usage
+TODO: Put total file size, ram usage, etc. stats here
+
+### Design Philosophy
+| | PyClawOps | OpenClaw |
+|---|---|---|
+|**Sessions**|Only one active session per agent, accessible via different communication channels|Each channel gets it's own session|
+|**Concurrency**|Number of concurrent API calls configurable per model.  Made to work well with coding plans that have concurrency limits.| Lane system which is sequential - one agent's calls block other agents|
+|**Scheduling**|Unified Jobs system handles Cron, SubAgents and ____|Separate Cron, SubAgent and _____ systems|
+|**Memory**|Full Obsidian compatible vault system with QMD support|Basic markdown files with cosine similarity search|
+|**Self Awareness**|Built-in reflection system allows agent's to inspect how the system works.  This is useful for having agents help you self improve your setup.|No self reflection system built in|
+|**Plugins**|Full plugin system supporting HTTP,binary and _____|Full plugin system supporing only ________|
+|**Debugging**|Excellent methods to inspect internal state.  Use the gateway TUI to manage agents, look at their generated system prompt, look at logs, etc. Additionally, agents can be configured to show their thinking text, have notifications delivered to different channels when jobs start and stop, have injected memory sources added to responses.  Very easy to see and understand internal state|?Very limited in this regard?? TODO: follow up on this|
+|**A2A Support**|Full A2A support|No A2A support|
 
 ### MCP
 
