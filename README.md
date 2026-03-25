@@ -1,6 +1,6 @@
-# pyclawops
+# PyClawOps
 
-**pyclawops** is a modular AI agent gateway written in Python. It connects one or more LLM agents — powered by [FastAgent](https://github.com/evalstate/fast-agent) — to messaging channels (Telegram, Slack, TUI, HTTP), tools (via MCP), long-term memory, scheduled jobs, and an extensible hook system. All subsystems are wired together by a central **Gateway** process.
+**PyClawOps** is a modular AI agent gateway written in Python. It connects one or more LLM agents — powered by [FastAgent](https://github.com/evalstate/fast-agent) — to messaging channels (Telegram, Slack, TUI, HTTP), tools (via MCP), long-term memory, scheduled jobs, and an extensible hook system. All subsystems are wired together by a central **Gateway** process.
 
 pyclawops is inspired by [OpenClaw](https://github.com/jondecker76/openclaw) but is a ground-up Python rewrite with its own architecture, idioms, and feature set. See [pyclawops vs OpenClaw](#pyclawops-vs-openclaw) for a detailed comparison.
 
