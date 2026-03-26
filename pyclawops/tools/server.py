@@ -2505,8 +2505,8 @@ def reflect_source(module: str) -> str:
         reflect_source('hooks/registry.py')
         reflect_source('reflect/registry.py')
     """
-    from pyclawops.self.loader import DocLoader
-    return DocLoader().source(module)
+    from pyclawops.reflect import source_file
+    return source_file(module)
 
 
 # ---------------------------------------------------------------------------

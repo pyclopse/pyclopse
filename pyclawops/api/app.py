@@ -14,7 +14,7 @@ from .routes import tools as tools_routes
 from .routes import health as health_routes
 from .routes import hooks as hooks_routes
 from .routes import subagents as subagents_routes
-from .routes import self_ as self_routes
+from .routes import reflect as reflect_routes
 
 logger = logging.getLogger("pyclawops.api")
 
@@ -124,7 +124,7 @@ def create_app(gateway: Optional[Any] = None) -> FastAPI:
     app.include_router(todos_routes.router, prefix="/api/v1/todos", tags=["todos"])
     app.include_router(hooks_routes.router, prefix="/api/v1/hooks", tags=["hooks"])
     app.include_router(subagents_routes.router, prefix="/api/v1/subagents", tags=["subagents"])
-    app.include_router(self_routes.router, prefix="/api/v1/self", tags=["self"])
+    app.include_router(reflect_routes.router, prefix="/api/v1/reflect", tags=["reflect"])
 
     # Health check
     @app.get("/health")

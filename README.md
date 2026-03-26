@@ -66,7 +66,7 @@ uv tool uninstall pyclawops
 ### Development install
 
 ```bash
-git clone git@github.com:jondecker76/pyclawops.git
+git clone https://github.com/jondecker76/pyclawops.git
 cd pyclawops
 uv sync
 uv run python -m pyclawops run
@@ -161,7 +161,18 @@ PyClawOps is **not** a port of OpenClaw. It is an independent Python rewrite ins
 | **LLM providers** | All providers supported by FastAgent | All providers supported by PI `StreamFn` wrappers |
 
 ### System Resource usage
-TODO: Put total file size, ram usage, etc. stats here
+
+| | PyClawOps | OpenClaw |
+|---|---|---|
+| **Runtime** | Python 3.13+ (asyncio) | Node.js (TypeScript) |
+| **Production install size** | ~371 MB (.venv incl. dev deps) | ~500 MB (npm install, prod deps + dist) |
+| **Dev checkout size** | ~376 MB (source + .venv) | ~1.4 GB (node_modules alone); ~3.4 GB full checkout |
+| **Source size** | ~4.8 MB | ~13 MB (compiled dist) |
+| **Declared dependencies** | 23 runtime + 5 dev | 57 runtime + 21 dev |
+| **Locked/installed packages** | 112 locked / 165 installed | 14,374-line pnpm lockfile |
+| **Idle RAM** | ~347 MB (measured; 4 agents, TUI, both servers) | ~300–500 MB base (third-party estimates) |
+| **Minimum RAM (per docs)** | — | 512 MB–1 GB |
+| **Recommended RAM (per docs)** | — | 2 GB+ |
 
 ### Design Philosophy
 | | PyClawOps | OpenClaw |
@@ -1406,4 +1417,4 @@ uv run pytest tests/test_commands.py::test_help_command -v
 
 Always use `uv run` — never `.venv/bin/pytest` or bare `python`.
 
-OpenClaw source at `~/github/openclaw` can be useful as a design reference for features whose intent isn't clear from the pyclawops codebase alone, but do not mirror its implementation directly.
+The [OpenClaw source](https://github.com/openclaw/openclaw) can be useful as a design reference for features whose intent isn't clear from the pyclawops codebase alone, but do not mirror its implementation directly.

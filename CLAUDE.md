@@ -31,7 +31,7 @@ Always use `uv run` — never `.venv/bin/pytest` or bare `python`.
 
 ## Background
 
-pyclawops is loosely inspired by **OpenClaw**, a TypeScript-based gateway project. It is **not** a port or 1:1 clone — pyclawops uses its own architecture, naming conventions, and Python idioms. When working on a feature that isn't clear from the pyclawops codebase alone, the OpenClaw source at `~/github/openclaw` can be a useful reference for understanding the original intent or design, but do not mirror its implementation directly.
+pyclawops is loosely inspired by **OpenClaw**, a TypeScript-based gateway project. It is **not** a port or 1:1 clone — pyclawops uses its own architecture, naming conventions, and Python idioms. When working on a feature that isn't clear from the pyclawops codebase alone, the OpenClaw source at https://github.com/openclaw/openclaw can be a useful reference for understanding the original intent or design, but do not mirror its implementation directly.
 
 ## Architecture
 
@@ -141,29 +141,24 @@ FastAgent reads this from CWD or `~/.pyclawops/`. It defines MCP server connecti
 
 ### Installation, Updates, and Removal
 
-pyclawops is distributed as a `uv tool` installed from the GitHub repo. All install/update/remove operations use `uv tool` with the HTTPS GitHub URL (`https://github.com/jondecker76/pyclawops.git`). No SSH key is required for installation or updates.
+pyclawops is distributed via PyPI as a `uv tool`.
 
-**First-time install** — requires `uv` and SSH access to GitHub:
+**Install:**
 ```bash
-bash <(curl -fsSL https://raw.githubusercontent.com/jondecker76/pyclawops/main/install.sh)
-```
-`install.sh` checks for `uv` (installs it if missing), finds the latest stable tag via `git ls-remote`, then runs `uv tool install`. After install, run `pyclawops init` to create `~/.pyclawops/config.yaml`.
-
-Optional install flags:
-```bash
-bash install.sh --beta             # install latest from main instead
-bash install.sh --version 0.2.0   # install a specific version
+uv tool install pyclawops
 ```
 
-**Updates** — run from the installed `pyclawops` binary:
+**Update:**
 ```bash
-pyclawops update                   # latest stable tagged release
-pyclawops update --beta            # latest commit from main (unstable)
-pyclawops update --version 0.2.0   # specific version
+uv tool upgrade pyclawops
 ```
-Updates never touch `~/.pyclawops/` — config, sessions, memory, and jobs are always preserved.
 
-**Removal:**
+**Uninstall:**
+```bash
+uv tool uninstall pyclawops
+```
+
+**Removal (including data):**
 ```bash
 pyclawops uninstall          # removes the binary; prompts whether to delete ~/.pyclawops/
 pyclawops uninstall --purge  # removes binary + ~/.pyclawops/ without prompting

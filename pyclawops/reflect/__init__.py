@@ -23,6 +23,7 @@ Usage::
 
 from .decorators import reflect_system, reflect_event, reflect_command
 from .registry import get_registry, query
+from .source import source_file
 
 
 @reflect_system("reflection")
@@ -71,4 +72,5 @@ __all__ = [
     "reflect_command",
     "get_registry",
     "query",
+    "source_file",
 ]
