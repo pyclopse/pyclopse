@@ -88,10 +88,6 @@ fast = FastAgent(self.agent_name, quiet=True, parse_cli_args=False)
 
 `quiet=True` modifies the config dict before any display objects are created and explicitly stops the progress display. It sets `show_chat=False`, `show_tools=False`, and `progress_display=False` in the live settings object.
 
-**Why `fastagent.config.yaml` alone is not enough:**
-
-FastAgent reads `fastagent.config.yaml` from the current working directory (walking up to parents). When pyclawops is run from a directory that already contains a `fastagent.config.yaml` (e.g. the project root during development), that file takes precedence over `~/.pyclawops/fastagent.config.yaml`. Any logger settings in the user config are silently ignored.
-
 **Why `update_global_settings()` alone is not enough:**
 
 `update_global_settings()` replaces the global `_settings` singleton, but FastAgent reads and caches settings during `FastAgent.__init__()` before `update_global_settings()` has a chance to run in a typical call sequence.

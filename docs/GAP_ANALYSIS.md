@@ -215,7 +215,7 @@ These are FastAgent settings that have no corresponding PyClawOps schema field:
 ## Provider Auth Chain (not gateway auth)
 
 OC `auth.profiles` — how the gateway authenticates to LLM providers. FastAgent already
-handles multi-provider auth via `fastagent.config.yaml`. This is a config UX gap, not
+handles multi-provider auth programmatically via `AgentRunner._build_fa_settings()`. This is a config UX gap, not
 a functional one — PyClawOps exposes providers via `providers:` block.
 
 | Status | Feature | Notes |

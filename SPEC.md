@@ -1259,30 +1259,7 @@ async def main():
 
 #### 7.4.4 MCP Integration
 
-FastAgent uses `fastagent.config.yaml` for MCP server configuration:
-
-```yaml
-# fastagent.config.yaml
-mcp:
-  servers:
-    fetch:
-      command: npx
-      args: ["-y", "@modelcontextprotocol/server-filesystem", "/path/to/files"]
-    
-    time:
-      command: uvx
-      args: ["mcp-server-time", "--local-timezone", "America/New_York"]
-      
-    # HTTP/SSE servers with OAuth
-    remote:
-      transport: http
-      url: http://localhost:8001/mcp
-      auth:
-        oauth: true
-        redirect_port: 3030
-      ping_interval_seconds: 30
-      max_missed_pings: 3
-```
+FastAgent MCP server configuration is built programmatically by `AgentRunner._build_fa_settings()` from the pyclawops config — no `fastagent.config.yaml` file is used or needed.
 
 #### 7.4.5 YAML Configuration for pyclawops Agents
 
@@ -1323,7 +1300,6 @@ agents:
     agents: [ny_manager, london_manager]
 
 workflows:
-  config_path: "~/.pyclawops/fastagent.config.yaml"
   default_agent: main
 ```
 
@@ -1337,8 +1313,7 @@ from typing import Dict, Any, Optional, List
 class FastAgentFactory:
     """Factory for creating FastAgent instances from config."""
     
-    def __init__(self, config_path: str = "fastagent.config.yaml"):
-        self.config_path = config_path
+    def __init__(self):
         self._app = None
     
     def create_agent(

@@ -503,7 +503,7 @@ agents:
 - `minimax/MiniMax-M2.7`
 - `generic/my-local-model`
 
-**Built-in MCP servers** (`mcp_servers`): `pyclawops`, `fetch`, `time`, `filesystem`, `chrome-devtools`. Custom MCP servers are defined in `fastagent.config.yaml`.
+**Built-in MCP servers** (`mcp_servers`): `pyclawops`, `fetch`, `time`, `filesystem`, `chrome-devtools`. Custom MCP servers can be added by extending the agent config.
 
 ---
 

@@ -96,7 +96,7 @@ def my_tool(...) -> str: ...
 
 It is started via `mcp.run_http_async(host=host, port=port)` — FastMCP internally manages uvicorn, the ASGI app, and the MCP protocol. **Never replace this with direct uvicorn calls or `mcp.http_app()` + manual uvicorn.** If you need to shut it down, cancel the asyncio task (FastMCP handles the rest); suppress the expected log noise in `stop_mcp_server()` rather than taking over the server lifecycle.
 
-FastAgent is an MCP **client** — it connects to MCP servers to use their tools but does not host servers. `fastagent.config.yaml` tells FastAgent where to connect; the gateway is responsible for ensuring those servers are running first.
+FastAgent is an MCP **client** — it connects to MCP servers to use their tools but does not host servers. FastAgent is configured entirely programmatically via `AgentRunner._build_fa_settings()` — there is no `fastagent.config.yaml` file. The gateway is responsible for ensuring MCP servers are running before agents initialize.
 
 - **MCP server (8081)** — `pyclawops/tools/server.py` — FastMCP app; this is what FastAgent connects to for tool calls
 - **REST API (8080)** — `pyclawops/api/app.py` — FastAPI/uvicorn app (we do own this one); MCP tools call it internally via `_jobs_api()`, `_todos_api()`, `_config_api()`; also exposed externally at `/docs`
@@ -135,9 +135,6 @@ Channel plugins implement `ChannelPlugin` ABC from `pyclawops/channels/plugin.py
 
 Hooks fire on gateway events (`gateway:startup`, `message:received`, `command:reset`, etc.). Bundled hooks: `session-memory` (writes conversation history to memory on reset), `boot-md` (injects `BOOT.md` from `~/.pyclawops/BOOT.md` or `~/BOOT.md` into agent context at startup). Custom hooks are Python scripts registered in config.
 
-### fastagent.config.yaml
-
-FastAgent reads this from CWD or `~/.pyclawops/`. It defines MCP server connections: `pyclawops` (HTTP, port 8081), `fetch`, `time`, `filesystem`. The gateway injects `X-Agent-Name` into the `pyclawops` server headers so tools can identify the calling agent.
 
 ### Installation, Updates, and Removal
 

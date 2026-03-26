@@ -253,7 +253,7 @@ async def usage_logger(ctx: HookContext) -> None:
 First-class Anthropic-side web search and web fetch, configured per provider — no subprocess or external
 MCP server required. Replaces `mcp-server-fetch`.
 
-### FastAgent config (`fastagent.config.yaml` or `Settings`)
+### FastAgent config (via `AgentRunner._build_fa_settings()`)
 ```yaml
 anthropic:
   web_search:
@@ -285,7 +285,7 @@ anthropic_settings = AnthropicSettings(
 ### PyClawOps integration points
 - `pyclawops/agents/runner.py` `_build_fa_settings()` — add web_search/web_fetch to AnthropicSettings when configured
 - `pyclawops/config/schema.py` — add `web_search: bool` and `web_fetch: bool` (or full settings) to `AgentConfig`
-- `fastagent.config.yaml` — update example config
+- `_build_fa_settings()` — update Settings construction
 - Allows removing `fetch` from default MCP servers for Anthropic-backed agents
 
 ---
@@ -387,7 +387,7 @@ otel:
 ### PyClawOps integration points
 - `pyclawops/agents/runner.py` `_build_fa_settings()` — populate `OpenTelemetrySettings` from pyclawops config
 - `pyclawops/config/schema.py` — add `ObservabilityConfig` block with `otel_enabled`, `otlp_endpoint`
-- `fastagent.config.yaml` — add commented-out example block
+- `_build_fa_settings()` — add example block
 
 ---
 
@@ -522,7 +522,7 @@ async def my_handler(request: HumanInputRequest) -> HumanInputResponse:
 ## Feature 15: `model_aliases` in Settings
 
 ### What it is
-Namespace-scoped model aliases defined in `fastagent.config.yaml` (or `Settings`). Let you refer to
+Namespace-scoped model aliases defined in ``Settings` (built by `_build_fa_settings()`). Let you refer to
 models by short names within a project without hardcoding full provider strings everywhere.
 
 ### FastAgent config
@@ -534,7 +534,7 @@ model_aliases:
 ```
 
 ### PyClawOps integration points
-- `fastagent.config.yaml` — add `model_aliases` block for PyClawOps's standard model tiers
+- `_build_fa_settings()` — add model_aliases to Settings for standard model tiers
 - `pyclawops/agents/runner.py` `_build_fa_settings()` — populate `model_aliases` from pyclawops config
 - `pyclawops/config/schema.py` — add `model_aliases: Optional[Dict[str, str]]` to gateway config
 

@@ -390,7 +390,7 @@ class AgentRunner:
         parallel_tool_calls (Optional[bool]): Whether to allow parallel tool calls.
         streaming_timeout (Optional[float]): Per-chunk streaming timeout in seconds.
         request_params (Dict[str, Any]): Extra provider-specific request parameters.
-        servers (List[str]): MCP server names from fastagent.config.yaml.
+        servers (List[str]): MCP server names to connect to (configured programmatically).
         tools_config (Dict[str, Any]): Tool allowlist/denylist config.
         show_thinking (bool): If False, strip ``<thinking>`` blocks before returning.
         api_key (Optional[str]): Provider API key override.
@@ -517,7 +517,7 @@ class AgentRunner:
         self.streaming_timeout = streaming_timeout
         # Extra request params from config (provider-specific + FA params)
         self.request_params: Dict[str, Any] = request_params or {}
-        # servers = list of MCP server names from fastagent.config.yaml
+        # servers = list of MCP server names (configured programmatically via _build_fa_settings)
         self.servers: List[str] = list(_DEFAULT_SERVERS) if servers is None else servers
         self.tools_config = tools_config or {}
         # When False, <thinking>…</thinking> blocks are stripped before returning

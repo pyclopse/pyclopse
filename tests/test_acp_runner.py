@@ -110,15 +110,14 @@ def _run(coro, timeout: float):
 class TestAcpRunnerFastAgent:
     """Tests using fast-agent-acp with MiniMax as the ACP subprocess."""
 
-    # fast-agent-acp needs to find fastagent.config.yaml; use the user's
-    # ~/.pyclawops/ config dir (symlinked from there) or the project root.
+    # fast-agent-acp is a standalone subprocess that needs its own fastagent.config.yaml
+    # to locate MCP servers. Use the user's ~/.pyclawops/ config dir if it has one.
     FA_CONFIG = str(
         next(
             (
                 p
                 for p in [
                     Path.home() / ".pyclawops" / "fastagent.config.yaml",
-                    Path("/Volumes/ai_models/mac_data/localai/github/pyclawops/fastagent.config.yaml"),
                 ]
                 if p.exists()
             ),
