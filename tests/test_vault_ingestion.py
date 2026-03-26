@@ -8,10 +8,10 @@ from pathlib import Path
 
 import pytest
 
-from pyclawops.memory.vault.agent import MockMemoryAgent
-from pyclawops.memory.vault.cursor import CursorStore
-from pyclawops.memory.vault.ingestion import IngestionHandler
-from pyclawops.memory.vault.models import (
+from pyclopse.memory.vault.agent import MockMemoryAgent
+from pyclopse.memory.vault.cursor import CursorStore
+from pyclopse.memory.vault.ingestion import IngestionHandler
+from pyclopse.memory.vault.models import (
     ExtractionAction,
     ExtractionResult,
     FactExtraction,
@@ -20,10 +20,10 @@ from pyclawops.memory.vault.models import (
     VaultFact,
     VaultFactState,
 )
-from pyclawops.memory.vault.registry import TypeSchemaRegistry
-from pyclawops.memory.vault.search import FallbackSearchBackend
-from pyclawops.memory.vault.store import VaultStore
-from pyclawops.memory.vault.ulid import generate as gen_ulid
+from pyclopse.memory.vault.registry import TypeSchemaRegistry
+from pyclopse.memory.vault.search import FallbackSearchBackend
+from pyclopse.memory.vault.store import VaultStore
+from pyclopse.memory.vault.ulid import generate as gen_ulid
 
 
 def make_handler(

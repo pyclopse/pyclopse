@@ -26,8 +26,8 @@ def _make_gateway(
     global_denied=None,
 ):
     """Gateway stub with configurable allowlist/denylist."""
-    from pyclawops.core.gateway import Gateway
-    from pyclawops.config.schema import (
+    from pyclopse.core.gateway import Gateway
+    from pyclopse.config.schema import (
         Config, ChannelsConfig, TelegramConfig, AgentsConfig, SecurityConfig,
     )
 

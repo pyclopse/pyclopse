@@ -1,6 +1,6 @@
-# FastAgent Features — PyClawOps Implementation Guide
+# FastAgent Features — Pyclopse Implementation Guide
 
-This document captures FastAgent capabilities that PyClawOps does not yet use, researched in full against
+This document captures FastAgent capabilities that Pyclopse does not yet use, researched in full against
 `~/github/fastagent` source and the installed venv. Each section is self-contained so it can be picked
 up as an independent implementation task.
 
@@ -8,7 +8,7 @@ up as an independent implementation task.
 
 ## Currently Used (Baseline)
 
-PyClawOps uses these FastAgent features today:
+Pyclopse uses these FastAgent features today:
 
 | Feature | Where |
 |---|---|
@@ -61,9 +61,9 @@ plan_type: full               # full | iterative
 plan_iterations: 5
 ```
 
-### PyClawOps integration points
-- `pyclawops/agents/factory.py` — add `orchestrator` and `iterative_planner` cases to `_build_workflow()`
-- `pyclawops/config/schema.py` — add `plan_type: Optional[str]` and `plan_iterations: Optional[int]` to `AgentConfig`
+### Pyclopse integration points
+- `pyclopse/agents/factory.py` — add `orchestrator` and `iterative_planner` cases to `_build_workflow()`
+- `pyclopse/config/schema.py` — add `plan_type: Optional[str]` and `plan_iterations: Optional[int]` to `AgentConfig`
 - Tests: `tests/test_fa_model_settings.py` or new `tests/test_orchestrator_workflow.py`
 
 ### Key difference from router
@@ -102,11 +102,11 @@ max_refinements: 3
 refinement_instruction: "Improve based on feedback."
 ```
 
-### PyClawOps integration points
-- `pyclawops/agents/factory.py` — add `evaluator_optimizer` case
-- `pyclawops/config/schema.py` — add `generator`, `evaluator`, `min_rating`, `max_refinements`, `refinement_instruction` fields
+### Pyclopse integration points
+- `pyclopse/agents/factory.py` — add `evaluator_optimizer` case
+- `pyclopse/config/schema.py` — add `generator`, `evaluator`, `min_rating`, `max_refinements`, `refinement_instruction` fields
 
-### Use cases in PyClawOps
+### Use cases in Pyclopse
 - Job outputs that need quality gating before delivery
 - Agent responses that benefit from self-critique (long-form writing, code review)
 
@@ -140,9 +140,9 @@ max_samples: 50
 match_strategy: normalized
 ```
 
-### PyClawOps integration points
-- `pyclawops/agents/factory.py` — currently listed as legacy, should be a first-class `workflow:` value
-- `pyclawops/config/schema.py` — add `k`, `max_samples`, `match_strategy`, `red_flag_max_length`
+### Pyclopse integration points
+- `pyclopse/agents/factory.py` — currently listed as legacy, should be a first-class `workflow:` value
+- `pyclopse/config/schema.py` — add `k`, `max_samples`, `match_strategy`, `red_flag_max_length`
 
 ---
 
@@ -173,9 +173,9 @@ Or at the agent level:
 )
 ```
 
-### PyClawOps integration points
+### Pyclopse integration points
 - `AgentRunner.run()` / `run_stream()` — pass optional `response_format` parameter through to FA
-- `pyclawops/config/schema.py` — `request_params` already accepts arbitrary dicts; could add typed `response_schema` field
+- `pyclopse/config/schema.py` — `request_params` already accepts arbitrary dicts; could add typed `response_schema` field
 - Immediate use: job status tool responses, config validation responses
 
 ---
@@ -199,9 +199,9 @@ def get_weather(city: str) -> str:
 async def assistant(): pass
 ```
 
-### PyClawOps integration points
-- `pyclawops/agents/runner.py` — pass `function_tools` list to `@fast.agent()` decorator in `initialize()`
-- `pyclawops/config/schema.py` — add `function_tools: Optional[List[str]]` (string specs) to `AgentConfig`
+### Pyclopse integration points
+- `pyclopse/agents/runner.py` — pass `function_tools` list to `@fast.agent()` decorator in `initialize()`
+- `pyclopse/config/schema.py` — add `function_tools: Optional[List[str]]` (string specs) to `AgentConfig`
 - Use case: lightweight per-agent utilities that don't belong in the global MCP server
 
 ---
@@ -209,7 +209,7 @@ async def assistant(): pass
 ## Feature 6: FastAgent Tool Hooks
 
 ### What it is
-FastAgent's native per-turn hook system, providing rich execution context that PyClawOps's own hook system
+FastAgent's native per-turn hook system, providing rich execution context that Pyclopse's own hook system
 doesn't have. Hooks fire on `before_llm_call`, `after_llm_call`, and `after_turn_complete`.
 
 ### FastAgent API
@@ -240,9 +240,9 @@ async def usage_logger(ctx: HookContext) -> None:
 - `request_params` — live LLM parameters
 - `agent_registry` — access other agents
 
-### PyClawOps integration points
-- `pyclawops/agents/runner.py` — wire token usage from `HookContext.usage` back into `gateway._usage`
-- Could replace or augment `pyclawops/hooks/events.py` for per-turn callbacks
+### Pyclopse integration points
+- `pyclopse/agents/runner.py` — wire token usage from `HookContext.usage` back into `gateway._usage`
+- Could replace or augment `pyclopse/hooks/events.py` for per-turn callbacks
 - Useful for: per-turn token tracking, rate limiting, audit logging
 
 ---
@@ -282,9 +282,9 @@ anthropic_settings = AnthropicSettings(
 )
 ```
 
-### PyClawOps integration points
-- `pyclawops/agents/runner.py` `_build_fa_settings()` — add web_search/web_fetch to AnthropicSettings when configured
-- `pyclawops/config/schema.py` — add `web_search: bool` and `web_fetch: bool` (or full settings) to `AgentConfig`
+### Pyclopse integration points
+- `pyclopse/agents/runner.py` `_build_fa_settings()` — add web_search/web_fetch to AnthropicSettings when configured
+- `pyclopse/config/schema.py` — add `web_search: bool` and `web_fetch: bool` (or full settings) to `AgentConfig`
 - `_build_fa_settings()` — update Settings construction
 - Allows removing `fetch` from default MCP servers for Anthropic-backed agents
 
@@ -309,13 +309,13 @@ is first used, keeping instruction definitions clean and declarative.
 @fast.agent(
     instruction="""
     You are a helpful assistant. Today is {{currentDate}}.
-    Project guidelines: {{file:~/.pyclawops/GUIDELINES.md}}
+    Project guidelines: {{file:~/.pyclopse/GUIDELINES.md}}
     """,
 )
 ```
 
-### PyClawOps integration points
-- `pyclawops/core/prompt_builder.py` — currently builds instructions manually; could delegate token
+### Pyclopse integration points
+- `pyclopse/core/prompt_builder.py` — currently builds instructions manually; could delegate token
   substitution to FastAgent by passing raw template strings with `{{}}` tokens instead of
   pre-resolving them in Python
 - `{{file:}}` token is equivalent to the `boot-md` hook today — could simplify that hook
@@ -336,9 +336,9 @@ anthropic:
   cache_ttl: 5m         # "5m" | "1h"
 ```
 
-### PyClawOps integration points
-- `pyclawops/agents/runner.py` `_build_fa_settings()` — expose `cache_mode` via `AnthropicSettings`
-- `pyclawops/config/schema.py` — add `cache_mode: Optional[str]` to provider config or `AgentConfig`
+### Pyclopse integration points
+- `pyclopse/agents/runner.py` `_build_fa_settings()` — expose `cache_mode` via `AnthropicSettings`
+- `pyclopse/config/schema.py` — add `cache_mode: Optional[str]` to provider config or `AgentConfig`
 - FastAgent likely defaults to `"auto"` already; explicit config lets us tune per-agent
 
 ---
@@ -358,14 +358,14 @@ final responses.
 )
 ```
 
-### PyClawOps notes
-PyClawOps currently does its own manual history trimming in `_trim_history_for_save()` and
+### Pyclopse notes
+Pyclopse currently does its own manual history trimming in `_trim_history_for_save()` and
 `_purge_corrupted_pairs()`. The FA-native flag operates at inference time (not at save time), so
 these are complementary rather than duplicates.
 
-### PyClawOps integration points
-- `pyclawops/agents/runner.py` — add `trim_tool_history` to `RequestParams` construction when configured
-- `pyclawops/config/schema.py` — add `trim_tool_history: bool = False` to `AgentConfig`
+### Pyclopse integration points
+- `pyclopse/agents/runner.py` — add `trim_tool_history` to `RequestParams` construction when configured
+- `pyclopse/config/schema.py` — add `trim_tool_history: bool = False` to `AgentConfig`
 
 ---
 
@@ -379,14 +379,14 @@ tool call, with configurable OTLP export.
 ```yaml
 otel:
   enabled: true
-  service_name: pyclawops
+  service_name: pyclopse
   otlp_endpoint: http://localhost:4317
   console_debug: false
 ```
 
-### PyClawOps integration points
-- `pyclawops/agents/runner.py` `_build_fa_settings()` — populate `OpenTelemetrySettings` from pyclawops config
-- `pyclawops/config/schema.py` — add `ObservabilityConfig` block with `otel_enabled`, `otlp_endpoint`
+### Pyclopse integration points
+- `pyclopse/agents/runner.py` `_build_fa_settings()` — populate `OpenTelemetrySettings` from pyclopse config
+- `pyclopse/config/schema.py` — add `ObservabilityConfig` block with `otel_enabled`, `otlp_endpoint`
 - `_build_fa_settings()` — add example block
 
 ---
@@ -451,11 +451,11 @@ AgentCard(
 )
 ```
 
-### PyClawOps implementation plan
-1. **`pyclawops/a2a/executor.py`** — `PyclawA2AExecutor(AgentExecutor)` routing `execute()` → `gateway.dispatch()` or `agent_runner.run()`
-2. **`pyclawops/a2a/server.py`** — builds `A2AStarletteApplication` per configured agent, injects server URL
-3. **`pyclawops/core/gateway.py`** — start A2A server(s) in `run_gateway()` startup sequence (port 8082+)
-4. **`pyclawops/config/schema.py`** — add `a2a.enabled: bool`, `a2a.port: int = 8082`, `a2a.base_url: str` to config
+### Pyclopse implementation plan
+1. **`pyclopse/a2a/executor.py`** — `PyclawA2AExecutor(AgentExecutor)` routing `execute()` → `gateway.dispatch()` or `agent_runner.run()`
+2. **`pyclopse/a2a/server.py`** — builds `A2AStarletteApplication` per configured agent, injects server URL
+3. **`pyclopse/core/gateway.py`** — start A2A server(s) in `run_gateway()` startup sequence (port 8082+)
+4. **`pyclopse/config/schema.py`** — add `a2a.enabled: bool`, `a2a.port: int = 8082`, `a2a.base_url: str` to config
 5. **`__main__.py`** — add A2A server to startup sequence after MCP (8081) and REST (8080)
 
 ### Task store option
@@ -465,7 +465,7 @@ Use `InMemoryTaskStore` initially. Long-term: wire to `JobScheduler` for persist
 
 ## Feature 13: MCP Server Advanced Options (Unused)
 
-Several `MCPServerSettings` fields are available but not configured in PyClawOps:
+Several `MCPServerSettings` fields are available but not configured in Pyclopse:
 
 | Field | Default | What it does |
 |---|---|---|
@@ -479,10 +479,10 @@ Several `MCPServerSettings` fields are available but not configured in PyClawOps
 | `elicitation` | None | Forms UI mode (`"forms"` / `"auto-cancel"` / `"none"`) |
 | `experimental_session_advertise` | False | Advertise session test capability |
 
-### PyClawOps integration points
-- `pyclawops/agents/runner.py` `_build_fa_settings()` — wire `roots` to scope the `filesystem` server
+### Pyclopse integration points
+- `pyclopse/agents/runner.py` `_build_fa_settings()` — wire `roots` to scope the `filesystem` server
 - `ping_interval_seconds` / `max_missed_pings` — tune for long-running sessions
-- `include_instructions: False` on `pyclawops` server if its instructions are noisy
+- `include_instructions: False` on `pyclopse` server if its instructions are noisy
 
 ---
 
@@ -511,11 +511,11 @@ async def my_handler(request: HumanInputRequest) -> HumanInputResponse:
 @fast.agent(name="approver", human_input=True, elicitation_handler=my_handler)
 ```
 
-### PyClawOps integration points
-- `pyclawops/agents/runner.py` — pass `human_input=True` + `elicitation_handler=` when agent config enables it
-- `pyclawops/config/schema.py` — add `human_input: bool = False` to `AgentConfig`
+### Pyclopse integration points
+- `pyclopse/agents/runner.py` — pass `human_input=True` + `elicitation_handler=` when agent config enables it
+- `pyclopse/config/schema.py` — add `human_input: bool = False` to `AgentConfig`
 - Gateway needs a `ask_user()` bridge that sends a message to the originating channel and awaits reply
-- Currently PyClawOps uses ACP-based approval; FA's native human input is cleaner for in-conversation asks
+- Currently Pyclopse uses ACP-based approval; FA's native human input is cleaner for in-conversation asks
 
 ---
 
@@ -533,17 +533,17 @@ model_aliases:
   reason: anthropic.claude-opus-4-6.high
 ```
 
-### PyClawOps integration points
+### Pyclopse integration points
 - `_build_fa_settings()` — add model_aliases to Settings for standard model tiers
-- `pyclawops/agents/runner.py` `_build_fa_settings()` — populate `model_aliases` from pyclawops config
-- `pyclawops/config/schema.py` — add `model_aliases: Optional[Dict[str, str]]` to gateway config
+- `pyclopse/agents/runner.py` `_build_fa_settings()` — populate `model_aliases` from pyclopse config
+- `pyclopse/config/schema.py` — add `model_aliases: Optional[Dict[str, str]]` to gateway config
 
 ---
 
 ## Feature 16: `llm_retries`
 
 ### What it is
-Number of times FastAgent retries a failed LLM call before raising. Currently not configured in PyClawOps
+Number of times FastAgent retries a failed LLM call before raising. Currently not configured in Pyclopse
 (relies on FastAgent's default, which is likely 0 or 1).
 
 ### FastAgent config
@@ -551,9 +551,9 @@ Number of times FastAgent retries a failed LLM call before raising. Currently no
 llm_retries: 3
 ```
 
-### PyClawOps integration points
-- `pyclawops/agents/runner.py` `_build_fa_settings()` — set `llm_retries` from config
-- `pyclawops/config/schema.py` — add `llm_retries: int = 1` to `AgentConfig` or gateway config
+### Pyclopse integration points
+- `pyclopse/agents/runner.py` `_build_fa_settings()` — set `llm_retries` from config
+- `pyclopse/config/schema.py` — add `llm_retries: int = 1` to `AgentConfig` or gateway config
 
 ---
 
@@ -568,9 +568,9 @@ caller (`"passthrough"`). Passthrough is useful for agents that are themselves t
 RequestParams(tool_result_mode="passthrough")
 ```
 
-### PyClawOps integration points
-- `pyclawops/config/schema.py` — add `tool_result_mode: Optional[str]` to `AgentConfig`
-- `pyclawops/agents/runner.py` — pass through to `RequestParams`
+### Pyclopse integration points
+- `pyclopse/config/schema.py` — add `tool_result_mode: Optional[str]` to `AgentConfig`
+- `pyclopse/agents/runner.py` — pass through to `RequestParams`
 - Useful for sub-agents in chain/parallel workflows where the fan-in agent does the synthesis
 
 ---
@@ -594,8 +594,8 @@ await agent.send([
 ])
 ```
 
-### PyClawOps integration points
-- `pyclawops/core/gateway.py` — Telegram photo/document messages currently not forwarded to agents
+### Pyclopse integration points
+- `pyclopse/core/gateway.py` — Telegram photo/document messages currently not forwarded to agents
 - Would require channel plugins to produce structured content lists instead of plain strings
 - `AgentRunner.run()` signature would need to accept `list[str | ContentPart]` not just `str`
 

@@ -1,5 +1,5 @@
 """
-Tests for pyclawops/core/commands.py:
+Tests for pyclopse/core/commands.py:
   - CommandRegistry dispatch logic
   - Built-in commands: /help, /reset, /status, /model, /job delegation
 """
@@ -13,12 +13,12 @@ from unittest.mock import AsyncMock, MagicMock, patch
 # ---------------------------------------------------------------------------
 
 def _make_registry():
-    from pyclawops.core.commands import CommandRegistry
+    from pyclopse.core.commands import CommandRegistry
     return CommandRegistry()
 
 
 def _make_context(gateway=None, session=None, sender_id="u1", channel="test"):
-    from pyclawops.core.commands import CommandContext
+    from pyclopse.core.commands import CommandContext
     return CommandContext(
         gateway=gateway or MagicMock(),
         session=session,
@@ -153,7 +153,7 @@ class TestHelpCommand:
 
     @pytest.mark.asyncio
     async def test_help_lists_builtin_commands(self):
-        from pyclawops.core.commands import CommandRegistry, register_builtin_commands
+        from pyclopse.core.commands import CommandRegistry, register_builtin_commands
         reg = CommandRegistry()
         gw = _make_gateway_stub()
         register_builtin_commands(reg, gw)
@@ -174,7 +174,7 @@ class TestResetCommand:
 
     @pytest.mark.asyncio
     async def test_reset_returns_success_message(self):
-        from pyclawops.core.commands import CommandRegistry, register_builtin_commands
+        from pyclopse.core.commands import CommandRegistry, register_builtin_commands
         reg = CommandRegistry()
         gw = _make_gateway_stub()
         register_builtin_commands(reg, gw)
@@ -193,7 +193,7 @@ class TestResetCommand:
     @pytest.mark.asyncio
     async def test_reset_archives_history_files(self, tmp_path):
         """cmd_reset archives history.json into archived/ subdirectory."""
-        from pyclawops.core.commands import CommandRegistry, register_builtin_commands
+        from pyclopse.core.commands import CommandRegistry, register_builtin_commands
         reg = CommandRegistry()
         gw = _make_gateway_stub()
         register_builtin_commands(reg, gw)
@@ -219,7 +219,7 @@ class TestResetCommand:
 
     @pytest.mark.asyncio
     async def test_reset_no_session(self):
-        from pyclawops.core.commands import CommandRegistry, register_builtin_commands
+        from pyclopse.core.commands import CommandRegistry, register_builtin_commands
         reg = CommandRegistry()
         gw = _make_gateway_stub()
         register_builtin_commands(reg, gw)
@@ -236,13 +236,13 @@ class TestStatusCommand:
 
     @pytest.mark.asyncio
     async def test_status_includes_key_fields(self):
-        from pyclawops.core.commands import CommandRegistry, register_builtin_commands
+        from pyclopse.core.commands import CommandRegistry, register_builtin_commands
         reg = CommandRegistry()
         gw = _make_gateway_stub()
         register_builtin_commands(reg, gw)
         ctx = _make_context(gateway=gw)
         result = await reg.dispatch("/status", ctx)
-        assert "pyclawops" in result
+        assert "pyclopse" in result
         assert "Running" in result
         assert "Agents" in result
         assert "Sessions" in result
@@ -250,7 +250,7 @@ class TestStatusCommand:
 
     @pytest.mark.asyncio
     async def test_status_calls_get_status(self):
-        from pyclawops.core.commands import CommandRegistry, register_builtin_commands
+        from pyclopse.core.commands import CommandRegistry, register_builtin_commands
         reg = CommandRegistry()
         gw = _make_gateway_stub()
         register_builtin_commands(reg, gw)
@@ -273,7 +273,7 @@ class TestModelCommand:
 
     @pytest.mark.asyncio
     async def test_model_show_current_default(self):
-        from pyclawops.core.commands import CommandRegistry, register_builtin_commands
+        from pyclopse.core.commands import CommandRegistry, register_builtin_commands
         reg = CommandRegistry()
         gw = _make_gateway_stub()
         register_builtin_commands(reg, gw)
@@ -289,7 +289,7 @@ class TestModelCommand:
 
     @pytest.mark.asyncio
     async def test_model_show_override(self):
-        from pyclawops.core.commands import CommandRegistry, register_builtin_commands
+        from pyclopse.core.commands import CommandRegistry, register_builtin_commands
         reg = CommandRegistry()
         gw = _make_gateway_stub()
         register_builtin_commands(reg, gw)
@@ -305,7 +305,7 @@ class TestModelCommand:
 
     @pytest.mark.asyncio
     async def test_model_set_stores_override(self):
-        from pyclawops.core.commands import CommandRegistry, register_builtin_commands
+        from pyclopse.core.commands import CommandRegistry, register_builtin_commands
         reg = CommandRegistry()
         gw = _make_gateway_stub()
         register_builtin_commands(reg, gw)
@@ -321,7 +321,7 @@ class TestModelCommand:
 
     @pytest.mark.asyncio
     async def test_model_set_clears_session_runner(self):
-        from pyclawops.core.commands import CommandRegistry, register_builtin_commands
+        from pyclopse.core.commands import CommandRegistry, register_builtin_commands
         reg = CommandRegistry()
         gw = _make_gateway_stub()
         register_builtin_commands(reg, gw)
@@ -337,7 +337,7 @@ class TestModelCommand:
 
     @pytest.mark.asyncio
     async def test_model_no_session(self):
-        from pyclawops.core.commands import CommandRegistry, register_builtin_commands
+        from pyclopse.core.commands import CommandRegistry, register_builtin_commands
         reg = CommandRegistry()
         gw = _make_gateway_stub()
         register_builtin_commands(reg, gw)
@@ -347,7 +347,7 @@ class TestModelCommand:
 
     @pytest.mark.asyncio
     async def test_model_no_agent(self):
-        from pyclawops.core.commands import CommandRegistry, register_builtin_commands
+        from pyclopse.core.commands import CommandRegistry, register_builtin_commands
         reg = CommandRegistry()
         gw = _make_gateway_stub()
         gw._agent_manager.get_agent.return_value = None
@@ -366,7 +366,7 @@ class TestJobDelegation:
 
     @pytest.mark.asyncio
     async def test_job_delegates_to_handle_job_command(self):
-        from pyclawops.core.commands import CommandRegistry, register_builtin_commands
+        from pyclopse.core.commands import CommandRegistry, register_builtin_commands
         reg = CommandRegistry()
         gw = _make_gateway_stub()
         gw._handle_job_command = AsyncMock(return_value="Job result")
@@ -378,7 +378,7 @@ class TestJobDelegation:
 
     @pytest.mark.asyncio
     async def test_job_bare_delegates(self):
-        from pyclawops.core.commands import CommandRegistry, register_builtin_commands
+        from pyclopse.core.commands import CommandRegistry, register_builtin_commands
         reg = CommandRegistry()
         gw = _make_gateway_stub()
         gw._handle_job_command = AsyncMock(return_value="help text")
@@ -397,8 +397,8 @@ class TestAgentModelOverride:
     def _make_agent_obj(self, base_model="sonnet"):
         """Create a real Agent-like stub with _get_session_runner."""
         from unittest.mock import MagicMock, patch
-        from pyclawops.core.agent import Agent
-        from pyclawops.config.schema import AgentConfig
+        from pyclopse.core.agent import Agent
+        from pyclopse.config.schema import AgentConfig
 
         cfg = AgentConfig(name="test", model=base_model)
         agent = Agent.__new__(Agent)
@@ -418,14 +418,14 @@ class TestAgentModelOverride:
 
     def test_get_session_runner_uses_override(self):
         agent = self._make_agent_obj("default-model")
-        with patch("pyclawops.agents.runner.AgentRunner") as MockRunner:
+        with patch("pyclopse.agents.runner.AgentRunner") as MockRunner:
             MockRunner.return_value = MagicMock()
             agent._get_session_runner("sess1", model_override="custom-model")
             assert "sess1" in agent._session_runners
 
     def test_get_session_runner_no_override_uses_base(self):
         agent = self._make_agent_obj("base-model")
-        with patch("pyclawops.agents.runner.AgentRunner") as MockRunner:
+        with patch("pyclopse.agents.runner.AgentRunner") as MockRunner:
             MockRunner.return_value = MagicMock()
             agent._get_session_runner("sess2")
             call_kwargs = MockRunner.call_args[1]
@@ -433,7 +433,7 @@ class TestAgentModelOverride:
 
     def test_get_session_runner_with_override_uses_override(self):
         agent = self._make_agent_obj("base-model")
-        with patch("pyclawops.agents.runner.AgentRunner") as MockRunner:
+        with patch("pyclopse.agents.runner.AgentRunner") as MockRunner:
             MockRunner.return_value = MagicMock()
             agent._get_session_runner("sess3", model_override="override-model")
             call_kwargs = MockRunner.call_args[1]

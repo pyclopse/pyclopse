@@ -1,5 +1,5 @@
 """
-Tests for the memory_reindex MCP tool in pyclawops.tools.server.
+Tests for the memory_reindex MCP tool in pyclopse.tools.server.
 
 Covers:
   - Returns "no embedding backend" message when backend is not configured
@@ -27,7 +27,7 @@ def _unit_vec(dims: int, idx: int = 0) -> list[float]:
 
 
 def _make_embedding_backend(vectors: dict | None = None):
-    from pyclawops.memory.embeddings import EmbeddingBackend
+    from pyclopse.memory.embeddings import EmbeddingBackend
 
     class MockBackend(EmbeddingBackend):
         def __init__(self):
@@ -50,7 +50,7 @@ async def _call_memory_reindex(backend, batch_size: int = 32) -> str:
     We patch _agent_memory_service to return our test backend, then invoke
     the tool function directly.
     """
-    from pyclawops.tools import server as srv
+    from pyclopse.tools import server as srv
 
     ctx = MagicMock()
     with patch.object(srv, "_agent_memory_service", return_value=backend):
@@ -66,14 +66,14 @@ class TestMemoryReindexNoBackend:
 
     @pytest.mark.asyncio
     async def test_no_backend_returns_informative_message(self, tmp_path):
-        from pyclawops.memory.file_backend import FileMemoryBackend
+        from pyclopse.memory.file_backend import FileMemoryBackend
         backend = FileMemoryBackend(base_dir=str(tmp_path))
         result = await _call_memory_reindex(backend)
         assert "No embedding backend configured" in result
 
     @pytest.mark.asyncio
     async def test_no_backend_message_mentions_config(self, tmp_path):
-        from pyclawops.memory.file_backend import FileMemoryBackend
+        from pyclopse.memory.file_backend import FileMemoryBackend
         backend = FileMemoryBackend(base_dir=str(tmp_path))
         result = await _call_memory_reindex(backend)
         assert "memory.embedding.enabled" in result
@@ -87,7 +87,7 @@ class TestMemoryReindexSuccess:
 
     @pytest.mark.asyncio
     async def test_returns_ok_with_counts(self, tmp_path):
-        from pyclawops.memory.file_backend import FileMemoryBackend
+        from pyclopse.memory.file_backend import FileMemoryBackend
 
         # Write entries without embedding first
         bare = FileMemoryBackend(base_dir=str(tmp_path))
@@ -104,7 +104,7 @@ class TestMemoryReindexSuccess:
 
     @pytest.mark.asyncio
     async def test_vectors_json_populated_after_reindex(self, tmp_path):
-        from pyclawops.memory.file_backend import FileMemoryBackend
+        from pyclopse.memory.file_backend import FileMemoryBackend
 
         bare = FileMemoryBackend(base_dir=str(tmp_path))
         await bare.write("key1", {"content": "content one"})
@@ -121,7 +121,7 @@ class TestMemoryReindexSuccess:
 
     @pytest.mark.asyncio
     async def test_empty_memory_returns_ok_with_zero_counts(self, tmp_path):
-        from pyclawops.memory.file_backend import FileMemoryBackend
+        from pyclopse.memory.file_backend import FileMemoryBackend
         eb = _make_embedding_backend({})
         backend = FileMemoryBackend(base_dir=str(tmp_path), embedding_backend=eb)
         result = await _call_memory_reindex(backend)
@@ -140,7 +140,7 @@ class TestMemoryReindexViaMemoryService:
     @pytest.mark.asyncio
     async def test_unwraps_memory_service(self, tmp_path):
         """memory_reindex should unwrap MemoryService → FileMemoryBackend."""
-        from pyclawops.memory.file_backend import FileMemoryBackend
+        from pyclopse.memory.file_backend import FileMemoryBackend
 
         bare = FileMemoryBackend(base_dir=str(tmp_path))
         await bare.write("x", {"content": "some text"})
@@ -178,7 +178,7 @@ class TestMemoryReindexErrorHandling:
     @pytest.mark.asyncio
     async def test_exception_returns_error_string(self, tmp_path):
         """Any unexpected exception is caught and returned as [ERROR]."""
-        from pyclawops.tools import server as srv
+        from pyclopse.tools import server as srv
 
         ctx = MagicMock()
         with patch.object(srv, "_agent_memory_service", side_effect=RuntimeError("disk full")):
@@ -189,8 +189,8 @@ class TestMemoryReindexErrorHandling:
 
     @pytest.mark.asyncio
     async def test_partial_errors_reported(self, tmp_path):
-        from pyclawops.memory.file_backend import FileMemoryBackend
-        from pyclawops.memory.embeddings import EmbeddingBackend
+        from pyclopse.memory.file_backend import FileMemoryBackend
+        from pyclopse.memory.embeddings import EmbeddingBackend
 
         call_n = 0
 

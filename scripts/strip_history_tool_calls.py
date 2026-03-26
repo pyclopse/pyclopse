@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """One-off migration: strip tool-call/result plumbing from all persisted history files.
 
-Finds every history.json and history_previous.json under ~/.pyclawops/agents/,
+Finds every history.json and history_previous.json under ~/.pyclopse/agents/,
 applies the same _strip_tool_machinery logic used by _save_history(), and
 writes the result back in-place.  Original files are backed up with a .bak
 extension before being overwritten.
@@ -23,8 +23,8 @@ def main() -> None:
     parser.add_argument("--dry-run", action="store_true", help="Preview changes without writing")
     parser.add_argument(
         "--agents-dir",
-        default="~/.pyclawops/agents",
-        help="Root agents directory (default: ~/.pyclawops/agents)",
+        default="~/.pyclopse/agents",
+        help="Root agents directory (default: ~/.pyclopse/agents)",
     )
     args = parser.parse_args()
 
@@ -33,14 +33,14 @@ def main() -> None:
         print(f"Agents dir not found: {agents_dir}")
         sys.exit(1)
 
-    # Import FA + pyclawops after confirming env is sane
+    # Import FA + pyclopse after confirming env is sane
     try:
         from fast_agent.mcp.prompt_serialization import load_messages, save_messages
     except ImportError as e:
         print(f"FastAgent not available: {e}")
         sys.exit(1)
 
-    from pyclawops.agents.runner import _strip_tool_machinery, _trim_history_for_save
+    from pyclopse.agents.runner import _strip_tool_machinery, _trim_history_for_save
 
     history_files = sorted(agents_dir.glob("*/sessions/*/history*.json"))
     if not history_files:

@@ -1,40 +1,40 @@
-# Migrating from OpenClaw to pyclawops
+# Migrating from OpenClaw to pyclopse
 
-This guide covers migrating an agent from the OpenClaw TypeScript gateway to pyclawops. It is based on the real migration of the `viavacavi` agent and applies to any agent.
+This guide covers migrating an agent from the OpenClaw TypeScript gateway to pyclopse. It is based on the real migration of the `viavacavi` agent and applies to any agent.
 
 ---
 
 ## Overview
 
-OpenClaw and pyclawops use similar concepts but different layouts and naming conventions.
+OpenClaw and pyclopse use similar concepts but different layouts and naming conventions.
 
-| Concept | OpenClaw path | pyclawops path |
+| Concept | OpenClaw path | pyclopse path |
 |---|---|---|
-| Agent workspace | `~/.openclaw/agents/{name}/workspace/` | `~/.pyclawops/agents/{name}/` |
-| Sessions / chat history | `~/.openclaw/agents/{name}/sessions/*.jsonl` | `~/.pyclawops/agents/{name}/sessions/{date}-{id}/` |
-| Global config | `~/.openclaw/openclaw.json` | `~/.pyclawops/config/pyclawops.yaml` |
+| Agent workspace | `~/.openclaw/agents/{name}/workspace/` | `~/.pyclopse/agents/{name}/` |
+| Sessions / chat history | `~/.openclaw/agents/{name}/sessions/*.jsonl` | `~/.pyclopse/agents/{name}/sessions/{date}-{id}/` |
+| Global config | `~/.openclaw/openclaw.json` | `~/.pyclopse/config/pyclopse.yaml` |
 
 ### File name mapping
 
-| OpenClaw file | pyclawops file | Notes |
+| OpenClaw file | pyclopse file | Notes |
 |---|---|---|
 | `SOUL.md` | `PERSONALITY.md` | Rename on copy |
 | `HEARTBEAT.md` | `PULSE.md` | Rename on copy; update script paths |
 | `IDENTITY.md` | `IDENTITY.md` | Copy as-is |
 | `USER.md` | `USER.md` | Copy as-is |
-| `AGENTS.md` | `AGENTS.md` | **Do not copy** — replace with pyclawops template (see below) |
+| `AGENTS.md` | `AGENTS.md` | **Do not copy** — replace with pyclopse template (see below) |
 | `TOOLS.md` | `TOOLS.md` | Copy as-is |
 | `BOOTSTRAP.md` | *(skip)* | One-time init file; already consumed |
 | `memory/` | `memory/` | Copy entire directory |
 | `docs/` | `docs/` | Copy entire directory |
 | `scripts/` | `scripts/` | Copy entire directory; update paths inside |
-| `skills/` | `~/.pyclawops/agents/{name}/skills/` | Copy skills you want to keep |
+| `skills/` | `~/.pyclopse/agents/{name}/skills/` | Copy skills you want to keep |
 
 ---
 
-## Step 1 — Add the agent to pyclawops config
+## Step 1 — Add the agent to pyclopse config
 
-Edit `~/.pyclawops/config/pyclawops.yaml` and add the agent under `agents:`.
+Edit `~/.pyclopse/config/pyclopse.yaml` and add the agent under `agents:`.
 
 ```yaml
 agents:
@@ -50,7 +50,7 @@ agents:
       activeHours:
         start: "05:00"
         end: "22:00"
-    mcp_servers: [pyclawops, fetch, time, filesystem]
+    mcp_servers: [pyclopse, fetch, time, filesystem]
     tools:
       profile: full
 ```
@@ -87,45 +87,45 @@ Per-bot overrides (allowedUsers, deniedUsers, streaming, typingIndicator) are op
 Create the agent directory and copy files, renaming as needed:
 
 ```bash
-mkdir -p ~/.pyclawops/agents/myagent
+mkdir -p ~/.pyclopse/agents/myagent
 
 # Core identity files
-cp ~/.openclaw/agents/myagent/workspace/IDENTITY.md ~/.pyclawops/agents/myagent/IDENTITY.md
-cp ~/.openclaw/agents/myagent/workspace/SOUL.md     ~/.pyclawops/agents/myagent/PERSONALITY.md
-cp ~/.openclaw/agents/myagent/workspace/USER.md     ~/.pyclawops/agents/myagent/USER.md
-cp ~/.openclaw/agents/myagent/workspace/TOOLS.md    ~/.pyclawops/agents/myagent/TOOLS.md
+cp ~/.openclaw/agents/myagent/workspace/IDENTITY.md ~/.pyclopse/agents/myagent/IDENTITY.md
+cp ~/.openclaw/agents/myagent/workspace/SOUL.md     ~/.pyclopse/agents/myagent/PERSONALITY.md
+cp ~/.openclaw/agents/myagent/workspace/USER.md     ~/.pyclopse/agents/myagent/USER.md
+cp ~/.openclaw/agents/myagent/workspace/TOOLS.md    ~/.pyclopse/agents/myagent/TOOLS.md
 
 # Heartbeat → Pulse (rename, then update paths — see Step 4)
-cp ~/.openclaw/agents/myagent/workspace/HEARTBEAT.md ~/.pyclawops/agents/myagent/PULSE.md
+cp ~/.openclaw/agents/myagent/workspace/HEARTBEAT.md ~/.pyclopse/agents/myagent/PULSE.md
 
 # Memory and supporting directories
-cp -r ~/.openclaw/agents/myagent/workspace/memory  ~/.pyclawops/agents/myagent/memory
-cp -r ~/.openclaw/agents/myagent/workspace/scripts ~/.pyclawops/agents/myagent/scripts
-cp -r ~/.openclaw/agents/myagent/workspace/docs    ~/.pyclawops/agents/myagent/docs   # if present
+cp -r ~/.openclaw/agents/myagent/workspace/memory  ~/.pyclopse/agents/myagent/memory
+cp -r ~/.openclaw/agents/myagent/workspace/scripts ~/.pyclopse/agents/myagent/scripts
+cp -r ~/.openclaw/agents/myagent/workspace/docs    ~/.pyclopse/agents/myagent/docs   # if present
 
 # Skills (optional — skip any you don't want)
-cp -r ~/.openclaw/agents/myagent/workspace/skills/myskill ~/.pyclawops/agents/myagent/skills/myskill
+cp -r ~/.openclaw/agents/myagent/workspace/skills/myskill ~/.pyclopse/agents/myagent/skills/myskill
 ```
 
 **Do not copy** `AGENTS.md`, `BOOTSTRAP.md`, or `sessions/` from the workspace.
 
 ---
 
-## Step 4 — Replace AGENTS.md with the pyclawops template
+## Step 4 — Replace AGENTS.md with the pyclopse template
 
 The OpenClaw `AGENTS.md` tells the agent it is running inside OpenClaw with OpenClaw paths. Replace it entirely:
 
 ```bash
-cp /path/to/pyclawops/pyclawops/core/templates/AGENTS.md ~/.pyclawops/agents/myagent/AGENTS.md
+cp /path/to/pyclopse/pyclopse/core/templates/AGENTS.md ~/.pyclopse/agents/myagent/AGENTS.md
 ```
 
-If you installed pyclawops as a `uv tool`, find the template at:
+If you installed pyclopse as a `uv tool`, find the template at:
 
 ```bash
-$(uv tool dir)/pyclawops/lib/python*/site-packages/pyclawops/core/templates/AGENTS.md
+$(uv tool dir)/pyclopse/lib/python*/site-packages/pyclopse/core/templates/AGENTS.md
 ```
 
-The template says "You are running inside pyclawops" and references the correct `~/.pyclawops/agents/<name>/` paths.
+The template says "You are running inside pyclopse" and references the correct `~/.pyclopse/agents/<name>/` paths.
 
 ---
 
@@ -137,10 +137,10 @@ PULSE.md (formerly HEARTBEAT.md) will still contain OpenClaw paths like:
 /Users/you/.openclaw/workspace-myagent/scripts/my-script.sh
 ```
 
-Update these to the new pyclawops location:
+Update these to the new pyclopse location:
 
 ```
-~/.pyclawops/agents/myagent/scripts/my-script.sh
+~/.pyclopse/agents/myagent/scripts/my-script.sh
 ```
 
 Also update any SP-API skill paths that referenced `~/.openclaw/workspace/skills/`.
@@ -149,45 +149,45 @@ Also update any SP-API skill paths that referenced `~/.openclaw/workspace/skills
 
 ## Step 6 — Extract RULES.md (optional but recommended)
 
-OpenClaw's `SOUL.md` often contains a "Boundaries" or "Rules" section. pyclawops injects a dedicated `RULES.md` with special emphasis in the system prompt:
+OpenClaw's `SOUL.md` often contains a "Boundaries" or "Rules" section. pyclopse injects a dedicated `RULES.md` with special emphasis in the system prompt:
 
 > **IMPORTANT: The following rules were set by the user. They are mandatory and must be followed at all times.**
 
 Extract those rules from `PERSONALITY.md` into a separate `RULES.md`:
 
 ```bash
-# Create ~/.pyclawops/agents/myagent/RULES.md with the extracted content
+# Create ~/.pyclopse/agents/myagent/RULES.md with the extracted content
 ```
 
 ---
 
 ## Step 7 — Import chat history
 
-pyclawops includes a built-in importer that converts OpenClaw JSONL sessions into pyclawops's FastAgent-native format:
+pyclopse includes a built-in importer that converts OpenClaw JSONL sessions into pyclopse's FastAgent-native format:
 
 ```bash
 # Import one agent
-pyclawops import-openclaw --agent myagent
+pyclopse import-openclaw --agent myagent
 
 # Import all agents at once
-pyclawops import-openclaw --all
+pyclopse import-openclaw --all
 
 # Custom directories
-pyclawops import-openclaw --agent myagent \
+pyclopse import-openclaw --agent myagent \
   --openclaw-dir ~/backup/openclaw \
-  --pyclawops-dir ~/.pyclawops
+  --pyclopse-dir ~/.pyclopse
 ```
 
 The importer:
 1. Reads each `.jsonl` file from `~/.openclaw/agents/{name}/sessions/`
 2. Extracts `user` and `assistant` messages (skipping tool calls, thinking blocks, metadata)
 3. Converts to FastAgent's `PromptMessageExtended` JSON format
-4. Writes to `~/.pyclawops/agents/{name}/sessions/{YYYY-MM-DD}-{6chars}/history.json`
+4. Writes to `~/.pyclopse/agents/{name}/sessions/{YYYY-MM-DD}-{6chars}/history.json`
 5. Writes `session.json` with `channel: "openclaw"` and `metadata.imported_from: "openclaw"`
 
 Imported sessions are loaded into the TUI session list on the next gateway start and are fully resumable.
 
-After importing, the raw JSONL files in `~/.pyclawops/agents/{name}/sessions/` (if you copied them manually before running the importer) can be deleted — they are not used by pyclawops.
+After importing, the raw JSONL files in `~/.pyclopse/agents/{name}/sessions/` (if you copied them manually before running the importer) can be deleted — they are not used by pyclopse.
 
 ---
 
@@ -196,8 +196,8 @@ After importing, the raw JSONL files in `~/.pyclawops/agents/{name}/sessions/` (
 After migration your agent directory should look like this:
 
 ```
-~/.pyclawops/agents/myagent/
-├── AGENTS.md          ← pyclawops template (not OpenClaw's)
+~/.pyclopse/agents/myagent/
+├── AGENTS.md          ← pyclopse template (not OpenClaw's)
 ├── IDENTITY.md
 ├── PERSONALITY.md     ← was SOUL.md
 ├── PULSE.md           ← was HEARTBEAT.md, paths updated
@@ -225,7 +225,7 @@ After migration your agent directory should look like this:
 ## Step 9 — Start the gateway and test
 
 ```bash
-uv run python -m pyclawops run
+uv run python -m pyclopse run
 ```
 
 Startup output should show both bots initialised:
@@ -238,9 +238,9 @@ Send a message to the agent's Telegram bot to verify inbound routing. The agent'
 
 ---
 
-## What pyclawops auto-injects
+## What pyclopse auto-injects
 
-You do **not** need to manually include these in your agent files — pyclawops handles them:
+You do **not** need to manually include these in your agent files — pyclopse handles them:
 
 | Feature | How |
 |---|---|
@@ -253,15 +253,15 @@ You do **not** need to manually include these in your agent files — pyclawops 
 
 ## Key differences from OpenClaw
 
-| Topic | OpenClaw | pyclawops |
+| Topic | OpenClaw | pyclopse |
 |---|---|---|
 | Language | TypeScript / Node.js | Python / asyncio |
-| Config format | `openclaw.json` (JSON) | `pyclawops.yaml` (YAML) |
+| Config format | `openclaw.json` (JSON) | `pyclopse.yaml` (YAML) |
 | Session format | JSONL event log | FastAgent `PromptMessageExtended` JSON |
-| Session location | `~/.openclaw/agents/{name}/sessions/` | `~/.pyclawops/agents/{name}/sessions/{date}-{id}/` |
-| Workspace location | `~/.openclaw/agents/{name}/workspace/` | `~/.pyclawops/agents/{name}/` (flat, no `workspace/` subdirectory) |
+| Session location | `~/.openclaw/agents/{name}/sessions/` | `~/.pyclopse/agents/{name}/sessions/{date}-{id}/` |
+| Workspace location | `~/.openclaw/agents/{name}/workspace/` | `~/.pyclopse/agents/{name}/` (flat, no `workspace/` subdirectory) |
 | Personality file | `SOUL.md` | `PERSONALITY.md` |
 | Heartbeat file | `HEARTBEAT.md` | `PULSE.md` |
-| Rules | Embedded in `SOUL.md` | Separate `RULES.md` (pyclawops addition) |
+| Rules | Embedded in `SOUL.md` | Separate `RULES.md` (pyclopse addition) |
 | Multi-bot Telegram | Per-agent `telegramBot` in config | `channels.telegram.bots` dict |
-| MCP tools | OpenClaw built-ins | pyclawops FastMCP server on port 8081 |
+| MCP tools | OpenClaw built-ins | pyclopse FastMCP server on port 8081 |

@@ -15,11 +15,11 @@ from pathlib import Path
 
 def _make_gateway_stub(agent_id="main", session_id="sess-x"):
     """Build a minimal Gateway-like stub with just enough wiring for handle_message."""
-    from pyclawops.core.gateway import Gateway
-    from pyclawops.config.schema import (
+    from pyclopse.core.gateway import Gateway
+    from pyclopse.config.schema import (
         Config, AgentsConfig, ChannelsConfig, TelegramConfig, SlackConfig,
     )
-    from pyclawops.core.session import Session
+    from pyclopse.core.session import Session
 
     gw = Gateway.__new__(Gateway)
     gw._logger = MagicMock()
@@ -45,7 +45,7 @@ def _make_gateway_stub(agent_id="main", session_id="sess-x"):
     agent = MagicMock()
     agent.id = agent_id
     agent.config = MagicMock()
-    agent.config_dir = "~/.pyclawops"
+    agent.config_dir = "~/.pyclopse"
     agent._session_runners = {}
     agent.handle_message = AsyncMock(return_value=MagicMock(content="ok"))
 
@@ -63,7 +63,7 @@ def _make_gateway_stub(agent_id="main", session_id="sess-x"):
 
 async def test_message_preprocessed_fires_before_agent():
     """message:preprocessed fires after activation_mode check, before agent.handle_message."""
-    from pyclawops.hooks.events import HookEvent
+    from pyclopse.hooks.events import HookEvent
 
     gw, session, agent = _make_gateway_stub()
 
@@ -75,7 +75,7 @@ async def test_message_preprocessed_fires_before_agent():
     gw._fire = fake_fire
 
     with (
-        patch("pyclawops.core.gateway._snapshot_ctx_tokens"),
+        patch("pyclopse.core.gateway._snapshot_ctx_tokens"),
         patch.object(gw, "_get_active_session", AsyncMock(return_value=session)),
     ):
         await gw.handle_message(
@@ -99,7 +99,7 @@ async def test_message_preprocessed_fires_before_agent():
 
 async def test_message_preprocessed_payload():
     """message:preprocessed payload has expected fields."""
-    from pyclawops.hooks.events import HookEvent
+    from pyclopse.hooks.events import HookEvent
 
     gw, session, agent = _make_gateway_stub(session_id="sess-payload")
 
@@ -112,7 +112,7 @@ async def test_message_preprocessed_payload():
     gw._fire = fake_fire
 
     with (
-        patch("pyclawops.core.gateway._snapshot_ctx_tokens"),
+        patch("pyclopse.core.gateway._snapshot_ctx_tokens"),
         patch.object(gw, "_get_active_session", AsyncMock(return_value=session)),
     ):
         await gw.handle_message(
@@ -134,7 +134,7 @@ async def test_message_preprocessed_payload():
 
 async def test_message_preprocessed_not_fired_on_activation_mode_skip():
     """message:preprocessed must NOT fire when activation_mode=mention skips the message."""
-    from pyclawops.hooks.events import HookEvent
+    from pyclopse.hooks.events import HookEvent
 
     gw, session, agent = _make_gateway_stub()
     session.context["activation_mode"] = "mention"  # requires agent name in content
@@ -147,7 +147,7 @@ async def test_message_preprocessed_not_fired_on_activation_mode_skip():
     gw._fire = fake_fire
 
     with (
-        patch("pyclawops.core.gateway._snapshot_ctx_tokens"),
+        patch("pyclopse.core.gateway._snapshot_ctx_tokens"),
         patch.object(gw, "_get_active_session", AsyncMock(return_value=session)),
     ):
         result = await gw.handle_message(
@@ -169,7 +169,7 @@ async def test_message_preprocessed_not_fired_on_activation_mode_skip():
 
 async def test_agent_bootstrap_fires_on_new_runner(tmp_path):
     """agent:bootstrap fires when session_id is not yet in agent._session_runners."""
-    from pyclawops.hooks.events import HookEvent
+    from pyclopse.hooks.events import HookEvent
 
     gw, session, agent = _make_gateway_stub(session_id="sess-new")
     agent._session_runners = {}  # no existing runner → new
@@ -190,7 +190,7 @@ async def test_agent_bootstrap_fires_on_new_runner(tmp_path):
     gw._fire = fake_fire
 
     with (
-        patch("pyclawops.core.gateway._snapshot_ctx_tokens"),
+        patch("pyclopse.core.gateway._snapshot_ctx_tokens"),
         patch.object(gw, "_get_active_session", AsyncMock(return_value=session)),
     ):
         await gw.handle_message(
@@ -212,7 +212,7 @@ async def test_agent_bootstrap_fires_on_new_runner(tmp_path):
 
 async def test_agent_bootstrap_not_fired_on_existing_runner():
     """agent:bootstrap must NOT fire when the session runner already exists."""
-    from pyclawops.hooks.events import HookEvent
+    from pyclopse.hooks.events import HookEvent
 
     gw, session, agent = _make_gateway_stub(session_id="sess-old")
     agent._session_runners = {"sess-old": MagicMock()}  # runner already present
@@ -225,7 +225,7 @@ async def test_agent_bootstrap_not_fired_on_existing_runner():
     gw._fire = fake_fire
 
     with (
-        patch("pyclawops.core.gateway._snapshot_ctx_tokens"),
+        patch("pyclopse.core.gateway._snapshot_ctx_tokens"),
         patch.object(gw, "_get_active_session", AsyncMock(return_value=session)),
     ):
         await gw.handle_message(
@@ -242,7 +242,7 @@ async def test_agent_bootstrap_not_fired_on_existing_runner():
 
 async def test_agent_bootstrap_fires_once_across_multiple_messages(tmp_path):
     """Bootstrap event fires only on the first message, not on subsequent ones."""
-    from pyclawops.hooks.events import HookEvent
+    from pyclopse.hooks.events import HookEvent
 
     gw, session, agent = _make_gateway_stub(session_id="sess-multi")
     agent._session_runners = {}
@@ -261,7 +261,7 @@ async def test_agent_bootstrap_fires_once_across_multiple_messages(tmp_path):
     gw._fire = fake_fire
 
     with (
-        patch("pyclawops.core.gateway._snapshot_ctx_tokens"),
+        patch("pyclopse.core.gateway._snapshot_ctx_tokens"),
         patch.object(gw, "_get_active_session", AsyncMock(return_value=session)),
     ):
         for _ in range(3):
@@ -283,7 +283,7 @@ async def test_agent_bootstrap_fires_once_across_multiple_messages(tmp_path):
 
 def test_hook_event_constants_exist():
     """All three new event constants must be importable from HookEvent."""
-    from pyclawops.hooks.events import HookEvent
+    from pyclopse.hooks.events import HookEvent
 
     assert HookEvent.AGENT_BOOTSTRAP == "agent:bootstrap"
     assert HookEvent.MESSAGE_PREPROCESSED == "message:preprocessed"
@@ -292,7 +292,7 @@ def test_hook_event_constants_exist():
 
 def test_message_transcribed_not_interceptable():
     """message:transcribed is a notification event (not in INTERCEPTABLE set)."""
-    from pyclawops.hooks.events import HookEvent
+    from pyclopse.hooks.events import HookEvent
 
     assert HookEvent.MESSAGE_TRANSCRIBED not in HookEvent.INTERCEPTABLE
     assert HookEvent.MESSAGE_PREPROCESSED not in HookEvent.INTERCEPTABLE

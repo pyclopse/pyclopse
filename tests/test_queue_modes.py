@@ -1,10 +1,10 @@
-"""Tests for pyclawops/core/queue.py — per-session message queue modes."""
+"""Tests for pyclopse/core/queue.py — per-session message queue modes."""
 import asyncio
 import pytest
 from unittest.mock import AsyncMock
 
-from pyclawops.config.schema import DropPolicy, QueueConfig, QueueMode, QueueModeByChannel
-from pyclawops.core.queue import QueueManager, SessionMessageQueue
+from pyclopse.config.schema import DropPolicy, QueueConfig, QueueMode, QueueModeByChannel
+from pyclopse.core.queue import QueueManager, SessionMessageQueue
 
 
 # ─── helpers ──────────────────────────────────────────────────────────────────
@@ -61,7 +61,7 @@ def test_queue_config_snake_case_alias():
 
 
 def test_agent_config_has_queue():
-    from pyclawops.config.schema import AgentConfig
+    from pyclopse.config.schema import AgentConfig
     cfg = AgentConfig()
     assert cfg.queue.mode == QueueMode.COLLECT
     assert cfg.queue.debounce_ms == 300
@@ -527,7 +527,7 @@ async def test_steer_plus_backlog_single_message():
 
 def test_queue_mode_by_channel_schema():
     """QueueModeByChannel parses correctly from camelCase."""
-    from pyclawops.config.schema import QueueModeByChannel
+    from pyclopse.config.schema import QueueModeByChannel
     cfg = QueueConfig.model_validate({
         "mode": "collect",
         "byChannel": {

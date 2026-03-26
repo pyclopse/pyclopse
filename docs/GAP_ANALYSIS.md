@@ -1,9 +1,9 @@
-# OpenClaw → PyClawOps Gap Analysis
+# OpenClaw → Pyclopse Gap Analysis
 
 > Source-verified. OpenClaw source at `~/github/openclaw`. FastAgent package at
-> `.venv/lib/python3.14/site-packages/fast_agent/`. PyClawOps commands confirmed
-> from `pyclawops/core/commands.py` and `pyclawops/config/schema.py`.
-> PyClawOps is NOT a port — items are adapted to Python idioms.
+> `.venv/lib/python3.14/site-packages/fast_agent/`. Pyclopse commands confirmed
+> from `pyclopse/core/commands.py` and `pyclopse/config/schema.py`.
+> Pyclopse is NOT a port — items are adapted to Python idioms.
 
 ## Legend
 - ✅ Done
@@ -31,12 +31,12 @@
 
 ## Slash Commands
 
-Commands confirmed present in `pyclawops/core/commands.py`:
+Commands confirmed present in `pyclopse/core/commands.py`:
 `start`, `help`, `new`, `reset`, `stop`, `compact`, `status`, `whoami`, `model`, `models`,
 `think`, `usage`, `context`, `reload`, `restart`, `config`, `export`, `verbose`, `approve`,
 `reboot`, `tts`, `job`, `skills`, `skill`, `subagents`, `queue`
 
-### OpenClaw commands not in PyClawOps
+### OpenClaw commands not in Pyclopse
 
 | Status | Command | Notes |
 |--------|---------|-------|
@@ -58,17 +58,17 @@ Commands confirmed present in `pyclawops/core/commands.py`:
 | ✅ | `/send` | Set send policy for this session: `on`, `off`, `inherit` — enforced in `handle_message()` |
 | ⬜ | `/dock-*` | Dynamic per-channel dock commands — route replies to a specific channel (e.g. `/dock-telegram`) |
 
-> **Note on `/think` vs `/reasoning`:** PyClawOps's `/think` sets the FastAgent *thinking budget*
+> **Note on `/think` vs `/reasoning`:** Pyclopse's `/think` sets the FastAgent *thinking budget*
 > (how much internal reasoning the model does). OC's `/reasoning` controls whether reasoning
 > *output* is shown to the user (`on`/`off`/`stream`). These are different knobs.
 > FastAgent exposes reasoning effort via `set_reasoning_effort()` and has a separate
-> `/model reasoning` subcommand — neither is wired to a PyClawOps user command.
+> `/model reasoning` subcommand — neither is wired to a Pyclopse user command.
 
 ---
 
 ## ACP (Agent Client Protocol)
 
-FastAgent ships a full ACP implementation in `fast_agent/acp/`. PyClawOps uses FastAgent
+FastAgent ships a full ACP implementation in `fast_agent/acp/`. Pyclopse uses FastAgent
 but does not expose ACP to users. This is a **wiring gap**, not an implementation gap.
 
 ### Wiring gaps
@@ -82,7 +82,7 @@ but does not expose ACP to users. This is a **wiring gap**, not an implementatio
 ### FastAgent ACP slash handlers not yet wired
 
 FastAgent's `SlashCommandHandler` (in `fast_agent/acp/slash/`) implements these handlers.
-PyClawOps has its own parallel implementations for some; others are entirely missing.
+Pyclopse has its own parallel implementations for some; others are entirely missing.
 
 | Status | FA Handler | Notes |
 |--------|-----------|-------|
@@ -107,7 +107,7 @@ PyClawOps has its own parallel implementations for some; others are entirely mis
 
 ### Gateway Config (`gateway:` block)
 
-PyClawOps currently has: `host`, `port`, `mcp_port`, `debug`, `log_level`, `log_retention_days`,
+Pyclopse currently has: `host`, `port`, `mcp_port`, `debug`, `log_level`, `log_retention_days`,
 `webhook_url`, `cors_origins`, `skills_dirs`
 
 | Status | Feature | Notes |
@@ -122,7 +122,7 @@ PyClawOps currently has: `host`, `port`, `mcp_port`, `debug`, `log_level`, `log_
 
 | Status | Feature | Notes |
 |--------|---------|-------|
-| ✅ | Per-agent heartbeat / pulse | Each agent has its own `__pulse__` job in `~/.pyclawops/agents/{name}/jobs.yaml` with independent schedule, message, and delivery config |
+| ✅ | Per-agent heartbeat / pulse | Each agent has its own `__pulse__` job in `~/.pyclopse/agents/{name}/jobs.yaml` with independent schedule, message, and delivery config |
 | ⬜ | Model fallback chain | Ordered list of fallback models per agent; see Model Fallback section |
 
 ### Channel Config
@@ -131,20 +131,20 @@ PyClawOps currently has: `host`, `port`, `mcp_port`, `debug`, `log_level`, `log_
 |--------|---------|-------|
 | ⬜ | `DiscordConfig` — allowed_users, streaming, typing_indicator | Discord schema is minimal (token + guilds only); missing allowlist/denylist and all config parity with Telegram |
 | ⬜ | `SlackConfig` — pulse_channel wired to schema | `SlackConfig.pulse_channel` exists and pulse sends heartbeat, but Slack pulse is not schema-documented consistently |
-| ⬜ | Signal channel in config schema | Adapter exists at `pyclawops/channels/signal.py` but not in `ChannelsConfig` schema |
-| ⬜ | iMessage channel in config schema | Adapter exists at `pyclawops/channels/imessage.py` but not in `ChannelsConfig` schema |
-| ⬜ | Google Chat channel in config schema | Adapter exists at `pyclawops/channels/googlechat.py` but not in `ChannelsConfig` schema |
-| ⬜ | LINE channel in config schema | Adapter exists at `pyclawops/channels/line.py` but not in `ChannelsConfig` schema |
-| ⬜ | MS Teams channel | OC has MS Teams support; PyClawOps has no adapter or schema |
-| ⬜ | IRC channel | OC has IRC support; PyClawOps has no adapter or schema |
-| ⬜ | WebChat channel | OC has a browser/web channel; PyClawOps has no adapter or schema |
-| ⬜ | WhatsApp — full wiring | Schema (`WhatsAppConfig`) and adapter (`pyclawops/channels/whatsapp.py`) exist but channel is not wired into Gateway |
-| ⬜ | Discord — full wiring | Schema (`DiscordConfig`) and adapter (`pyclawops/channels/discord.py`) exist but channel is not wired into Gateway |
+| ⬜ | Signal channel in config schema | Adapter exists at `pyclopse/channels/signal.py` but not in `ChannelsConfig` schema |
+| ⬜ | iMessage channel in config schema | Adapter exists at `pyclopse/channels/imessage.py` but not in `ChannelsConfig` schema |
+| ⬜ | Google Chat channel in config schema | Adapter exists at `pyclopse/channels/googlechat.py` but not in `ChannelsConfig` schema |
+| ⬜ | LINE channel in config schema | Adapter exists at `pyclopse/channels/line.py` but not in `ChannelsConfig` schema |
+| ⬜ | MS Teams channel | OC has MS Teams support; Pyclopse has no adapter or schema |
+| ⬜ | IRC channel | OC has IRC support; Pyclopse has no adapter or schema |
+| ⬜ | WebChat channel | OC has a browser/web channel; Pyclopse has no adapter or schema |
+| ⬜ | WhatsApp — full wiring | Schema (`WhatsAppConfig`) and adapter (`pyclopse/channels/whatsapp.py`) exist but channel is not wired into Gateway |
+| ⬜ | Discord — full wiring | Schema (`DiscordConfig`) and adapter (`pyclopse/channels/discord.py`) exist but channel is not wired into Gateway |
 | ⬜ | Per-channel queue mode overrides in schema | OC `QueueModeByProvider` block inside queue config |
 
 ### FastAgent Config Not Exposed
 
-These are FastAgent settings that have no corresponding PyClawOps schema field:
+These are FastAgent settings that have no corresponding Pyclopse schema field:
 
 | Status | Feature | Notes |
 |--------|---------|-------|
@@ -216,7 +216,7 @@ These are FastAgent settings that have no corresponding PyClawOps schema field:
 
 OC `auth.profiles` — how the gateway authenticates to LLM providers. FastAgent already
 handles multi-provider auth programmatically via `AgentRunner._build_fa_settings()`. This is a config UX gap, not
-a functional one — PyClawOps exposes providers via `providers:` block.
+a functional one — Pyclopse exposes providers via `providers:` block.
 
 | Status | Feature | Notes |
 |--------|---------|-------|
@@ -230,11 +230,11 @@ a functional one — PyClawOps exposes providers via `providers:` block.
 
 | Status | Feature | Notes |
 |--------|---------|-------|
-| ⬜ | Usage cost tracking | OC tracks cost per message (input/output token costs × price); PyClawOps tracks counts only |
+| ⬜ | Usage cost tracking | OC tracks cost per message (input/output token costs × price); Pyclopse tracks counts only |
 | ⬜ | `/usage cost` / cost summary | Cost reporting in `/usage` command |
 | ⬜ | Bedrock model auto-discovery | `BedrockDiscoveryConfig` — scan AWS Bedrock for available models and register them |
 | ⬜ | TTS voice chat (`TalkConfig`) | Real-time voice: provider, voiceId, interrupt-on-speech, silence timeout |
 | ⬜ | Canvas hosting | Embedded web canvas for rich output rendering |
 | ⬜ | Pinned sessions (FA native) | FA `SessionManager` supports `is_session_pinned()` — pinned sessions are never culled by the TTL reaper |
-| ⬜ | Session history window (FA native) | FA `session_history_window` setting (default 20) limits how many sessions are listed; PyClawOps has no equivalent |
-| ✅ | FastAgent config programmatically injected | `AgentRunner._build_fa_settings()` — constructs FA `Settings` object at runtime from `pyclawops_config`; no `fastagent.config.yaml` needed |
+| ⬜ | Session history window (FA native) | FA `session_history_window` setting (default 20) limits how many sessions are listed; Pyclopse has no equivalent |
+| ✅ | FastAgent config programmatically injected | `AgentRunner._build_fa_settings()` — constructs FA `Settings` object at runtime from `pyclopse_config`; no `fastagent.config.yaml` needed |

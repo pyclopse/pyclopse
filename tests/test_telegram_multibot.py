@@ -4,14 +4,14 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from pyclawops.config.schema import (
+from pyclopse.config.schema import (
     AgentsConfig,
     ChannelsConfig,
     Config,
     TelegramBotConfig,
     TelegramConfig,
 )
-from pyclawops.core.gateway import Gateway
+from pyclopse.core.gateway import Gateway
 
 
 # ── helpers ──────────────────────────────────────────────────────────────────
@@ -66,7 +66,7 @@ def _make_gateway(telegram_config: TelegramConfig) -> Gateway:
     gw._config.security = sec
 
     # Commands
-    from pyclawops.core.commands import CommandRegistry
+    from pyclopse.core.commands import CommandRegistry
     gw._command_registry = CommandRegistry()
 
     return gw

@@ -1,6 +1,6 @@
 # Vault Memory System
 
-The vault is pyclawops's persistent long-term memory layer. It extracts durable facts from conversations and documents, stores them as typed, structured records, and automatically injects relevant context into agent prompts at query time. The system is designed to surface the right memories at the right moment — not dump everything into every prompt.
+The vault is pyclopse's persistent long-term memory layer. It extracts durable facts from conversations and documents, stores them as typed, structured records, and automatically injects relevant context into agent prompts at query time. The system is designed to surface the right memories at the right moment — not dump everything into every prompt.
 
 ---
 
@@ -33,13 +33,13 @@ Conversation → IngestionHandler → MemoryAgent (LLM) → VaultStore (disk)
 User message → ContextAssembler → FallbackSearch/HybridSearch → injected <memory> block → Agent prompt
 ```
 
-The vault is per-agent: each agent has its own isolated vault directory under `~/.pyclawops/agents/{agent_id}/vault/`.
+The vault is per-agent: each agent has its own isolated vault directory under `~/.pyclopse/agents/{agent_id}/vault/`.
 
 ---
 
 ## Memory Types
 
-Every fact has a `type` that governs how it is classified, displayed, and retrieved. Types are defined in `pyclawops/memory/vault/models.py` as the `MemoryType` enum. Custom types can also be defined in `pyclawops.yaml` and are registered at startup via `TypeSchemaRegistry`.
+Every fact has a `type` that governs how it is classified, displayed, and retrieved. Types are defined in `pyclopse/memory/vault/models.py` as the `MemoryType` enum. Custom types can also be defined in `pyclopse.yaml` and are registered at startup via `TypeSchemaRegistry`.
 
 ### Built-in Types
 
@@ -66,7 +66,7 @@ Every fact has a `type` that governs how it is classified, displayed, and retrie
 
 ### Custom Types
 
-Custom types are defined in `pyclawops.yaml` under the `vault.types` list:
+Custom types are defined in `pyclopse.yaml` under the `vault.types` list:
 
 ```yaml
 vault:
@@ -124,7 +124,7 @@ Facts are stored in `vault/facts/{ULID}.md`. Archived and superseded facts are m
 
 ## Ingestion Pipeline
 
-Ingestion is handled by `IngestionHandler` (`pyclawops/memory/vault/ingestion.py`). It runs as a background task after each conversation segment and on a scheduled catch-up pass.
+Ingestion is handled by `IngestionHandler` (`pyclopse/memory/vault/ingestion.py`). It runs as a background task after each conversation segment and on a scheduled catch-up pass.
 
 ### Conversation Ingestion
 
@@ -136,7 +136,7 @@ Ingestion is handled by `IngestionHandler` (`pyclawops/memory/vault/ingestion.py
 
 ### Document Ingestion
 
-Memory documents (Markdown files in `~/.pyclawops/agents/{agent_id}/memory/`) are also processed:
+Memory documents (Markdown files in `~/.pyclopse/agents/{agent_id}/memory/`) are also processed:
 
 1. **Hash check** — The document's SHA-256 hash is compared to the stored hash. If unchanged, processing is skipped.
 2. **Existing facts** — All facts with `source_file` matching this document are loaded and passed to the LLM as context.
@@ -155,7 +155,7 @@ The `job` and `a2a` channels are always skipped during ingestion — automated o
 
 ## Search and Retrieval
 
-The vault supports two search backends, configured via `vault.search.backend` in `pyclawops.yaml`.
+The vault supports two search backends, configured via `vault.search.backend` in `pyclopse.yaml`.
 
 ### FallbackSearchBackend
 
@@ -188,7 +188,7 @@ Both backends produce scores on a **0–1 normalized scale**. This is critical: 
 
 ## Context Injection
 
-Context injection is handled by `ContextAssembler.assemble()` (`pyclawops/memory/vault/retrieval.py`), called from `Agent._prepend_vault_context()` (`pyclawops/core/agent.py`) on every incoming user message.
+Context injection is handled by `ContextAssembler.assemble()` (`pyclopse/memory/vault/retrieval.py`), called from `Agent._prepend_vault_context()` (`pyclopse/core/agent.py`) on every incoming user message.
 
 ### Injection Guards
 
@@ -295,7 +295,7 @@ After a new fact is written, related existing facts are found via search and add
 
 ## Lifecycle Management
 
-The vault runs periodic maintenance to keep facts healthy and the store from growing unbounded. Lifecycle is configured under `vault.lifecycle` in `pyclawops.yaml`.
+The vault runs periodic maintenance to keep facts healthy and the store from growing unbounded. Lifecycle is configured under `vault.lifecycle` in `pyclopse.yaml`.
 
 ### Crystallization
 
@@ -418,7 +418,7 @@ To avoid injecting the same memory repeatedly into the same conversation, each a
 
 ## Cursor Store and Crash Recovery
 
-The cursor store (`pyclawops/memory/vault/cursor.py`) tracks ingestion progress to ensure:
+The cursor store (`pyclopse/memory/vault/cursor.py`) tracks ingestion progress to ensure:
 1. No conversation segment is processed twice.
 2. No segment is silently skipped due to a crash.
 
@@ -436,7 +436,7 @@ State is persisted in `vault/.cursors.json` with this structure:
     }
   },
   "documents": {
-    "/Users/jon/.pyclawops/agents/niggy/memory/2026-03-10.md": {
+    "/Users/jon/.pyclopse/agents/niggy/memory/2026-03-10.md": {
       "file_path": "...",
       "last_hash": "sha256hex",
       "last_processed_at": "2026-03-10T22:15:00Z",
@@ -454,14 +454,14 @@ State is persisted in `vault/.cursors.json` with this structure:
 
 ## Configuration
 
-All vault configuration lives under the `vault:` key in `pyclawops.yaml` per agent.
+All vault configuration lives under the `vault:` key in `pyclopse.yaml` per agent.
 
 ```yaml
 agents:
   - name: niggy
     vault:
       enabled: true
-      path: ""                  # empty = default ~/.pyclawops/agents/niggy/vault/
+      path: ""                  # empty = default ~/.pyclopse/agents/niggy/vault/
       show_recall: false        # append injected facts to agent replies (debug)
       default_profile: auto     # auto | default | planning | incident | handoff | research
 
@@ -512,7 +512,7 @@ agents:
 ## Storage Layout
 
 ```
-~/.pyclawops/agents/{agent_id}/vault/
+~/.pyclopse/agents/{agent_id}/vault/
 ├── .cursors.json           # Ingestion progress + crash recovery state
 ├── facts/
 │   ├── 01KMGEGB....md     # Active VaultFact files (ULID-named)

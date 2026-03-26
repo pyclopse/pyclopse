@@ -14,8 +14,8 @@ from unittest.mock import MagicMock, AsyncMock
 # ── helpers ───────────────────────────────────────────────────────────────────
 
 def _make_gateway(agent_id="main", session_id="sess-abc", fallbacks=None):
-    from pyclawops.core.gateway import Gateway
-    from pyclawops.config.schema import Config, AgentsConfig, ChannelsConfig, TelegramConfig, SlackConfig
+    from pyclopse.core.gateway import Gateway
+    from pyclopse.config.schema import Config, AgentsConfig, ChannelsConfig, TelegramConfig, SlackConfig
 
     gw = Gateway.__new__(Gateway)
     gw._logger = MagicMock()
@@ -26,7 +26,7 @@ def _make_gateway(agent_id="main", session_id="sess-abc", fallbacks=None):
     sl = SlackConfig(allowed_users=[], denied_users=[])
     gw._config = Config(agents=AgentsConfig(), channels=ChannelsConfig(telegram=tg, slack=sl))
 
-    from pyclawops.utils.time import now
+    from pyclopse.utils.time import now
     session = MagicMock()
     session.id = session_id
     session.agent_id = agent_id
@@ -54,14 +54,14 @@ def _make_gateway(agent_id="main", session_id="sess-abc", fallbacks=None):
 
 
 def _ctx(gw=None, session=None, channel="telegram"):
-    from pyclawops.core.commands import CommandContext
+    from pyclopse.core.commands import CommandContext
     if gw is None:
         gw, session, _ = _make_gateway()
     return CommandContext(gateway=gw, session=session, sender_id="u1", channel=channel)
 
 
 def _registry(gw):
-    from pyclawops.core.commands import CommandRegistry, register_builtin_commands
+    from pyclopse.core.commands import CommandRegistry, register_builtin_commands
     r = CommandRegistry()
     register_builtin_commands(r, gw)
     return r
@@ -70,7 +70,7 @@ def _registry(gw):
 async def _dispatch(cmd_text, gw=None, session=None):
     if gw is None:
         gw, session, _ = _make_gateway()
-    from pyclawops.core.commands import CommandContext
+    from pyclopse.core.commands import CommandContext
     ctx = CommandContext(gateway=gw, session=session, sender_id="u1", channel="telegram")
     return await _registry(gw).dispatch(cmd_text, ctx)
 
@@ -93,7 +93,7 @@ async def test_commands_lists_all_commands():
 
 async def test_commands_is_compact_compared_to_help():
     gw, session, _ = _make_gateway()
-    from pyclawops.core.commands import CommandContext, CommandRegistry, register_builtin_commands
+    from pyclopse.core.commands import CommandContext, CommandRegistry, register_builtin_commands
     r = CommandRegistry()
     register_builtin_commands(r, gw)
     ctx = CommandContext(gateway=gw, session=session, sender_id="u1", channel="telegram")
@@ -167,7 +167,7 @@ async def test_models_fallbacks_clear_resets_index():
 
 
 async def test_models_fallbacks_no_session():
-    from pyclawops.core.commands import CommandContext, CommandRegistry, register_builtin_commands
+    from pyclopse.core.commands import CommandContext, CommandRegistry, register_builtin_commands
     gw, session, _ = _make_gateway()
     r = CommandRegistry()
     register_builtin_commands(r, gw)
@@ -249,7 +249,7 @@ async def test_debug_set_missing_value_returns_usage():
 
 
 async def test_debug_no_session():
-    from pyclawops.core.commands import CommandContext, CommandRegistry, register_builtin_commands
+    from pyclopse.core.commands import CommandContext, CommandRegistry, register_builtin_commands
     gw, _, _ = _make_gateway()
     r = CommandRegistry()
     register_builtin_commands(r, gw)
@@ -286,7 +286,7 @@ async def test_activation_invalid_mode():
 
 
 async def test_activation_no_session():
-    from pyclawops.core.commands import CommandContext, CommandRegistry, register_builtin_commands
+    from pyclopse.core.commands import CommandContext, CommandRegistry, register_builtin_commands
     gw, _, _ = _make_gateway()
     r = CommandRegistry()
     register_builtin_commands(r, gw)
@@ -360,7 +360,7 @@ async def test_elevated_invalid_mode():
 
 
 async def test_elevated_no_session():
-    from pyclawops.core.commands import CommandContext, CommandRegistry, register_builtin_commands
+    from pyclopse.core.commands import CommandContext, CommandRegistry, register_builtin_commands
     gw, _, _ = _make_gateway()
     r = CommandRegistry()
     register_builtin_commands(r, gw)

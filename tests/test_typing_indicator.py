@@ -22,8 +22,8 @@ def _make_message(user_id=111, message_id=1, text="hello"):
 
 
 def _make_gateway(typing_indicator=True, handle_message_response="ok"):
-    from pyclawops.core.gateway import Gateway
-    from pyclawops.config.schema import (
+    from pyclopse.core.gateway import Gateway
+    from pyclopse.config.schema import (
         Config, ChannelsConfig, TelegramConfig, AgentsConfig, SecurityConfig,
     )
 

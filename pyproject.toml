@@ -1,5 +1,5 @@
 [project]
-name = "pyclawops"
+name = "pyclopse"
 dynamic = ["version"]
 description = "Python gateway - rewrite of OpenClaw"
 requires-python = ">=3.13.5"
@@ -38,7 +38,7 @@ dev = [
 ]
 
 [project.scripts]
-pyclawops = "pyclawops.__main__:main"
+pyclopse = "pyclopse.__main__:main"
 
 [build-system]
 requires = ["hatchling", "hatch-vcs"]
@@ -48,7 +48,7 @@ build-backend = "hatchling.build"
 source = "vcs"
 
 [tool.hatch.build.hooks.vcs]
-version-file = "pyclawops/_version.py"
+version-file = "pyclopse/_version.py"
 
 [tool.ruff]
 line-length = 100

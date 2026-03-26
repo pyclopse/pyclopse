@@ -6,14 +6,14 @@ from datetime import datetime, timedelta, timezone
 
 import pytest
 
-from pyclawops.memory.vault.lifecycle import LifecycleManager
-from pyclawops.memory.vault.models import (
+from pyclopse.memory.vault.lifecycle import LifecycleManager
+from pyclopse.memory.vault.models import (
     MemoryType,
     VaultFact,
     VaultFactState,
 )
-from pyclawops.memory.vault.store import VaultStore
-from pyclawops.memory.vault.ulid import generate as gen_ulid
+from pyclopse.memory.vault.store import VaultStore
+from pyclopse.memory.vault.ulid import generate as gen_ulid
 
 
 def make_fact(age_days: int = 0, **kwargs) -> VaultFact:
@@ -250,7 +250,7 @@ class TestRunAll:
         mgr = LifecycleManager(tmp_path, store)
         stats = mgr.run_all()
         # Should return a LifecycleStats (even if all zeros)
-        from pyclawops.memory.vault.models import LifecycleStats
+        from pyclopse.memory.vault.models import LifecycleStats
         assert isinstance(stats, LifecycleStats)
 
     def test_run_all_combines_stats(self, tmp_path):

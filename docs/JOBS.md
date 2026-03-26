@@ -1,4 +1,4 @@
-# pyclawops Jobs System
+# pyclopse Jobs System
 
 The Jobs system lets you schedule automated work — shell commands or agent prompts — on cron, interval, or one-shot schedules. Results are delivered to a messaging channel, posted to a webhook, or silently discarded.
 
@@ -22,7 +22,7 @@ JobScheduler._loop()
                                              to the named agent's current active channel
 ```
 
-Jobs are persisted to `~/.pyclawops/agents/{agent_id}/jobs.yaml` (one file per agent) and survive restarts. Each run is appended to a per-job JSONL log under `~/.pyclawops/agents/{agent_id}/runs/`.
+Jobs are persisted to `~/.pyclopse/agents/{agent_id}/jobs.yaml` (one file per agent) and survive restarts. Each run is appended to a per-job JSONL log under `~/.pyclopse/agents/{agent_id}/runs/`.
 
 ---
 
@@ -254,7 +254,7 @@ Presets set default values for all `include_*` flags. Individual flags override 
 
 ### include_* flags
 
-Each flag maps to a bootstrap file in `~/.pyclawops/agents/{agent}/`:
+Each flag maps to a bootstrap file in `~/.pyclopse/agents/{agent}/`:
 
 | Flag | File(s) loaded |
 |---|---|
@@ -316,8 +316,8 @@ Sends an alert after `alert_after` consecutive failures. The counter resets on a
 
 ## Persistence
 
-- **Job definitions**: `~/.pyclawops/agents/{agent_id}/jobs.yaml` — per-agent YAML, keyed by job name, atomic write
-- **Run logs**: `~/.pyclawops/agents/{agent_id}/runs/{job_id}.jsonl` — one JSON line per completed run
+- **Job definitions**: `~/.pyclopse/agents/{agent_id}/jobs.yaml` — per-agent YAML, keyed by job name, atomic write
+- **Run logs**: `~/.pyclopse/agents/{agent_id}/runs/{job_id}.jsonl` — one JSON line per completed run
 
 The scheduler merges on every flush: in-memory state wins for known jobs; jobs added externally while the scheduler is running are preserved rather than dropped.
 
@@ -430,11 +430,11 @@ From any chat session:
 ```yaml
 jobs:
   enabled: true
-  agentsDir: ~/.pyclawops/agents       # where per-agent jobs.yaml files live
+  agentsDir: ~/.pyclopse/agents       # where per-agent jobs.yaml files live
   defaultTimezone: America/New_York  # used when a cron job has no explicit tz
 ```
 
-`defaultTimezone` should be set to your local timezone to avoid surprises with cron expressions. Without it, pyclawops falls back to the system local timezone.
+`defaultTimezone` should be set to your local timezone to avoid surprises with cron expressions. Without it, pyclopse falls back to the system local timezone.
 
 ---
 
@@ -464,7 +464,7 @@ Example: market hours are 9:30am–4:00pm ET (UTC-4 in summer, UTC-5 in winter).
 
 ## Subagent System
 
-The subagent system is a thin wrapper around the jobs system. When an agent calls `subagent_spawn`, pyclawops creates an ephemeral `AgentRun` job with:
+The subagent system is a thin wrapper around the jobs system. When an agent calls `subagent_spawn`, pyclopse creates an ephemeral `AgentRun` job with:
 
 - `persistent: false` — ephemeral job, never written to `jobs.yaml`
 - `schedule: AtSchedule(at: now())` — fires immediately

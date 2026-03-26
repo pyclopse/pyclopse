@@ -1,15 +1,15 @@
-# PyClawOps
+# Pyclopse
 
-**PyClawOps** (Pronouced "Pyclopse") is a modular AI agent gateway written in Python. It connects one or more LLM agents — powered by under the hood by the excellent [FastAgent](https://github.com/evalstate/fast-agent) library — to messaging channels (Telegram, Slack, TUI, HTTP), tools (via MCP), long-term memory, scheduled jobs, and an extensible hook system. All subsystems are wired together by a central **Gateway** process.
+**Pyclopse** (Pronouced "Pyclopse") is a modular AI agent gateway written in Python. It connects one or more LLM agents — powered by under the hood by the excellent [FastAgent](https://github.com/evalstate/fast-agent) library — to messaging channels (Telegram, Slack, TUI, HTTP), tools (via MCP), long-term memory, scheduled jobs, and an extensible hook system. All subsystems are wired together by a central **Gateway** process.
 
-PyClawOps is inspired by [OpenClaw](https://github.com/openclaw/openclaw) but is a ground-up Python rewrite with its own architecture, idioms, and feature set. See [PyClawOps vs OpenClaw](#pyclawops-vs-openclaw) for a detailed comparison.
+Pyclopse is inspired by [OpenClaw](https://github.com/openclaw/openclaw) but is a ground-up Python rewrite with its own architecture, idioms, and feature set. See [Pyclopse vs OpenClaw](#pyclopse-vs-openclaw) for a detailed comparison.
 
 ---
 
 ## Table of Contents
 
 - [Quick Start](#quick-start)
-- [pyclawops vs OpenClaw](#pyclawops-vs-openclaw)
+- [pyclopse vs OpenClaw](#pyclopse-vs-openclaw)
 - [Configuration Reference](#configuration-reference)
   - [providers](#providers)
   - [agents](#agents)
@@ -48,33 +48,33 @@ PyClawOps is inspired by [OpenClaw](https://github.com/openclaw/openclaw) but is
 ### Install
 
 ```bash
-uv tool install pyclawops
+uv tool install pyclopse
 ```
 
 ### Update
 
 ```bash
-uv tool upgrade pyclawops
+uv tool upgrade pyclopse
 ```
 
 ### Uninstall
 
 ```bash
-uv tool uninstall pyclawops
+uv tool uninstall pyclopse
 ```
 
 ### Development install
 
 ```bash
-git clone https://github.com/jondecker76/pyclawops.git
-cd pyclawops
+git clone https://github.com/jondecker76/pyclopse.git
+cd pyclopse
 uv sync
-uv run python -m pyclawops run
+uv run python -m pyclopse run
 ```
 
 ### Configure
 
-Create `~/.pyclawops/config.yaml`. A minimal working config:
+Create `~/.pyclopse/config.yaml`. A minimal working config:
 
 ```yaml
 version: "1.0"
@@ -94,7 +94,7 @@ agents:
     contextWindow: 200000
     use_fastagent: true
     mcp_servers:
-      - pyclawops
+      - pyclopse
       - fetch
       - time
       - filesystem
@@ -109,27 +109,27 @@ gateway:
 
 ```bash
 # With TUI dashboard (default)
-pyclawops run
+pyclopse run
 
 # Headless (no TUI)
-pyclawops run --headless
+pyclopse run --headless
 
 # With a specific config file
-pyclawops run --config /path/to/pyclawops.yaml
+pyclopse run --config /path/to/pyclopse.yaml
 
 # Validate config only
-pyclawops validate
+pyclopse validate
 ```
 
 ### Data Directory
 
-pyclawops stores all runtime data under `~/.pyclawops/`:
+pyclopse stores all runtime data under `~/.pyclopse/`:
 
 ```
-~/.pyclawops/
+~/.pyclopse/
 ├── config
-|   ├── pyclawops.yaml             ← main config
-├── logs/pyclawops.log             ← gateway log (daily rotation)
+|   ├── pyclopse.yaml             ← main config
+├── logs/pyclopse.log             ← gateway log (daily rotation)
 ├── agents/{agent_id}/
 │   ├── active_session             ← pointer to current session ID
 │   ├── sessions/{YYYY-MM-DD}-{6}/
@@ -147,13 +147,13 @@ pyclawops stores all runtime data under `~/.pyclawops/`:
 
 ---
 
-## PyClawOps vs OpenClaw
+## Pyclopse vs OpenClaw
 
-PyClawOps is **not** a port of OpenClaw. It is an independent Python rewrite inspired by OpenClaw's design philosophy. Both are multi-channel AI agent gateways — but the differences are substantial.
+Pyclopse is **not** a port of OpenClaw. It is an independent Python rewrite inspired by OpenClaw's design philosophy. Both are multi-channel AI agent gateways — but the differences are substantial.
 
 ### Language & Agent Framework
 
-| | PyClawOps | OpenClaw |
+| | Pyclopse | OpenClaw |
 |---|---|---|
 | **Language** | Python 3.13.5+ (asyncio) | TypeScript (Node.js) |
 | **Package manager** | uv | pnpm |
@@ -162,7 +162,7 @@ PyClawOps is **not** a port of OpenClaw. It is an independent Python rewrite ins
 
 ### System Resource usage
 
-| | PyClawOps | OpenClaw |
+| | Pyclopse | OpenClaw |
 |---|---|---|
 | **Runtime** | Python 3.13+ (asyncio) | Node.js (TypeScript) |
 | **Production install size** | ~371 MB (.venv incl. dev deps) | ~500 MB (npm install, prod deps + dist) |
@@ -175,7 +175,7 @@ PyClawOps is **not** a port of OpenClaw. It is an independent Python rewrite ins
 | **Recommended RAM (per docs)** | — | 2 GB+ |
 
 ### Design Philosophy
-| | PyClawOps | OpenClaw |
+| | Pyclopse | OpenClaw |
 |---|---|---|
 |**Sessions**|Only one active session per agent, accessible via different communication channels|Each channel gets it's own session|
 |**Concurrency**|Number of concurrent API calls configurable per model.  Made to work well with coding plans that have concurrency limits.| Lane system which is sequential - one agent's calls block other agents|
@@ -188,7 +188,7 @@ PyClawOps is **not** a port of OpenClaw. It is an independent Python rewrite ins
 
 ### MCP
 
-| | PyClawOps | OpenClaw |
+| | Pyclopse | OpenClaw |
 |---|---|---|
 | **MCP role** | Runs an HTTP **MCP server** (FastMCP, port 8081); FastAgent acts as the MCP client | **MCP client only** — connects to external stdio-launched MCP servers |
 | **Library** | [FastMCP](https://github.com/jlowin/fastmcp) (Python) | `@modelcontextprotocol/sdk` 1.27.1 (TypeScript) |
@@ -197,7 +197,7 @@ PyClawOps is **not** a port of OpenClaw. It is an independent Python rewrite ins
 
 ### Channels
 
-| | PyClawOps | OpenClaw |
+| | Pyclopse | OpenClaw |
 |---|---|---|
 | **Fully wired** | 2 (Telegram, Slack) | 20 |
 | **Adapters implemented, not yet wired** | 6 (Discord, WhatsApp, Signal, LINE, Google Chat, iMessage) | — |
@@ -206,10 +206,10 @@ PyClawOps is **not** a port of OpenClaw. It is an independent Python rewrite ins
 
 ### Sessions
 
-| | PyClawOps | OpenClaw |
+| | Pyclopse | OpenClaw |
 |---|---|---|
 | **Session ID** | `YYYY-MM-DD-XXXXXX` (date-prefixed, 6 random chars) | UUID v4 |
-| **Storage** | Per-agent: `~/.pyclawops/agents/{id}/sessions/{sid}/session.json` + `history.json` | Central `sessions.json` index + per-agent JSONL transcript files |
+| **Storage** | Per-agent: `~/.pyclopse/agents/{id}/sessions/{sid}/session.json` + `history.json` | Central `sessions.json` index + per-agent JSONL transcript files |
 | **History format** | FastAgent-native `PromptMessageExtended` JSON | JSONL transcripts |
 | **Ephemeral sessions** | Explicit ephemeral mode — no disk writes (used for job isolation) | Ephemeral job sessions pruned by session reaper |
 | **TTL/reaper** | 24-hour in-memory TTL; disk files kept indefinitely | Session reaper prunes cron run sessions (24h default) |
@@ -217,13 +217,13 @@ PyClawOps is **not** a port of OpenClaw. It is an independent Python rewrite ins
 
 ### Memory
 
-PyClawOps has **two independent memory systems**. The default `FileMemoryBackend` handles lightweight journaling with optional vector search. The optional per-agent **Vault** is a separate structured fact store — configured under `agents[].vault:`, not `memory.backend`. OpenClaw uses a single SQLite-based system.
+Pyclopse has **two independent memory systems**. The default `FileMemoryBackend` handles lightweight journaling with optional vector search. The optional per-agent **Vault** is a separate structured fact store — configured under `agents[].vault:`, not `memory.backend`. OpenClaw uses a single SQLite-based system.
 
 #### Default Backend: `FileMemoryBackend`
 
-| | PyClawOps | OpenClaw |
+| | Pyclopse | OpenClaw |
 |---|---|---|
-| **Backend** | Per-agent append-only markdown daily journals (`~/.pyclawops/agents/{id}/memory/YYYY-MM-DD.md`) + optional `vectors.json` embedding index | SQLite with FTS5 full-text search virtual table + sqlite-vec vector extension |
+| **Backend** | Per-agent append-only markdown daily journals (`~/.pyclopse/agents/{id}/memory/YYYY-MM-DD.md`) + optional `vectors.json` embedding index | SQLite with FTS5 full-text search virtual table + sqlite-vec vector extension |
 | **Storage model** | Dated sections with tag metadata; one file per day per agent | Token-based file chunks (400 tokens, 80-token overlap); hash-deduplicated |
 | **Search** | Keyword frequency + optional cosine similarity (pure Python, no numpy) | Hybrid: BM25 keyword + vector similarity; optional MMR diversity reranking; optional temporal decay |
 | **Embedding providers** | OpenAI, Gemini, local (OpenAI-compat HTTP) | OpenAI, Gemini, Voyage, Mistral, Ollama, local (node-llama-cpp) — auto-fallback chain |
@@ -234,7 +234,7 @@ PyClawOps has **two independent memory systems**. The default `FileMemoryBackend
 
 The Vault stores atomic semantic facts as individual Markdown files with YAML frontmatter. It is independent of `FileMemoryBackend` and has no equivalent in OpenClaw.
 
-| | PyClawOps Vault | OpenClaw |
+| | Pyclopse Vault | OpenClaw |
 |---|---|---|
 | **Backend** | One Markdown file per fact; active facts in `vault/facts/`, superseded in `vault/archive/` | No equivalent |
 | **Fact IDs** | ULID (time-sortable, collision-resistant) | — |
@@ -249,7 +249,7 @@ The Vault stores atomic semantic facts as individual Markdown files with YAML fr
 
 ### Jobs & Scheduling
 
-| | PyClawOps | OpenClaw |
+| | Pyclopse | OpenClaw |
 |---|---|---|
 | **Schedule types** | cron (croniter), interval, at (one-shot) | cron (croner), every (interval), at (one-shot) |
 | **Timezone** | System local | IANA timezone with croner expression cache |
@@ -262,16 +262,16 @@ The Vault stores atomic semantic facts as individual Markdown files with YAML fr
 
 ### Configuration
 
-| | PyClawOps | OpenClaw |
+| | Pyclopse | OpenClaw |
 |---|---|---|
 | **Format** | YAML validated by Pydantic | YAML validated by Zod |
 | **Key style** | camelCase YAML → snake_case Python via `validation_alias` | camelCase TypeScript throughout |
-| **Inline secrets** | `${NAME}` — looks up `NAME` in the secrets registry (`~/.pyclawops/secrets/secrets.yaml`); registry entries declare `source: env/keychain/file/exec` | No inline syntax; secrets are first-class typed config values |
+| **Inline secrets** | `${NAME}` — looks up `NAME` in the secrets registry (`~/.pyclopse/secrets/secrets.yaml`); registry entries declare `source: env/keychain/file/exec` | No inline syntax; secrets are first-class typed config values |
 | **Scale** | Single YAML file | ~5,000 lines across 86 typed config files |
 
 ### Security & Approvals
 
-| | PyClawOps | OpenClaw |
+| | Pyclopse | OpenClaw |
 |---|---|---|
 | **Approval model** | Local rule-based evaluation | Human-in-the-loop: forwards requests to chat channels |
 | **Modes** | `ALLOWLIST`, `DENYLIST`, `ALL`, `NONE` | N/A (forward-only) |
@@ -281,7 +281,7 @@ The Vault stores atomic semantic facts as individual Markdown files with YAML fr
 
 ### Hooks & Events
 
-| | PyClawOps | OpenClaw |
+| | Pyclopse | OpenClaw |
 |---|---|---|
 | **Handler type** | Python functions, in-process | npm packages, git repos, or bundled TypeScript modules |
 | **Event types** | 15 named events (gateway lifecycle, message flow, commands, sessions, agent, tools, memory) | Per-module event declarations |
@@ -291,7 +291,7 @@ The Vault stores atomic semantic facts as individual Markdown files with YAML fr
 
 ### HTTP API
 
-| | PyClawOps | OpenClaw |
+| | Pyclopse | OpenClaw |
 |---|---|---|
 | **Framework** | FastAPI + uvicorn | Raw Node.js `http`/`https` modules (no framework) |
 | **Port** | 8080 | Configurable |
@@ -303,31 +303,31 @@ The Vault stores atomic semantic facts as individual Markdown files with YAML fr
 
 ### TUI / UI
 
-| | PyClawOps | OpenClaw |
+| | Pyclopse | OpenClaw |
 |---|---|---|
 | **Terminal UI** | Yes — Textual dashboard (chat, agents, sessions, logs, status bar) | Yes — custom pi-tui client (live chat, slash commands, status bar, token counter, streaming) |
 | **Web UI** | No | Yes — Control UI served by gateway at `/` |
 
 ---
 
-### What PyClawOps shares with OpenClaw
+### What Pyclopse shares with OpenClaw
 
 - **Skill format**: `SKILL.md` with YAML frontmatter — same concept and file name.
 - **Cron syntax**: 5-field cron expressions with timezone support.
 - **Core philosophy**: skills as injected context, channels as metadata-carrying transport, jobs with delivery targeting, hook events at gateway lifecycle points.
-- **Session history import**: `pyclawops import-openclaw` converts OpenClaw JSONL session transcripts to FastAgent history format.
+- **Session history import**: `pyclopse import-openclaw` converts OpenClaw JSONL session transcripts to FastAgent history format.
 
 ---
 
 ## Configuration Reference
 
-pyclawops reads `~/.pyclawops/config.yaml` (or the path passed to `--config`). The file is YAML. All keys at every level use **camelCase** (the Python models map these to snake_case internally via Pydantic `validation_alias`).
+pyclopse reads `~/.pyclopse/config.yaml` (or the path passed to `--config`). The file is YAML. All keys at every level use **camelCase** (the Python models map these to snake_case internally via Pydantic `validation_alias`).
 
 ### Inline Secrets
 
-Secrets are never embedded inline in config values. Instead, register each secret by name in `~/.pyclawops/secrets/secrets.yaml` and reference it anywhere in `pyclawops.yaml` as `${NAME}`.
+Secrets are never embedded inline in config values. Instead, register each secret by name in `~/.pyclopse/secrets/secrets.yaml` and reference it anywhere in `pyclopse.yaml` as `${NAME}`.
 
-**`~/.pyclawops/secrets/secrets.yaml`** — define where each secret comes from:
+**`~/.pyclopse/secrets/secrets.yaml`** — define where each secret comes from:
 
 ```yaml
 # source: env — read from an environment variable
@@ -341,17 +341,17 @@ OPENAI_KEY:
 # source: keychain — read from OS keychain
 TG_BOT_TOKEN:
   source: keychain
-  account: pyclawops-telegram-bot     # macOS Keychain account name (keyring on Linux)
-  service: pyclawops                  # optional; defaults to "pyclawops"
+  account: pyclopse-telegram-bot     # macOS Keychain account name (keyring on Linux)
+  service: pyclopse                  # optional; defaults to "pyclopse"
 
 # source: file — read from a file (entire file, or a JSON pointer into a JSON file)
 DB_PASSWORD:
   source: file
-  path: ~/.pyclawops/secrets/db.txt   # entire file contents (trimmed)
+  path: ~/.pyclopse/secrets/db.txt   # entire file contents (trimmed)
 
 TRADING_KEY:
   source: file
-  path: ~/.pyclawops/secrets/tokens.json
+  path: ~/.pyclopse/secrets/tokens.json
   id: /trading/api_key                # JSON pointer (RFC 6901) into a JSON file
 
 # source: exec — run an external command (1Password CLI, HashiCorp Vault, sops, etc.)
@@ -363,7 +363,7 @@ OP_SECRET:
   jsonOnly: false                     # stdout used directly as the secret value
 ```
 
-**`~/.pyclawops/config.yaml`** — reference by name:
+**`~/.pyclopse/config.yaml`** — reference by name:
 
 ```yaml
 providers:
@@ -376,9 +376,9 @@ channels:
         botToken: "${TG_BOT_TOKEN}"
 ```
 
-The secrets registry can also be placed directly in a `secrets:` block inside `pyclawops.yaml` — useful for simple setups. `~/.pyclawops/secrets/secrets.yaml` takes precedence when both exist.
+The secrets registry can also be placed directly in a `secrets:` block inside `pyclopse.yaml` — useful for simple setups. `~/.pyclopse/secrets/secrets.yaml` takes precedence when both exist.
 
-A `~/.pyclawops/.env` file (or `~/.env` / `./.env`) is loaded automatically at startup via `python-dotenv`. This populates environment variables that `source: env` secrets can read — useful for local development.
+A `~/.pyclopse/.env` file (or `~/.env` / `./.env`) is loaded automatically at startup via `python-dotenv`. This populates environment variables that `source: env` secrets can read — useful for local development.
 
 ---
 
@@ -444,14 +444,14 @@ agents:
       reasoning_split: true           # MiniMax: split reasoning from response
 
     mcp_servers:                      # MCP servers to connect to
-      - pyclawops                        # pyclawops's built-in tool server (port 8081)
+      - pyclopse                        # pyclopse's built-in tool server (port 8081)
       - fetch                         # HTTP fetch tool
       - time                          # date/time tool
       - filesystem                    # local filesystem access
 
     tools:
       profile: full                   # full | minimal | none
-      # 'full' enables all pyclawops MCP tools
+      # 'full' enables all pyclopse MCP tools
       # 'minimal' enables only core tools
       # 'none' disables the tool profile system
 
@@ -465,7 +465,7 @@ agents:
       cap: 20                         # max queued messages before drop policy
       drop: old                       # old | new | summarize
 
-    vault:                            # pyclawops Vault config for this agent
+    vault:                            # pyclopse Vault config for this agent
       enabled: true                   # set to null/false to disable vault
       show_recall: false              # append injected facts to agent replies (debug)
       default_profile: auto           # auto | default | planning | incident | handoff | research
@@ -503,7 +503,7 @@ agents:
 - `minimax/MiniMax-M2.7`
 - `generic/my-local-model`
 
-**Built-in MCP servers** (`mcp_servers`): `pyclawops`, `fetch`, `time`, `filesystem`, `chrome-devtools`. Custom MCP servers can be added by extending the agent config.
+**Built-in MCP servers** (`mcp_servers`): `pyclopse`, `fetch`, `time`, `filesystem`, `chrome-devtools`. Custom MCP servers can be added by extending the agent config.
 
 ---
 
@@ -568,7 +568,7 @@ gateway:
   debug: false
 
   skills_dirs:                        # global extra skill search paths
-    - "~/.pyclawops/skills"
+    - "~/.pyclopse/skills"
 
   hooks_dirs: []                      # extra hook search paths
 
@@ -596,7 +596,7 @@ memory:
     api_key: "${OPENAI_API_KEY}"
 ```
 
-The `memory:` top-level section controls the **legacy** `FileMemoryBackend`. pyclawops's built-in **Vault** is configured per-agent under `agents[].vault:` (see the [agents](#agents) section and [Memory & Vault](#memory--vault) below).
+The `memory:` top-level section controls the **legacy** `FileMemoryBackend`. pyclopse's built-in **Vault** is configured per-agent under `agents[].vault:` (see the [agents](#agents) section and [Memory & Vault](#memory--vault) below).
 
 ---
 
@@ -624,7 +624,7 @@ security:
 
   audit:
     enabled: true
-    log_file: "~/.pyclawops/logs/audit.log"
+    log_file: "~/.pyclopse/logs/audit.log"
     retention_days: 90
 ```
 
@@ -648,7 +648,7 @@ sessions:
 ```yaml
 jobs:
   enabled: true
-  agentsDir: "~/.pyclawops/agents"
+  agentsDir: "~/.pyclopse/agents"
   defaultTimezone: "America/New_York"  # used when a cron job has no explicit tz
 ```
 
@@ -660,7 +660,7 @@ See [Jobs & Subagents](#jobs--subagents) for full job configuration syntax.
 
 ### Gateway System
 
-**File:** `pyclawops/core/gateway.py`
+**File:** `pyclopse/core/gateway.py`
 
 The Gateway is the central orchestrator. It owns all subsystem instances, manages the two HTTP servers (MCP on port 8081 and REST API on port 8080), and routes every inbound message through the full pipeline.
 
@@ -668,7 +668,7 @@ The Gateway is the central orchestrator. It owns all subsystem instances, manage
 
 ```
 1. Load config
-2. Start pyclawops MCP server    (FastMCP, port 8081)  ← FastAgent connects here
+2. Start pyclopse MCP server    (FastMCP, port 8081)  ← FastAgent connects here
 3. Start REST API server       (FastAPI/uvicorn, port 8080)
 4. gateway.initialize()
    → AgentManager   (one Agent + AgentRunner per configured agent)
@@ -713,11 +713,11 @@ inbound message
 
 ### Agents & AgentRunner
 
-**Files:** `pyclawops/core/agent.py`, `pyclawops/agents/runner.py`
+**Files:** `pyclopse/core/agent.py`, `pyclopse/agents/runner.py`
 
 **`Agent`** is the runtime wrapper around an agent's config. Each `Agent` maintains a cache of per-session `AgentRunner` instances keyed by session ID. This preserves per-session conversation history while keeping sessions completely isolated from each other.
 
-**`AgentRunner`** wraps FastAgent and is the boundary between pyclawops's session model and FastAgent's execution engine:
+**`AgentRunner`** wraps FastAgent and is the boundary between pyclopse's session model and FastAgent's execution engine:
 
 - Holds one `FastAgent` context (`fast.run()`) alive for the runner's lifetime
 - Loads history lazily on first use (`_load_history()`) — injects `PromptMessageExtended` JSON directly into FA's message history
@@ -729,7 +729,7 @@ inbound message
 
 ```
 Agent._session_runners = {
-    "2026-03-11-aB3xYz": AgentRunner(history_path=~/.pyclawops/agents/main/sessions/.../history.json),
+    "2026-03-11-aB3xYz": AgentRunner(history_path=~/.pyclopse/agents/main/sessions/.../history.json),
     "2026-03-11-cD5yWz": AgentRunner(history_path=...),
     ...
 }
@@ -737,9 +737,9 @@ Agent._session_runners = {
 
 On error, `agent.evict_session_runner(session_id)` closes the runner (disconnects FA MCP connections) and removes it from the cache. The next message creates a fresh runner that reloads history from disk — clean reconnect with preserved context.
 
-**System prompt assembly** (`pyclawops/core/prompt_builder.py`):
+**System prompt assembly** (`pyclopse/core/prompt_builder.py`):
 
-Agent bootstrap files live in `~/.pyclawops/agents/{agent_id}/`:
+Agent bootstrap files live in `~/.pyclopse/agents/{agent_id}/`:
 
 | Flag | File(s) loaded |
 |------|----------------|
@@ -758,9 +758,9 @@ All of these are optional. Missing files are silently skipped.
 
 ### Sessions System
 
-**File:** `pyclawops/core/session.py`
+**File:** `pyclopse/core/session.py`
 
-pyclawops uses a **one-active-session-per-agent** model. Each agent has exactly one live session at any time, regardless of how many channels are sending it messages. Channels are routing metadata — the session is not tied to any particular channel.
+pyclopse uses a **one-active-session-per-agent** model. Each agent has exactly one live session at any time, regardless of how many channels are sending it messages. Channels are routing metadata — the session is not tied to any particular channel.
 
 **Session metadata** (`session.json`):
 
@@ -793,7 +793,7 @@ pyclawops uses a **one-active-session-per-agent** model. Each agent has exactly 
 
 ### Message Queue
 
-**File:** `pyclawops/core/queue.py`
+**File:** `pyclopse/core/queue.py`
 
 Each session gets its own `SessionMessageQueue` that controls what happens when new messages arrive while the agent is still processing the previous one.
 
@@ -824,7 +824,7 @@ agents:
 
 ### Commands
 
-**File:** `pyclawops/core/commands.py`
+**File:** `pyclopse/core/commands.py`
 
 The `CommandRegistry` dispatches `/slash` commands before messages reach the agent. Built-in commands:
 
@@ -874,7 +874,7 @@ The `CommandRegistry` dispatches `/slash` commands before messages reach the age
 
 ### Jobs & Subagents
 
-**File:** `pyclawops/jobs/scheduler.py`
+**File:** `pyclopse/jobs/scheduler.py`
 
 Jobs are persistent, scheduled tasks. The scheduler supports three schedule types:
 
@@ -969,9 +969,9 @@ deliver:
 
 ### Hooks
 
-**Files:** `pyclawops/hooks/registry.py`, `pyclawops/hooks/events.py`, `pyclawops/hooks/loader.py`
+**Files:** `pyclopse/hooks/registry.py`, `pyclopse/hooks/events.py`, `pyclopse/hooks/loader.py`
 
-The hook system is pyclawops's event-driven extension mechanism. Two handler patterns:
+The hook system is pyclopse's event-driven extension mechanism. Two handler patterns:
 
 **Notification** — all registered handlers fire; return values ignored; exceptions caught and logged. Used for logging, auditing, side-effects.
 
@@ -1018,11 +1018,11 @@ hooks:
 
 ### Memory & Vault
 
-**Files:** `pyclawops/memory/service.py`, `pyclawops/memory/vault/`
+**Files:** `pyclopse/memory/service.py`, `pyclopse/memory/vault/`
 
 All memory operations go through `MemoryService`, which routes them through the `HookRegistry` intercept chain. Any plugin can swap the backend by registering a `memory:*` intercept handler.
 
-pyclawops ships a built-in **Vault** — a structured, per-agent fact store. It lives at `~/.pyclawops/agents/{agent_id}/vault/` and is configured per-agent under `agents[].vault:`.
+pyclopse ships a built-in **Vault** — a structured, per-agent fact store. It lives at `~/.pyclopse/agents/{agent_id}/vault/` and is configured per-agent under `agents[].vault:`.
 
 #### Memory Types
 
@@ -1052,7 +1052,7 @@ Custom types can be added under `vault.types` in the agent config.
 Each fact is a Markdown file named with a ULID (sortable by creation time):
 
 ```
-~/.pyclawops/agents/{agent_id}/vault/
+~/.pyclopse/agents/{agent_id}/vault/
 ├── .cursors.json          ← ingestion progress + crash recovery
 ├── facts/
 │   ├── 01KMGEGB....md    ← active facts
@@ -1135,8 +1135,8 @@ At each turn, the Vault scores and injects relevant facts:
 #### Legacy FileMemoryBackend
 
 The legacy backend stores entries as daily markdown journals:
-- `~/.pyclawops/agents/{id}/memory/YYYY-MM-DD.md` — daily journal (appended by tools)
-- `~/.pyclawops/agents/{id}/memory/MEMORY.md` — curated file (edited by user; never written by tools)
+- `~/.pyclopse/agents/{id}/memory/YYYY-MM-DD.md` — daily journal (appended by tools)
+- `~/.pyclopse/agents/{id}/memory/MEMORY.md` — curated file (edited by user; never written by tools)
 
 `MEMORY.md` is injected into the agent's system prompt at startup via the `boot-md` hook and via `include_memory` in job prompts. Edit it directly to give your agent permanent context.
 
@@ -1144,14 +1144,14 @@ The legacy backend stores entries as daily markdown journals:
 
 ### Skills
 
-**Files:** `pyclawops/skills/registry.py`
+**Files:** `pyclopse/skills/registry.py`
 
 Skills are modular, user-installable capability packages. Each skill is a directory containing a `SKILL.md` file with YAML frontmatter and a markdown body, plus optional scripts and reference files.
 
 **Directory structure:**
 
 ```
-~/.pyclawops/skills/
+~/.pyclopse/skills/
   my-skill/
     SKILL.md           ← required
     scripts/
@@ -1186,8 +1186,8 @@ Run: `uv run {skill_dir}/scripts/do_thing.py --arg "$INPUT"`
 `{skill_dir}` is substituted with the absolute path to the skill directory at injection time — scripts are always findable regardless of working directory.
 
 **Search order** (later overrides earlier on name collision):
-1. `~/.pyclawops/skills/` (global)
-2. `~/.pyclawops/agents/{agent_id}/skills/` (per-agent)
+1. `~/.pyclopse/skills/` (global)
+2. `~/.pyclopse/agents/{agent_id}/skills/` (per-agent)
 3. Extra dirs from `gateway.skills_dirs` config
 
 **Invocation:**
@@ -1200,7 +1200,7 @@ Run: `uv run {skill_dir}/scripts/do_thing.py --arg "$INPUT"`
 
 ### Channels System
 
-**Files:** `pyclawops/channels/plugin.py`, `pyclawops/channels/`
+**Files:** `pyclopse/channels/plugin.py`, `pyclopse/channels/`
 
 Channel adapters are the boundary between external messaging platforms and the Gateway. Each adapter implements the `ChannelPlugin` ABC.
 
@@ -1214,16 +1214,16 @@ Channel adapters are the boundary between external messaging platforms and the G
 - Forum topic routing via `message_thread_id`
 
 **Slack specifics:**
-- `threading: true` — each thread becomes its own pyclawops session
+- `threading: true` — each thread becomes its own pyclopse session
 - Optional pulse heartbeat to a monitoring channel
 
-**Third-party plugins** are discovered via `pyclawops.channels` entry point group or `plugins.channels` list in config.
+**Third-party plugins** are discovered via `pyclopse.channels` entry point group or `plugins.channels` list in config.
 
 ---
 
 ### Security System
 
-**Files:** `pyclawops/security/approvals.py`, `pyclawops/security/sandbox.py`, `pyclawops/security/audit.py`
+**Files:** `pyclopse/security/approvals.py`, `pyclopse/security/sandbox.py`, `pyclopse/security/audit.py`
 
 **Exec Approvals** control whether `bash` tool calls are permitted:
 
@@ -1238,15 +1238,15 @@ Channel adapters are the boundary between external messaging platforms and the G
 
 **Sandbox** (optional): runs bash tool commands inside Docker containers with restricted networking, memory, CPU, and filesystem access.
 
-**Audit Logger** appends JSON-lines records to `~/.pyclawops/logs/audit.log` for every inbound message, tool execution, and outbound reply. Exposed via `audit_log_tail()` and `audit_log_search()` MCP tools.
+**Audit Logger** appends JSON-lines records to `~/.pyclopse/logs/audit.log` for every inbound message, tool execution, and outbound reply. Exposed via `audit_log_tail()` and `audit_log_search()` MCP tools.
 
 ---
 
 ### MCP Server
 
-**File:** `pyclawops/tools/server.py`
+**File:** `pyclopse/tools/server.py`
 
-The pyclawops MCP server runs on port 8081 (default) using FastMCP. FastAgent connects to it during agent initialization to discover and call tools. The gateway injects `X-Agent-Name` in request headers so tools can identify the calling agent.
+The pyclopse MCP server runs on port 8081 (default) using FastMCP. FastAgent connects to it during agent initialization to discover and call tools. The gateway injects `X-Agent-Name` in request headers so tools can identify the calling agent.
 
 **Tool categories:**
 
@@ -1268,7 +1268,7 @@ The pyclawops MCP server runs on port 8081 (default) using FastMCP. FastAgent co
 | Agents | `agents_list`, `session_status`, `send_message` |
 | Reflection | `reflect`, `reflect_source` |
 
-**`reflect()` and `reflect_source()`** let agents explore pyclawops's own architecture:
+**`reflect()` and `reflect_source()`** let agents explore pyclopse's own architecture:
 
 ```
 reflect()                              → architecture overview
@@ -1282,9 +1282,9 @@ reflect_source("core/gateway.py")      → source with line numbers
 
 ### A2A Protocol
 
-**Files:** `pyclawops/a2a/executor.py`, `pyclawops/a2a/setup.py`
+**Files:** `pyclopse/a2a/executor.py`, `pyclopse/a2a/setup.py`
 
-A2A (Agent-to-Agent) is a Google-defined protocol that lets external AI systems call pyclawops agents over HTTP using a standardised JSON-RPC interface. A2A routes are mounted onto the existing REST API (port 8080).
+A2A (Agent-to-Agent) is a Google-defined protocol that lets external AI systems call pyclopse agents over HTTP using a standardised JSON-RPC interface. A2A routes are mounted onto the existing REST API (port 8080).
 
 **Endpoints (per agent):**
 
@@ -1321,14 +1321,14 @@ Requires `pip install a2a-sdk`. If not installed, A2A is silently disabled.
 
 ### Reflection
 
-**Files:** `pyclawops/reflect/__init__.py`, `pyclawops/reflect/registry.py`, `pyclawops/reflect/decorators.py`
+**Files:** `pyclopse/reflect/__init__.py`, `pyclopse/reflect/registry.py`, `pyclopse/reflect/decorators.py`
 
-The reflection system allows agents (and developers) to explore pyclawops's architecture live, without reading static documentation. Decorators annotate classes at import time and populate a global registry.
+The reflection system allows agents (and developers) to explore pyclopse's architecture live, without reading static documentation. Decorators annotate classes at import time and populate a global registry.
 
 **Decorators:**
 
 ```python
-from pyclawops.reflect import reflect_system, reflect_event, reflect_command
+from pyclopse.reflect import reflect_system, reflect_event, reflect_command
 
 @reflect_system("gateway")
 class Gateway:
@@ -1364,13 +1364,13 @@ The registry is populated at import time. All subsystem modules are imported dur
 
 ### TUI Dashboard
 
-**Files:** `pyclawops/tui/dashboard.py`, `pyclawops/tui/screens.py`
+**Files:** `pyclopse/tui/dashboard.py`, `pyclopse/tui/screens.py`
 
 A [Textual](https://textual.textualize.io/) terminal UI that runs in the same process as the gateway. Enabled by default; use `--headless` to skip it.
 
 ```
 ┌─────────────────────────────────────────────────────┐
-│  pyclawops v0.2.0 │  3 sessions │  2 jobs │  uptime    │
+│  pyclopse v0.2.0 │  3 sessions │  2 jobs │  uptime    │
 ├─────────────────────────────────────────────────────┤
 │  [0 Agents] [1 Sessions] [2 History] [3 Jobs] ...   │
 ├─────────────────────────────────────────────────────┤
@@ -1392,7 +1392,7 @@ A [Textual](https://textual.textualize.io/) terminal UI that runs in the same pr
 | `3` | Jobs | Jobs with status and next-run time |
 | `4` | Sys-Prompt | System prompt for selected agent |
 | `5` | Config | Current config (secrets redacted) |
-| `6` | Files | File browser for `~/.pyclawops/` |
+| `6` | Files | File browser for `~/.pyclopse/` |
 | `7` | Skills | Discovered skills |
 | `8` | Run-Hist | Job run history |
 | `9` | Agent-Log | Per-agent log viewer |
@@ -1417,4 +1417,4 @@ uv run pytest tests/test_commands.py::test_help_command -v
 
 Always use `uv run` — never `.venv/bin/pytest` or bare `python`.
 
-The [OpenClaw source](https://github.com/openclaw/openclaw) can be useful as a design reference for features whose intent isn't clear from the pyclawops codebase alone, but do not mirror its implementation directly.
+The [OpenClaw source](https://github.com/openclaw/openclaw) can be useful as a design reference for features whose intent isn't clear from the pyclopse codebase alone, but do not mirror its implementation directly.

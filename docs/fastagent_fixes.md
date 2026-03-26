@@ -228,7 +228,7 @@ if use_history and not has_tool_results and not has_new_human_turn:
 
 ### Option B — Strip incomplete trailing messages before persisting history (workaround)
 
-Before writing history to disk, remove any trailing `assistant` messages whose `stop_reason` is in `{toolUse, error, cancelled, timeout}`. This prevents the bad state from ever being saved, at the cost of losing the partial turn context. This is the approach we are using in pyclawops as a downstream mitigation:
+Before writing history to disk, remove any trailing `assistant` messages whose `stop_reason` is in `{toolUse, error, cancelled, timeout}`. This prevents the bad state from ever being saved, at the cost of losing the partial turn context. This is the approach we are using in pyclopse as a downstream mitigation:
 
 ```python
 _INCOMPLETE_STOP_REASONS = frozenset({"toolUse", "error", "cancelled", "timeout"})

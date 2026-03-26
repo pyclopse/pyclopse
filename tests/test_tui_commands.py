@@ -17,8 +17,8 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 def _make_gateway(messages_total=5, agent_id="main", agent_name="Main Agent"):
     """Return a minimal gateway stub."""
-    from pyclawops.core.gateway import Gateway
-    from pyclawops.config.schema import Config, AgentsConfig, SecurityConfig
+    from pyclopse.core.gateway import Gateway
+    from pyclopse.config.schema import Config, AgentsConfig, SecurityConfig
 
     gw = Gateway.__new__(Gateway)
     gw._initialized = True
@@ -51,7 +51,7 @@ def _make_gateway(messages_total=5, agent_id="main", agent_name="Main Agent"):
     gw._session_manager = mock_sm
 
     # Command registry
-    from pyclawops.core.commands import CommandRegistry, register_builtin_commands
+    from pyclopse.core.commands import CommandRegistry, register_builtin_commands
     gw._command_registry = CommandRegistry()
     register_builtin_commands(gw._command_registry, gw)
 
@@ -67,7 +67,7 @@ class TestSlashCommandDetection:
 
     def _make_screen(self, gateway):
         """Return a ChatScreen with mocked Textual internals."""
-        from pyclawops.tui.screens import ChatScreen
+        from pyclopse.tui.screens import ChatScreen
         screen = ChatScreen.__new__(ChatScreen)
         screen.gateway = gateway
         screen._current_agent_id = "main"
@@ -127,7 +127,7 @@ class TestSlashCommandDetection:
         assert screen._dispatch_calls == []
 
     def test_slash_without_gateway_does_not_dispatch(self):
-        from pyclawops.tui.screens import ChatScreen
+        from pyclopse.tui.screens import ChatScreen
         screen = ChatScreen.__new__(ChatScreen)
         screen.gateway = None
         screen._current_agent_id = None
@@ -160,7 +160,7 @@ class TestSlashCommandDispatch:
     async def test_help_command_returns_text(self):
         gw = _make_gateway()
         ctx_class = None
-        from pyclawops.core.commands import CommandContext
+        from pyclopse.core.commands import CommandContext
         ctx = CommandContext(gateway=gw, session=None, sender_id="tui_user", channel="tui")
         result = await gw._command_registry.dispatch("/help", ctx)
         assert result is not None
@@ -169,7 +169,7 @@ class TestSlashCommandDispatch:
     @pytest.mark.asyncio
     async def test_unknown_command_returns_none(self):
         gw = _make_gateway()
-        from pyclawops.core.commands import CommandContext
+        from pyclopse.core.commands import CommandContext
         ctx = CommandContext(gateway=gw, session=None, sender_id="tui_user", channel="tui")
         result = await gw._command_registry.dispatch("/notacommand", ctx)
         # Unknown commands return None so callers can fall through to agent routing
@@ -178,7 +178,7 @@ class TestSlashCommandDispatch:
     @pytest.mark.asyncio
     async def test_status_command_returns_text(self):
         gw = _make_gateway()
-        from pyclawops.core.commands import CommandContext
+        from pyclopse.core.commands import CommandContext
         ctx = CommandContext(gateway=gw, session=None, sender_id="tui_user", channel="tui")
         result = await gw._command_registry.dispatch("/status", ctx)
         assert result is not None
@@ -192,7 +192,7 @@ class TestStatusBarData:
     """Verify status bar content is correctly assembled from gateway state."""
 
     def _make_screen(self, gateway, agent_id="main"):
-        from pyclawops.tui.screens import ChatScreen
+        from pyclopse.tui.screens import ChatScreen
         screen = ChatScreen.__new__(ChatScreen)
         screen.gateway = gateway
         screen._current_agent_id = agent_id

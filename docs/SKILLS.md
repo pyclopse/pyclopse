@@ -1,4 +1,4 @@
-# PyClawOps Skill System
+# Pyclopse Skill System
 
 Skills are modular, user-installable capability packages. A skill is a folder
 containing a `SKILL.md` file (prompt template + metadata) plus optional scripts
@@ -16,7 +16,7 @@ The agent never needs to read the script — just knows how to invoke it.
 Compatible with OpenClaw's format. Every skill is a folder with a `SKILL.md`:
 
 ```
-~/.pyclawops/skills/
+~/.pyclopse/skills/
   my-skill/
     SKILL.md           ← required
     scripts/           ← optional: executable code
@@ -170,11 +170,11 @@ Does it call APIs?                   → Python (uv, httpx/requests)
 
 ## Discovery & Precedence
 
-pyclawops searches locations in order (later entry wins on name conflict):
+pyclopse searches locations in order (later entry wins on name conflict):
 
 ```
-1. ~/.pyclawops/skills/                           global user skills (lowest priority)
-2. ~/.pyclawops/agents/{agent_name}/skills/       per-agent skills (overrides global)
+1. ~/.pyclopse/skills/                           global user skills (lowest priority)
+2. ~/.pyclopse/agents/{agent_name}/skills/       per-agent skills (overrides global)
 3. extra dirs from gateway.skills_dirs config      (highest priority)
 ```
 
@@ -208,7 +208,7 @@ by the agent when the description matches the user's intent. This is the
 OpenClaw model — the LLM reads skill metadata in the system prompt and
 decides when to apply a skill without explicit invocation.
 
-PyClawOps can support both: explicit `/invoke` and implicit trigger via system
+Pyclopse can support both: explicit `/invoke` and implicit trigger via system
 prompt metadata.
 
 ---
@@ -226,7 +226,7 @@ SkillRegistry.lookup("daily-briefing")
          │
          ├─ load SKILL.md body
          ├─ substitute {args} → "9am"
-         ├─ substitute {skill_dir} → "~/.pyclawops/skills/daily-briefing"
+         ├─ substitute {skill_dir} → "~/.pyclopse/skills/daily-briefing"
          ▼
 Prepend skill body to user message, forward to agent
          │
@@ -234,7 +234,7 @@ Prepend skill body to user message, forward to agent
 Agent (with full MCP tool access)
          │
          ├─ reads skill instructions
-         ├─ runs: uv run ~/.pyclawops/skills/daily-briefing/scripts/setup.py --time "9am"
+         ├─ runs: uv run ~/.pyclopse/skills/daily-briefing/scripts/setup.py --time "9am"
          ├─ reads script output
          ▼
 Response to user
@@ -244,7 +244,7 @@ Response to user
 
 ## Skills
 
-No skills are bundled with the pyclawops package. All skills are user-created and installed into `~/.pyclawops/skills/` or `~/.pyclawops/agents/{name}/skills/`.
+No skills are bundled with the pyclopse package. All skills are user-created and installed into `~/.pyclopse/skills/` or `~/.pyclopse/agents/{name}/skills/`.
 
 A skill is just a directory with a `SKILL.md` file. Create one manually or ask an agent to create it for you.
 
@@ -281,7 +281,7 @@ Since the SKILL.md format is compatible, most OpenClaw skills that:
 - Don't require OpenClaw-specific env vars
 - Use Python or bash scripts
 
-...can be installed directly in PyClawOps. The `metadata.openclaw` block is just
+...can be installed directly in Pyclopse. The `metadata.openclaw` block is just
 ignored. This is a meaningful compatibility story.
 
 ---
@@ -306,7 +306,7 @@ A `validate_skill.py` script (bundled in `skill-creator`) checks:
 
 ### Phase 1: Core infrastructure
 
-1. **`SkillRegistry`** class (`pyclawops/skills/registry.py`)
+1. **`SkillRegistry`** class (`pyclopse/skills/registry.py`)
    - Discover skills from 3 locations
    - Parse frontmatter (PyYAML)
    - Build name → SkillEntry map
@@ -344,7 +344,7 @@ A `validate_skill.py` script (bundled in `skill-creator`) checks:
 
 ## Config
 
-The only skills-related config field in `pyclawops.yaml` is `gateway.skills_dirs` — an optional list of extra directories to search beyond the defaults:
+The only skills-related config field in `pyclopse.yaml` is `gateway.skills_dirs` — an optional list of extra directories to search beyond the defaults:
 
 ```yaml
 gateway:
@@ -358,7 +358,7 @@ There is no `skills:` top-level block. Fields like `max_in_prompt`, `auto_trigge
 
 ## Key Differences from OpenClaw
 
-| Aspect | OpenClaw | PyClawOps |
+| Aspect | OpenClaw | Pyclopse |
 |--------|----------|--------|
 | Runtime | Coding agent (local) | Messaging bot (any channel) |
 | Channels | Chat window | Telegram, TUI, Slack, WhatsApp |
@@ -383,7 +383,7 @@ There is no `skills:` top-level block. Fields like `max_in_prompt`, `auto_trigge
    argparse-style parsing at the framework level? Raw is simpler; structured
    enables better error messages. Suggest: raw passthrough, let script handle it.
 
-3. **Agent-scoped skills**: Should skills be definable per-agent in `pyclawops.yaml`
+3. **Agent-scoped skills**: Should skills be definable per-agent in `pyclopse.yaml`
    (agent-specific skill dirs) or always global? Suggest: global discovery with
    `agent:` field in frontmatter for routing.
 
@@ -401,5 +401,5 @@ There is no `skills:` top-level block. Fields like `max_in_prompt`, `auto_trigge
 ---
 
 *Research session: 2026-03-09*
-*Based on: OpenClaw skills/ analysis + PyClawOps architecture review*
+*Based on: OpenClaw skills/ analysis + Pyclopse architecture review*
 *Related: docs/TOOL_RESEARCH.md*

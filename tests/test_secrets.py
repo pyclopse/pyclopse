@@ -7,14 +7,14 @@ from unittest.mock import MagicMock
 
 import pytest
 
-from pyclawops.secrets.models import (
+from pyclopse.secrets.models import (
     EnvSecretDef,
     ExecSecretDef,
     FileSecretDef,
     KeychainSecretDef,
     SecretsConfig,
 )
-from pyclawops.secrets.manager import SecretsManager, ResolutionError
+from pyclopse.secrets.manager import SecretsManager, ResolutionError
 
 
 # ---------------------------------------------------------------------------
@@ -59,7 +59,7 @@ class TestModels:
 
     def test_keychain_def_defaults(self):
         d = KeychainSecretDef.model_validate({"source": "keychain", "account": "my-account"})
-        assert d.service == "pyclawops"
+        assert d.service == "pyclopse"
         assert d.backend == "auto"
 
     def test_secrets_config_extra_keys(self):
@@ -267,7 +267,7 @@ class TestExecSource:
 class TestKeychainSource:
     def _mgr(self, backend: str = "auto") -> SecretsManager:
         return SecretsManager({
-            "MY_SECRET": {"source": "keychain", "account": "myaccount", "service": "pyclawops-test", "backend": backend}
+            "MY_SECRET": {"source": "keychain", "account": "myaccount", "service": "pyclopse-test", "backend": backend}
         })
 
     def test_security_backend_success(self, monkeypatch):
@@ -306,7 +306,7 @@ class TestKeychainSource:
         fake_keyring.get_password.return_value = "keyring-secret"
         monkeypatch.setitem(sys.modules, "keyring", fake_keyring)
         assert self._mgr("keyring").resolve_name("MY_SECRET") == "keyring-secret"
-        fake_keyring.get_password.assert_called_once_with("pyclawops-test", "myaccount")
+        fake_keyring.get_password.assert_called_once_with("pyclopse-test", "myaccount")
 
     def test_keyring_entry_missing(self, monkeypatch):
         fake_keyring = MagicMock()
@@ -447,13 +447,13 @@ class TestConfigLoaderIntegration:
 
     These tests embed secrets inline in the config YAML (the fallback path).
     We monkeypatch SECRETS_FILE_PATH to a non-existent location so the real
-    ~/.pyclawops/secrets/secrets.yaml is not picked up, forcing the fallback.
+    ~/.pyclopse/secrets/secrets.yaml is not picked up, forcing the fallback.
     """
 
     @pytest.fixture(autouse=True)
     def no_global_secrets_file(self, tmp_path, monkeypatch):
-        """Prevent tests from loading the real ~/.pyclawops/secrets/secrets.yaml."""
-        monkeypatch.setattr("pyclawops.config.loader.SECRETS_FILE_PATH", str(tmp_path / "nonexistent.yaml"))
+        """Prevent tests from loading the real ~/.pyclopse/secrets/secrets.yaml."""
+        monkeypatch.setattr("pyclopse.config.loader.SECRETS_FILE_PATH", str(tmp_path / "nonexistent.yaml"))
 
     def test_loader_resolves_secret(self, tmp_path, monkeypatch):
         monkeypatch.setenv("TG_TOKEN", "tg-resolved")
@@ -469,7 +469,7 @@ channels:
     enabled: true
     botToken: "${TG_TOKEN}"
 """)
-        from pyclawops.config.loader import ConfigLoader
+        from pyclopse.config.loader import ConfigLoader
         cfg = ConfigLoader(str(config_file)).load()
         assert cfg.channels.telegram.bot_token == "tg-resolved"
 
@@ -487,7 +487,7 @@ providers:
     enabled: true
     apiKey: "${MINIMAX_KEY}"
 """)
-        from pyclawops.config.loader import ConfigLoader
+        from pyclopse.config.loader import ConfigLoader
         cfg = ConfigLoader(str(config_file)).load()
         assert cfg.providers.minimax.api_key == "sk-mini-123"
 
@@ -506,7 +506,7 @@ providers:
     enabled: true
     apiKey: "${MY_SECRET}"
 """)
-        from pyclawops.config.loader import ConfigLoader
+        from pyclopse.config.loader import ConfigLoader
         cfg = ConfigLoader(str(config_file)).load()
         assert cfg.providers.anthropic.api_key == "actual-value"
 
@@ -520,7 +520,7 @@ providers:
     enabled: true
     apiKey: "${NOT_REGISTERED}"
 """)
-        from pyclawops.config.loader import ConfigLoader
+        from pyclopse.config.loader import ConfigLoader
         cfg = ConfigLoader(str(config_file)).load()
         # Unresolved reference stays as the original ${...} string
         assert cfg.providers.anthropic.api_key == "${NOT_REGISTERED}"
@@ -531,7 +531,7 @@ providers:
 
         secrets_file = tmp_path / "secrets.yaml"
         secrets_file.write_text("DEDICATED_SECRET:\n  source: env\n")
-        monkeypatch.setattr("pyclawops.config.loader.SECRETS_FILE_PATH", str(secrets_file))
+        monkeypatch.setattr("pyclopse.config.loader.SECRETS_FILE_PATH", str(secrets_file))
 
         config_file = tmp_path / "config.yaml"
         config_file.write_text("""
@@ -541,6 +541,6 @@ providers:
     enabled: true
     apiKey: "${DEDICATED_SECRET}"
 """)
-        from pyclawops.config.loader import ConfigLoader
+        from pyclopse.config.loader import ConfigLoader
         cfg = ConfigLoader(str(config_file)).load()
         assert cfg.providers.anthropic.api_key == "from-secrets-yaml"

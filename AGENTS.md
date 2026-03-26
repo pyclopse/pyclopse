@@ -1,10 +1,10 @@
-# AGENTS.md — pyclawops Coding Assistant Context
+# AGENTS.md — pyclopse Coding Assistant Context
 
 > For AI coding assistants (Claude Code, Cursor, Copilot, etc.) working on this codebase.
 
-## What Is pyclawops?
+## What Is pyclopse?
 
-pyclawops is an open-source Python AI gateway — a self-hosted personal AI assistant server.
+pyclopse is an open-source Python AI gateway — a self-hosted personal AI assistant server.
 It routes messages from Telegram/Slack → an LLM agent → back to the user, with support for:
 - Multiple messaging channels (Telegram, Slack, plugins)
 - Multiple LLM providers (OpenAI, MiniMax, any OpenAI-compatible endpoint)
@@ -14,14 +14,14 @@ It routes messages from Telegram/Slack → an LLM agent → back to the user, wi
 ## Project Layout
 
 ```
-pyclawops/
+pyclopse/
   core/
     gateway.py          # Main orchestrator — channels, jobs, sessions, agents
     agent.py            # AgentManager: creates FastAgent instances
     commands.py         # CommandRegistry: /help /reset /status /model /job
     session.py          # SessionManager: persist + reap sessions
     concurrency.py      # Per-model concurrency rate limiting
-    prompt_builder.py   # Builds system prompts from ~/.pyclawops/agents/<name>/ files
+    prompt_builder.py   # Builds system prompts from ~/.pyclopse/agents/<name>/ files
     router.py           # Routes inbound messages to correct handler
     templates/          # Default bootstrap file templates (AGENTS.md, SOUL.md, etc.)
   config/
@@ -47,7 +47,7 @@ pyclawops/
     bundled/            # Built-in hooks (session-memory, boot-md)
   tui/
     screens.py          # Textual TUI screens
-  __main__.py           # CLI entry point: `python -m pyclawops`
+  __main__.py           # CLI entry point: `python -m pyclopse`
 examples/
   config.yaml           # Fully documented example configuration
 tests/                  # pytest test suite
@@ -56,7 +56,7 @@ tests/                  # pytest test suite
 ## Key Conventions
 
 ### Config Schema
-- Lives in `pyclawops/config/schema.py` — Pydantic v2 models
+- Lives in `pyclopse/config/schema.py` — Pydantic v2 models
 - Uses `validation_alias=AliasChoices("snake_case", "camelCase")` for YAML keys
 - Test with `Model.model_validate({"camelCase": val})`, not `Model(snake_case=val)`
 
@@ -65,7 +65,7 @@ tests/                  # pytest test suite
 - Always use `uv`, never `python3 -m pytest` or `.venv/bin/pytest`
 - Gateway unit tests use `Gateway.__new__(Gateway)` to skip `__init__`
 - Stubs need: `_seen_message_ids = {}`, `_dedup_ttl_seconds = 60`, `_usage = {...}`
-- Mock concurrency: `patch("pyclawops.core.concurrency.get_manager")`
+- Mock concurrency: `patch("pyclopse.core.concurrency.get_manager")`
 
 ### Gateway Internals
 - `_init_channels()` — sets up Telegram bot + Slack AsyncWebClient
@@ -74,15 +74,15 @@ tests/                  # pytest test suite
 - `_telegram_bot` / `_telegram_chat_id` — stored on gateway for Telegram
 
 ### Memory System
-- `FileMemoryBackend`: writes JSON to `~/.pyclawops/agents/<name>/memory/<key>.json`
+- `FileMemoryBackend`: writes JSON to `~/.pyclopse/agents/<name>/memory/<key>.json`
 - `reindex(batch_size)` rebuilds vector index in `memory/vectors.json`
 - `MemoryService` wraps `FileMemoryBackend` — access inner backend via `svc._default`
 - MCP tool `memory_reindex` unwraps `MemoryService → FileMemoryBackend` before reindexing
 
 ### Bootstrap / System Prompt
-- `prompt_builder.py` builds the FastAgent system prompt from files in `~/.pyclawops/agents/<name>/`
+- `prompt_builder.py` builds the FastAgent system prompt from files in `~/.pyclopse/agents/<name>/`
 - Files loaded (in order): AGENTS.md, PERSONALITY.md, IDENTITY.md, RULES.md, USER.md, PULSE.md, SOUL.md, HEARTBEAT.md, BOOTSTRAP.md, MEMORY.md
-- Templates for new agents live in `pyclawops/core/templates/` — `ensure_agent_files()` copies them
+- Templates for new agents live in `pyclopse/core/templates/` — `ensure_agent_files()` copies them
 - System prompt is always present (not re-injected after compaction)
 
 ### Inline Secrets
@@ -97,8 +97,8 @@ tests/                  # pytest test suite
 
 ## Making Changes
 
-1. Config schema changes → update `pyclawops/config/schema.py` + `examples/config.yaml`
-2. New MCP tools → add to `pyclawops/tools/server.py`
-3. New channels → implement adapter + register in `pyclawops/channels/loader.py`
-4. New slash commands → add to `CommandRegistry` in `pyclawops/core/commands.py`
-5. Gateway features → `pyclawops/core/gateway.py` (keep `__init__` minimal; use `_init_*` methods)
+1. Config schema changes → update `pyclopse/config/schema.py` + `examples/config.yaml`
+2. New MCP tools → add to `pyclopse/tools/server.py`
+3. New channels → implement adapter + register in `pyclopse/channels/loader.py`
+4. New slash commands → add to `CommandRegistry` in `pyclopse/core/commands.py`
+5. Gateway features → `pyclopse/core/gateway.py` (keep `__init__` minimal; use `_init_*` methods)

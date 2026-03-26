@@ -1,13 +1,13 @@
 # Session System
 
-pyclawops uses a two-layer session model. The **routing layer** (pyclawops's `Session` + `SessionManager`) handles who is talking to which agent and on which channel. The **history layer** delegates conversation storage entirely to FastAgent's native serialisation format, living on disk per-agent under `~/.pyclawops/agents/`.
+pyclopse uses a two-layer session model. The **routing layer** (pyclopse's `Session` + `SessionManager`) handles who is talking to which agent and on which channel. The **history layer** delegates conversation storage entirely to FastAgent's native serialisation format, living on disk per-agent under `~/.pyclopse/agents/`.
 
 ---
 
 ## Design Principles
 
 - **One active session per agent.** Each agent has exactly one live session at any time, pointed to by an `active_session` pointer file. Channels (Telegram, Slack, TUI, HTTP) are just transport — they all converge on the same agent session. There is no "session per channel" or "session per user".
-- **Channels are routing metadata, not session keys.** When a message arrives via Telegram, pyclawops looks up the agent's active session and updates `last_channel`/`last_user_id`/`last_thread_ts` on it so replies know where to go. The session itself is not tied to any particular channel.
+- **Channels are routing metadata, not session keys.** When a message arrives via Telegram, pyclopse looks up the agent's active session and updates `last_channel`/`last_user_id`/`last_thread_ts` on it so replies know where to go. The session itself is not tied to any particular channel.
 - **Session = routing metadata only.** `Session` carries no message content. It knows who, where, and when — not what was said.
 - **FastAgent owns the history.** Conversation messages are stored in FastAgent's `PromptMessageExtended` JSON format. The `AgentRunner` reads and writes those files directly using FA's serialisation helpers.
 - **Files are never deleted.** The reaper and delete APIs remove sessions from the in-memory index; the session directory and its history files remain on disk indefinitely.
@@ -18,7 +18,7 @@ pyclawops uses a two-layer session model. The **routing layer** (pyclawops's `Se
 ## Directory Layout
 
 ```
-~/.pyclawops/agents/
+~/.pyclopse/agents/
 └── {agent_id}/
     ├── active_session              ← pointer: contains the active session ID (plain text)
     └── sessions/
@@ -126,7 +126,7 @@ Using `os.replace()` (POSIX `rename`) makes each step atomic. On any crash durin
 
 ## AgentRunner: the bridge
 
-`AgentRunner` (`pyclawops/agents/runner.py`) wraps FastAgent and is responsible for all history I/O. Each session gets its own `AgentRunner` instance, cached in `agent._session_runners[session_id]`.
+`AgentRunner` (`pyclopse/agents/runner.py`) wraps FastAgent and is responsible for all history I/O. Each session gets its own `AgentRunner` instance, cached in `agent._session_runners[session_id]`.
 
 ### Construction
 
@@ -135,7 +135,7 @@ runner = AgentRunner(
     agent_name="assistant-2026-03-11",
     instruction=system_prompt,
     model="sonnet",
-    history_path=session.history_path,  # ~/.pyclawops/agents/.../history.json
+    history_path=session.history_path,  # ~/.pyclopse/agents/.../history.json
     ...
 )
 ```
@@ -191,7 +191,7 @@ The `_completed` flag is the crash-safety mechanism. `_save_history()` only exec
 Each agent has one active session at a time, tracked by a pointer file:
 
 ```
-~/.pyclawops/agents/{agent_id}/active_session   ← contains session ID, e.g. "2026-03-11-aB3xYz"
+~/.pyclopse/agents/{agent_id}/active_session   ← contains session ID, e.g. "2026-03-11-aB3xYz"
 ```
 
 `SessionManager` provides two operations:
@@ -310,9 +310,9 @@ await _deliver_to_session(target_session, f"📋 Job *{job.name}*:\n{response}")
 
 ## FastAgent Integration Points
 
-pyclawops uses FastAgent strictly as an LLM execution engine. It does **not** use FA's own session management.
+pyclopse uses FastAgent strictly as an LLM execution engine. It does **not** use FA's own session management.
 
-| FA component | How pyclawops uses it |
+| FA component | How pyclopse uses it |
 |---|---|
 | `FastAgent` / `fast.run()` | Creates the FA app context, initialises MCP connections |
 | `agent.send(prompt)` | Non-streaming turn execution |
@@ -326,7 +326,7 @@ pyclawops uses FastAgent strictly as an LLM execution engine. It does **not** us
 
 ## Config
 
-`SessionsConfig` in `pyclawops/config/schema.py`:
+`SessionsConfig` in `pyclopse/config/schema.py`:
 
 ```yaml
 sessions:
@@ -335,13 +335,13 @@ sessions:
   dailyRollover: true       # create new session at midnight and archive old history (default true)
 ```
 
-Session files are stored under `~/.pyclawops/agents/{agent_id}/sessions/`. The base agents directory is configurable via `sessions.persist_dir` in config, but defaults to `~/.pyclawops/sessions` (the gateway maps this to the per-agent directory layout internally).
+Session files are stored under `~/.pyclopse/agents/{agent_id}/sessions/`. The base agents directory is configurable via `sessions.persist_dir` in config, but defaults to `~/.pyclopse/sessions` (the gateway maps this to the per-agent directory layout internally).
 
 ---
 
 ## Importing OpenClaw History
 
-pyclawops can import session history from OpenClaw (the TypeScript gateway pyclawops is inspired by). OpenClaw stores sessions as JSONL files:
+pyclopse can import session history from OpenClaw (the TypeScript gateway pyclopse is inspired by). OpenClaw stores sessions as JSONL files:
 
 ```
 ~/.openclaw/agents/{agent}/sessions/{session_id}.jsonl
@@ -352,18 +352,18 @@ Each line is a typed JSON record (`type: "session"`, `type: "message"`, `type: "
 ### Running the import
 
 ```bash
-pyclawops import-openclaw --all                        # all agents
-pyclawops import-openclaw --agent myagent              # one agent
-pyclawops import-openclaw --all --openclaw-dir ~/backup/openclaw
+pyclopse import-openclaw --all                        # all agents
+pyclopse import-openclaw --agent myagent              # one agent
+pyclopse import-openclaw --all --openclaw-dir ~/backup/openclaw
 ```
 
-The importer (`pyclawops/tools/openclaw_import.py`):
+The importer (`pyclopse/tools/openclaw_import.py`):
 
 1. Reads each `.jsonl` file and extracts `type: "message"` records with `role: user|assistant`.
 2. Converts each to a `PromptMessageExtended` with a single `TextContent` block.
 3. Serialises the list to FA JSON format using `to_json()`.
 4. Derives the session date from the `updatedAt` or `createdAt` field in the session record.
-5. Writes to `~/.pyclawops/agents/{agent}/sessions/{YYYY-MM-DD}-{6chars}/history.json`.
+5. Writes to `~/.pyclopse/agents/{agent}/sessions/{YYYY-MM-DD}-{6chars}/history.json`.
 6. Writes `session.json` with `metadata.imported_from = "openclaw"` and `channel = "openclaw"`.
 
 Imported sessions appear in the TUI session list on the next gateway start. Their history is fully searchable and resumable. They do **not** become the active session automatically.

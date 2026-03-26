@@ -62,10 +62,10 @@ requires the instance buffer to be passed in or stored differently).
 - With `reasoning_split`, `delta.content` is clean but thinking is only in
   `delta.reasoning_details` which FastAgent ignores.
 
-### Workaround (currently in pyclawops)
+### Workaround (currently in pyclopse)
 
-`pyclawops/agents/runner.py` monkey-patches `OpenAILLM._process_stream_chunk_common`
+`pyclopse/agents/runner.py` monkey-patches `OpenAILLM._process_stream_chunk_common`
 at class level the first time a `generic.*` model runner initialises.  This
 workaround can be removed once FastAgent ships the fix upstream.
 
-See: `_patch_openai_llm_for_reasoning_details()` in `pyclawops/agents/runner.py`
+See: `_patch_openai_llm_for_reasoning_details()` in `pyclopse/agents/runner.py`

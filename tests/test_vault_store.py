@@ -8,13 +8,13 @@ from pathlib import Path
 
 import pytest
 
-from pyclawops.memory.vault.models import (
+from pyclopse.memory.vault.models import (
     SourceSession,
     VaultFact,
     VaultFactState,
 )
-from pyclawops.memory.vault.store import VaultStore
-from pyclawops.memory.vault.ulid import generate as gen_ulid
+from pyclopse.memory.vault.store import VaultStore
+from pyclopse.memory.vault.ulid import generate as gen_ulid
 
 
 def make_fact(**kwargs) -> VaultFact:

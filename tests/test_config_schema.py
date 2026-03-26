@@ -4,7 +4,7 @@ Verifies defaults, parsing, and backward-compatibility.
 """
 
 import pytest
-from pyclawops.config.schema import (
+from pyclopse.config.schema import (
     Config,
     AgentConfig,
     SessionsConfig,
@@ -23,7 +23,7 @@ class TestSessionsConfig:
 
     def test_defaults(self):
         cfg = SessionsConfig()
-        assert cfg.persist_dir == "~/.pyclawops/sessions"
+        assert cfg.persist_dir == "~/.pyclopse/sessions"
         assert cfg.ttl_hours == 24
         assert cfg.reaper_interval_minutes == 60
 

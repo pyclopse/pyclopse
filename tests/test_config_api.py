@@ -14,35 +14,35 @@ from httpx import AsyncClient, ASGITransport
 class TestRedaction:
 
     def test_api_key_redacted(self):
-        from pyclawops.api.routes.config import _redact
+        from pyclopse.api.routes.config import _redact
         data = {"api_key": "secret123", "name": "openai"}
         result = _redact(data)
         assert result["api_key"] == "***REDACTED***"
         assert result["name"] == "openai"
 
     def test_bot_token_redacted(self):
-        from pyclawops.api.routes.config import _redact
+        from pyclopse.api.routes.config import _redact
         data = {"botToken": "123:abc", "enabled": True}
         result = _redact(data)
         assert result["botToken"] == "***REDACTED***"
         assert result["enabled"] is True
 
     def test_nested_redaction(self):
-        from pyclawops.api.routes.config import _redact
+        from pyclopse.api.routes.config import _redact
         data = {"providers": {"openai": {"api_key": "sk-xxx", "model": "gpt-4"}}}
         result = _redact(data)
         assert result["providers"]["openai"]["api_key"] == "***REDACTED***"
         assert result["providers"]["openai"]["model"] == "gpt-4"
 
     def test_list_not_broken(self):
-        from pyclawops.api.routes.config import _redact
+        from pyclopse.api.routes.config import _redact
         data = {"tags": ["a", "b"], "api_key": "secret"}
         result = _redact(data)
         assert result["tags"] == ["a", "b"]
         assert result["api_key"] == "***REDACTED***"
 
     def test_non_sensitive_keys_unchanged(self):
-        from pyclawops.api.routes.config import _redact
+        from pyclopse.api.routes.config import _redact
         data = {"host": "0.0.0.0", "port": 8080, "debug": False}
         assert _redact(data) == data
 
@@ -52,7 +52,7 @@ class TestRedaction:
 # ---------------------------------------------------------------------------
 
 def _make_app_with_gateway(gateway):
-    from pyclawops.api.app import create_app, set_gateway
+    from pyclopse.api.app import create_app, set_gateway
     app = create_app(gateway=gateway)
     set_gateway(gateway)
     return app
@@ -61,7 +61,7 @@ def _make_app_with_gateway(gateway):
 class TestGetConfig:
 
     def _make_gateway(self):
-        from pyclawops.config.schema import Config
+        from pyclopse.config.schema import Config
         gw = MagicMock()
         gw.config = Config.model_validate({"version": "1.0"})
         return gw
@@ -85,7 +85,7 @@ class TestGetConfig:
 
     @pytest.mark.asyncio
     async def test_sensitive_fields_redacted(self):
-        from pyclawops.config.schema import Config, TelegramConfig, ChannelsConfig
+        from pyclopse.config.schema import Config, TelegramConfig, ChannelsConfig
         gw = MagicMock()
         gw.config = Config.model_validate({
             "version": "1.0",
@@ -164,11 +164,11 @@ class TestGatewayReloadConfig:
 
     def _make_gateway(self, tmp_path):
         """Real (lightweight) gateway with a temp config path."""
-        from pyclawops.core.gateway import Gateway
-        from pyclawops.config.loader import ConfigLoader
+        from pyclopse.core.gateway import Gateway
+        from pyclopse.config.loader import ConfigLoader
         gw = Gateway.__new__(Gateway)
         loader = MagicMock()
-        from pyclawops.config.schema import Config
+        from pyclopse.config.schema import Config
         loader.load.return_value = Config.model_validate({"version": "1.0"})
         gw._config_loader = loader
         gw._config = Config.model_validate({"version": "1.0"})
@@ -183,7 +183,7 @@ class TestGatewayReloadConfig:
 
     @pytest.mark.asyncio
     async def test_reload_detects_log_level_change(self, tmp_path):
-        from pyclawops.config.schema import Config
+        from pyclopse.config.schema import Config
         gw = self._make_gateway(tmp_path)
         gw._config = Config.model_validate({"version": "1.0", "gateway": {"log_level": "info"}})
         new_config = Config.model_validate({"version": "1.0", "gateway": {"log_level": "debug"}})
@@ -194,18 +194,18 @@ class TestGatewayReloadConfig:
 
     @pytest.mark.asyncio
     async def test_reload_detects_concurrency_change(self, tmp_path):
-        from pyclawops.config.schema import Config
+        from pyclopse.config.schema import Config
         gw = self._make_gateway(tmp_path)
         gw._config = Config.model_validate({"version": "1.0", "concurrency": {"default": 3}})
         new_config = Config.model_validate({"version": "1.0", "concurrency": {"default": 5}})
         gw._config_loader.load.return_value = new_config
-        with patch("pyclawops.core.concurrency.init_manager"):
+        with patch("pyclopse.core.concurrency.init_manager"):
             changed = await gw.reload_config()
         assert "concurrency" in changed
 
     @pytest.mark.asyncio
     async def test_reload_replaces_config(self, tmp_path):
-        from pyclawops.config.schema import Config
+        from pyclopse.config.schema import Config
         gw = self._make_gateway(tmp_path)
         gw._config = Config.model_validate({"version": "1.0"})
         new_config = Config.model_validate({"version": "2.0"})

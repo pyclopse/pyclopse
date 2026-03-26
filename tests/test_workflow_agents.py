@@ -2,8 +2,8 @@
 import pytest
 from unittest.mock import AsyncMock, MagicMock, patch, call
 
-from pyclawops.config.schema import AgentConfig
-from pyclawops.agents.runner import AgentRunner
+from pyclopse.config.schema import AgentConfig
+from pyclopse.agents.runner import AgentRunner
 
 
 # ── Schema tests ──────────────────────────────────────────────────────────────
@@ -114,8 +114,8 @@ class TestAgentRunnerWorkflowInit:
 
     def test_orchestrator_params_stored(self):
         children = {
-            "researcher": {"instruction": "research", "model": "haiku", "servers": ["pyclawops"]},
-            "writer": {"instruction": "write", "model": "sonnet", "servers": ["pyclawops"]},
+            "researcher": {"instruction": "research", "model": "haiku", "servers": ["pyclopse"]},
+            "writer": {"instruction": "write", "model": "sonnet", "servers": ["pyclopse"]},
         }
         r = self._make_runner(
             workflow="orchestrator",
@@ -176,34 +176,34 @@ class TestAllServers:
         return r
 
     def test_no_children_returns_parent_servers(self):
-        r = self._make_runner(["pyclawops", "fetch"])
-        assert r._all_servers() == ["pyclawops", "fetch"]
+        r = self._make_runner(["pyclopse", "fetch"])
+        assert r._all_servers() == ["pyclopse", "fetch"]
 
     def test_merges_child_servers(self):
         r = self._make_runner(
-            ["pyclawops"],
+            ["pyclopse"],
             {
-                "researcher": {"servers": ["pyclawops", "fetch"]},
-                "writer": {"servers": ["pyclawops", "filesystem"]},
+                "researcher": {"servers": ["pyclopse", "fetch"]},
+                "writer": {"servers": ["pyclopse", "filesystem"]},
             },
         )
         result = r._all_servers()
-        assert "pyclawops" in result
+        assert "pyclopse" in result
         assert "fetch" in result
         assert "filesystem" in result
 
     def test_deduplicates(self):
         r = self._make_runner(
-            ["pyclawops", "fetch"],
-            {"child": {"servers": ["fetch", "pyclawops"]}},
+            ["pyclopse", "fetch"],
+            {"child": {"servers": ["fetch", "pyclopse"]}},
         )
         result = r._all_servers()
-        assert result.count("pyclawops") == 1
+        assert result.count("pyclopse") == 1
         assert result.count("fetch") == 1
 
     def test_child_with_no_servers_key(self):
-        r = self._make_runner(["pyclawops"], {"child": {"instruction": "hi"}})
-        assert r._all_servers() == ["pyclawops"]
+        r = self._make_runner(["pyclopse"], {"child": {"instruction": "hi"}})
+        assert r._all_servers() == ["pyclopse"]
 
 
 # ── _register_workflow tests ──────────────────────────────────────────────
@@ -255,15 +255,15 @@ class TestRegisterWorkflow:
         r = _make_runner_for_register(
             "orchestrator",
             child_agent_configs={
-                "researcher": {"instruction": "research", "model": "haiku", "servers": ["pyclawops"]},
-                "writer": {"instruction": "write", "model": "sonnet", "servers": ["pyclawops"]},
+                "researcher": {"instruction": "research", "model": "haiku", "servers": ["pyclopse"]},
+                "writer": {"instruction": "write", "model": "sonnet", "servers": ["pyclopse"]},
             },
             plan_type="full",
             plan_iterations=5,
         )
         fast = self._make_fa_mock()
         rp = self._make_fa_rp()
-        settings = self._make_fa_settings(["pyclawops"])
+        settings = self._make_fa_settings(["pyclopse"])
 
         r._register_workflow(fast, rp, settings)
 
@@ -285,13 +285,13 @@ class TestRegisterWorkflow:
         r = _make_runner_for_register(
             "iterative_planner",
             child_agent_configs={
-                "coder": {"instruction": "code", "model": "sonnet", "servers": ["pyclawops"]},
+                "coder": {"instruction": "code", "model": "sonnet", "servers": ["pyclopse"]},
             },
             plan_iterations=-1,
         )
         fast = self._make_fa_mock()
         rp = self._make_fa_rp()
-        settings = self._make_fa_settings(["pyclawops"])
+        settings = self._make_fa_settings(["pyclopse"])
 
         r._register_workflow(fast, rp, settings)
 
@@ -315,7 +315,7 @@ class TestRegisterWorkflow:
         )
         fast = self._make_fa_mock()
         rp = self._make_fa_rp()
-        settings = self._make_fa_settings(["pyclawops"])
+        settings = self._make_fa_settings(["pyclopse"])
 
         r._register_workflow(fast, rp, settings)
 
@@ -342,7 +342,7 @@ class TestRegisterWorkflow:
         )
         fast = self._make_fa_mock()
         rp = self._make_fa_rp()
-        settings = self._make_fa_settings(["pyclawops"])
+        settings = self._make_fa_settings(["pyclopse"])
 
         r._register_workflow(fast, rp, settings)
 
@@ -396,18 +396,18 @@ class TestRegisterWorkflow:
         r = _make_runner_for_register(
             "orchestrator",
             child_agent_configs={
-                "agent_a": {"instruction": "x", "model": "sonnet", "servers": ["pyclawops", "unknown_server"]},
+                "agent_a": {"instruction": "x", "model": "sonnet", "servers": ["pyclopse", "unknown_server"]},
             },
         )
         fast = self._make_fa_mock()
         rp = self._make_fa_rp()
-        settings = self._make_fa_settings(["pyclawops"])  # unknown_server not present
+        settings = self._make_fa_settings(["pyclopse"])  # unknown_server not present
 
         r._register_workflow(fast, rp, settings)
 
         agent_call = fast.agent.call_args_list[0]
         assert "unknown_server" not in agent_call.kwargs["servers"]
-        assert "pyclawops" in agent_call.kwargs["servers"]
+        assert "pyclopse" in agent_call.kwargs["servers"]
 
 
 # ── History skipped for workflow runners ──────────────────────────────────
@@ -449,16 +449,16 @@ class TestWorkflowHistorySkipped:
 
 class TestTranslateToFaModel:
     def test_no_slash_returns_unchanged(self):
-        from pyclawops.core.agent import _translate_to_fa_model
+        from pyclopse.core.agent import _translate_to_fa_model
         assert _translate_to_fa_model("sonnet", None) == "sonnet"
 
     def test_strips_fastagent_prefix(self):
-        from pyclawops.core.agent import _translate_to_fa_model
+        from pyclopse.core.agent import _translate_to_fa_model
         assert _translate_to_fa_model("fastagent:sonnet", None) == "sonnet"
         assert _translate_to_fa_model("fa:sonnet", None) == "sonnet"
 
     def test_unknown_provider_returns_raw(self):
-        from pyclawops.core.agent import _translate_to_fa_model
+        from pyclopse.core.agent import _translate_to_fa_model
         cfg = MagicMock()
         cfg.providers = MagicMock()
         cfg.providers.unknown_provider = None
@@ -467,7 +467,7 @@ class TestTranslateToFaModel:
 
     def test_known_provider_with_fastagent_provider(self):
         import os
-        from pyclawops.core.agent import _translate_to_fa_model
+        from pyclopse.core.agent import _translate_to_fa_model
         cfg = MagicMock()
         provider = MagicMock()
         provider.fastagent_provider = "generic"
@@ -478,6 +478,6 @@ class TestTranslateToFaModel:
         assert result == "generic.MiniMax-M2.5"
         assert os.environ.get("GENERIC_API_KEY") == "test-key"
 
-    def test_no_pyclawops_config_returns_raw(self):
-        from pyclawops.core.agent import _translate_to_fa_model
+    def test_no_pyclopse_config_returns_raw(self):
+        from pyclopse.core.agent import _translate_to_fa_model
         assert _translate_to_fa_model("openai/gpt-4o", None) == "openai/gpt-4o"

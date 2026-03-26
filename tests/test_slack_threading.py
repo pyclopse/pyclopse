@@ -23,8 +23,8 @@ def _make_gateway(
     global_denied=None,
     agent_response="hello back",
 ):
-    from pyclawops.core.gateway import Gateway
-    from pyclawops.config.schema import (
+    from pyclopse.core.gateway import Gateway
+    from pyclopse.config.schema import (
         Config, ChannelsConfig, SlackConfig, AgentsConfig, SecurityConfig,
     )
 
@@ -81,7 +81,7 @@ def _make_gateway(
         "messages_by_channel": {},
         "started_at": _t.time(),
     }
-    from pyclawops.core.commands import CommandRegistry, register_builtin_commands
+    from pyclopse.core.commands import CommandRegistry, register_builtin_commands
     gw._command_registry = CommandRegistry()
     register_builtin_commands(gw._command_registry, gw)
 

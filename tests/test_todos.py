@@ -1,5 +1,5 @@
 """
-Tests for the pyclawops TODO registry.
+Tests for the pyclopse TODO registry.
 
 Covers:
   - Priority / TodoStatus models
@@ -13,15 +13,15 @@ import json
 import os
 import tempfile
 from datetime import datetime, timedelta
-from pyclawops.utils.time import now
+from pyclopse.utils.time import now
 from pathlib import Path
 
 import pytest
 from mcp import ClientSession, StdioServerParameters
 from mcp.client.stdio import stdio_client
 
-from pyclawops.todos.models import Priority, Todo, TodoStatus
-from pyclawops.todos.store import TodoStore
+from pyclopse.todos.models import Priority, Todo, TodoStatus
+from pyclopse.todos.store import TodoStore
 
 
 # ---------------------------------------------------------------------------
@@ -285,9 +285,9 @@ class TestTodosNext:
 def api_client(tmp_path):
     """TestClient wired to a fresh TodoStore."""
     from fastapi.testclient import TestClient
-    from pyclawops.api.app import create_app
+    from pyclopse.api.app import create_app
     from unittest.mock import MagicMock
-    from pyclawops.todos.store import TodoStore as TS
+    from pyclopse.todos.store import TodoStore as TS
 
     gw = MagicMock()
     gw.config.gateway.cors_origins = ["*"]
@@ -385,7 +385,7 @@ class TestTodosAPI:
 # MCP tools
 # ---------------------------------------------------------------------------
 
-async def _pyclawops_session(home_dir: str, gateway_url: str = "http://localhost:19999"):
+async def _pyclopse_session(home_dir: str, gateway_url: str = "http://localhost:19999"):
     env = {
         **os.environ,
         "HOME": home_dir,
@@ -395,7 +395,7 @@ async def _pyclawops_session(home_dir: str, gateway_url: str = "http://localhost
     }
     return StdioServerParameters(
         command="uv",
-        args=["run", "python", "-m", "pyclawops.tools.server"],
+        args=["run", "python", "-m", "pyclopse.tools.server"],
         env=env,
     )
 
@@ -408,7 +408,7 @@ async def _call(session: ClientSession, tool: str, args: dict) -> str:
 @pytest.mark.asyncio
 async def test_mcp_tools_registered(tmp_path):
     """Verify all TODO MCP tools are registered."""
-    params = await _pyclawops_session(str(tmp_path))
+    params = await _pyclopse_session(str(tmp_path))
     async with stdio_client(params) as (r, w):
         async with ClientSession(r, w) as session:
             await session.initialize()
@@ -424,7 +424,7 @@ async def test_mcp_tools_registered(tmp_path):
 @pytest.mark.asyncio
 async def test_mcp_todos_list_gateway_down(tmp_path):
     """todos_list returns [ERROR] when gateway is not running."""
-    params = await _pyclawops_session(str(tmp_path))
+    params = await _pyclopse_session(str(tmp_path))
     async with stdio_client(params) as (r, w):
         async with ClientSession(r, w) as session:
             await session.initialize()
@@ -435,7 +435,7 @@ async def test_mcp_todos_list_gateway_down(tmp_path):
 @pytest.mark.asyncio
 async def test_mcp_todo_create_gateway_down(tmp_path):
     """todo_create returns [ERROR] when gateway is not running."""
-    params = await _pyclawops_session(str(tmp_path))
+    params = await _pyclopse_session(str(tmp_path))
     async with stdio_client(params) as (r, w):
         async with ClientSession(r, w) as session:
             await session.initialize()
@@ -445,7 +445,7 @@ async def test_mcp_todo_create_gateway_down(tmp_path):
 
 @pytest.mark.asyncio
 async def test_mcp_todos_next_gateway_down(tmp_path):
-    params = await _pyclawops_session(str(tmp_path))
+    params = await _pyclopse_session(str(tmp_path))
     async with stdio_client(params) as (r, w):
         async with ClientSession(r, w) as session:
             await session.initialize()

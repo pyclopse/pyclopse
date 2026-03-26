@@ -2,7 +2,7 @@
 
 import time
 
-from pyclawops.memory.vault.ulid import generate, timestamp
+from pyclopse.memory.vault.ulid import generate, timestamp
 
 
 class TestUlidGenerate:

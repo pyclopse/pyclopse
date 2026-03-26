@@ -8,7 +8,7 @@ from pathlib import Path
 
 import pytest
 
-from pyclawops.memory.vault.cursor import CursorStore
+from pyclopse.memory.vault.cursor import CursorStore
 
 
 def make_session_dir(base: Path, session_id: str, messages: list, channel: str = "telegram") -> Path:

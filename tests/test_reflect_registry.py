@@ -1,7 +1,7 @@
-"""Tests for the pyclawops reflection registry and decorators."""
+"""Tests for the pyclopse reflection registry and decorators."""
 
 import pytest
-from pyclawops.reflect.registry import (
+from pyclopse.reflect.registry import (
     CATEGORY_COMMAND,
     CATEGORY_EVENT,
     CATEGORY_SYSTEM,
@@ -11,7 +11,7 @@ from pyclawops.reflect.registry import (
     register,
     _registry,
 )
-from pyclawops.reflect.decorators import (
+from pyclopse.reflect.decorators import (
     reflect_command,
     reflect_event,
     reflect_system,
@@ -154,7 +154,7 @@ def test_reflect_command_function_call_form():
 
 def test_query_no_args_returns_overview():
     result = query()
-    assert "pyclawops" in result.lower()
+    assert "pyclopse" in result.lower()
     # Should mention the architecture
     assert "Gateway" in result or "gateway" in result
 

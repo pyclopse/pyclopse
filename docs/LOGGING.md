@@ -1,15 +1,15 @@
 # Logging
 
-pyclawops uses a two-tier logging architecture: a broad gateway log for infrastructure events and a per-agent log for every conversation turn and tool call.
+pyclopse uses a two-tier logging architecture: a broad gateway log for infrastructure events and a per-agent log for every conversation turn and tool call.
 
 ## Log files
 
 | File | What it captures |
 |------|-----------------|
-| `~/.pyclawops/logs/pyclawops.log` | Gateway-level events: startup, API calls, job scheduling, session lifecycle, errors |
-| `~/.pyclawops/agents/{agent_id}/logs/agent.log` | Every conversation turn and every MCP tool call for that agent |
+| `~/.pyclopse/logs/pyclopse.log` | Gateway-level events: startup, API calls, job scheduling, session lifecycle, errors |
+| `~/.pyclopse/agents/{agent_id}/logs/agent.log` | Every conversation turn and every MCP tool call for that agent |
 
-Both files rotate daily at midnight. Rotated files are named `pyclawops-YYYY-MM-DD.log` and `agent-YYYY-MM-DD.log` respectively. Retention is controlled by `gateway.log_retention_days` in `config.yaml` (default: 7 days).
+Both files rotate daily at midnight. Rotated files are named `pyclopse-YYYY-MM-DD.log` and `agent-YYYY-MM-DD.log` respectively. Retention is controlled by `gateway.log_retention_days` in `config.yaml` (default: 7 days).
 
 ## Session prefixes
 
@@ -59,18 +59,18 @@ Tool argument values are truncated to 120 characters each. Tool results are trun
 
 ### Gateway log filter (`__main__.py`)
 
-`_ExcludeAgentDetailFilter` is attached to the `pyclawops.log` file handler. It suppresses `pyclawops.agent.*` records at INFO and DEBUG level so per-agent chatter doesn't pollute the gateway log. WARNING and above from agent loggers still appear in both files.
+`_ExcludeAgentDetailFilter` is attached to the `pyclopse.log` file handler. It suppresses `pyclopse.agent.*` records at INFO and DEBUG level so per-agent chatter doesn't pollute the gateway log. WARNING and above from agent loggers still appear in both files.
 
 ### Per-agent log setup (`__main__.py`)
 
-`setup_agent_logging(agent_id, agents_dir, retention_days)` is called once per agent after `gateway.initialize()`. It attaches a `TimedRotatingFileHandler` to the `pyclawops.agent.{agent_id}` logger. The handler is idempotent — calling it twice for the same agent is safe.
+`setup_agent_logging(agent_id, agents_dir, retention_days)` is called once per agent after `gateway.initialize()`. It attaches a `TimedRotatingFileHandler` to the `pyclopse.agent.{agent_id}` logger. The handler is idempotent — calling it twice for the same agent is safe.
 
 ### Session ID propagation
 
 Each `AgentRunner` receives a `session_id` at construction time (`agent.py: _get_session_runner()`). This ID is:
 
 1. Used to compute `_log_prefix` (`[ritchie-W2RSQQ]`) for all log lines emitted by that runner.
-2. Injected as the `X-Session-ID` HTTP header into the pyclawops MCP server connection alongside `X-Agent-Name`. The `_ToolLoggingMiddleware` reads both headers to route tool call logs to the right logger with the right prefix.
+2. Injected as the `X-Session-ID` HTTP header into the pyclopse MCP server connection alongside `X-Agent-Name`. The `_ToolLoggingMiddleware` reads both headers to route tool call logs to the right logger with the right prefix.
 
 ### Tool logging middleware (`tools/server.py`)
 
@@ -78,7 +78,7 @@ Each `AgentRunner` receives a `session_id` at construction time (`agent.py: _get
 
 ## Silencing FastAgent's console output
 
-FastAgent has a rich terminal renderer that prints colorful markdown, tool call displays, and streaming progress to stdout. This output conflicts with pyclawops's own logging and the terminal UI.
+FastAgent has a rich terminal renderer that prints colorful markdown, tool call displays, and streaming progress to stdout. This output conflicts with pyclopse's own logging and the terminal UI.
 
 The correct way to disable it is the `quiet=True` parameter on the `FastAgent()` constructor:
 
@@ -94,4 +94,4 @@ fast = FastAgent(self.agent_name, quiet=True, parse_cli_args=False)
 
 `quiet=True` is the only approach that is guaranteed to work regardless of which config file is found or when settings are read.
 
-`parse_cli_args=False` is also set to prevent FastAgent from trying to parse `sys.argv`, which would conflict with pyclawops's own argument parser.
+`parse_cli_args=False` is also set to prevent FastAgent from trying to parse `sys.argv`, which would conflict with pyclopse's own argument parser.

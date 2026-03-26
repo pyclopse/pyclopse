@@ -4,7 +4,7 @@ import time
 
 import pytest
 
-from pyclawops.core.concurrency import (
+from pyclopse.core.concurrency import (
     ModelConcurrencyManager,
     get_manager,
     init_manager,

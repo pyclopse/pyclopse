@@ -15,23 +15,23 @@ uv run pytest tests/test_gateway.py
 uv run pytest tests/test_commands.py::test_help_command -v
 
 # Run the gateway with dashboard TUI (default)
-uv run python -m pyclawops run
+uv run python -m pyclopse run
 
 # Run headless (no TUI — stdout only)
-uv run python -m pyclawops run --headless
+uv run python -m pyclopse run --headless
 
 # Run with a specific config
-uv run python -m pyclawops run --config ~/.pyclawops/config.yaml
+uv run python -m pyclopse run --config ~/.pyclopse/config.yaml
 
 # Validate config
-uv run python -m pyclawops validate
+uv run python -m pyclopse validate
 ```
 
 Always use `uv run` — never `.venv/bin/pytest` or bare `python`.
 
 ## Background
 
-pyclawops is loosely inspired by **OpenClaw**, a TypeScript-based gateway project. It is **not** a port or 1:1 clone — pyclawops uses its own architecture, naming conventions, and Python idioms. When working on a feature that isn't clear from the pyclawops codebase alone, the OpenClaw source at https://github.com/openclaw/openclaw can be a useful reference for understanding the original intent or design, but do not mirror its implementation directly.
+pyclopse is loosely inspired by **OpenClaw**, a TypeScript-based gateway project. It is **not** a port or 1:1 clone — pyclopse uses its own architecture, naming conventions, and Python idioms. When working on a feature that isn't clear from the pyclopse codebase alone, the OpenClaw source at https://github.com/openclaw/openclaw can be a useful reference for understanding the original intent or design, but do not mirror its implementation directly.
 
 ## Architecture
 
@@ -39,12 +39,12 @@ pyclawops is loosely inspired by **OpenClaw**, a TypeScript-based gateway projec
 
 ```
 Telegram / Slack / TUI / HTTP API
-    → Gateway (pyclawops/core/gateway.py)
+    → Gateway (pyclopse/core/gateway.py)
         → SessionManager — finds/creates session
         → CommandRegistry — handles /slash commands
-        → Agent (pyclawops/core/agent.py)
-            → AgentRunner (pyclawops/agents/runner.py) — wraps FastAgent
-                → FastAgent connects to pyclawops MCP server (port 8081)
+        → Agent (pyclopse/core/agent.py)
+            → AgentRunner (pyclopse/agents/runner.py) — wraps FastAgent
+                → FastAgent connects to pyclopse MCP server (port 8081)
                     → tools call REST API (port 8080) for jobs/todos/config
 ```
 
@@ -68,27 +68,27 @@ The MCP server uses `FastMCP.run_http_async()` — FastMCP owns the uvicorn life
 
 | File | Role |
 |------|------|
-| `pyclawops/core/gateway.py` | Main orchestrator: Telegram, Slack, jobs, sessions, server lifecycle |
-| `pyclawops/core/agent.py` | Agent dataclass + session runner cache; `evict_session_runner()` on error |
-| `pyclawops/agents/runner.py` | `AgentRunner` wraps FastAgent; `run_stream()` yields `(text, is_reasoning)` tuples; `strip_thinking_tags()` utility used throughout |
-| `pyclawops/tools/server.py` | FastMCP server exposing all built-in tools to agents (port 8081) |
-| `pyclawops/api/app.py` | FastAPI REST API (port 8080); used by MCP tools and external clients |
-| `pyclawops/core/commands.py` | Slash command dispatcher — 49 commands including `/help`, `/reset`, `/new`, `/status`, `/model`, `/job`, `/skills`, `/skill`, `/subagents`, `/memories`, `/forget`, `/config`, `/reload`, `/restart`, `/think`, `/compact`, `/bash`, and more |
-| `pyclawops/core/session.py` | Session persistence + TTL-based reaper |
-| `pyclawops/jobs/scheduler.py` | Cron/interval/one-shot job scheduler with `notify_callback`; agent jobs run via `_agent_executor()` in `gateway.py` |
-| `pyclawops/config/schema.py` | Pydantic config schema — all fields use `validation_alias` for camelCase YAML |
-| `pyclawops/config/loader.py` | Loads `~/.pyclawops/config.yaml`; resolves `${NAME}` references via `SecretsManager` |
-| `pyclawops/tui/app.py` | Textual TUI; `pyclawops/tui/screens.py` contains `ChatScreen` with streaming |
+| `pyclopse/core/gateway.py` | Main orchestrator: Telegram, Slack, jobs, sessions, server lifecycle |
+| `pyclopse/core/agent.py` | Agent dataclass + session runner cache; `evict_session_runner()` on error |
+| `pyclopse/agents/runner.py` | `AgentRunner` wraps FastAgent; `run_stream()` yields `(text, is_reasoning)` tuples; `strip_thinking_tags()` utility used throughout |
+| `pyclopse/tools/server.py` | FastMCP server exposing all built-in tools to agents (port 8081) |
+| `pyclopse/api/app.py` | FastAPI REST API (port 8080); used by MCP tools and external clients |
+| `pyclopse/core/commands.py` | Slash command dispatcher — 49 commands including `/help`, `/reset`, `/new`, `/status`, `/model`, `/job`, `/skills`, `/skill`, `/subagents`, `/memories`, `/forget`, `/config`, `/reload`, `/restart`, `/think`, `/compact`, `/bash`, and more |
+| `pyclopse/core/session.py` | Session persistence + TTL-based reaper |
+| `pyclopse/jobs/scheduler.py` | Cron/interval/one-shot job scheduler with `notify_callback`; agent jobs run via `_agent_executor()` in `gateway.py` |
+| `pyclopse/config/schema.py` | Pydantic config schema — all fields use `validation_alias` for camelCase YAML |
+| `pyclopse/config/loader.py` | Loads `~/.pyclopse/config.yaml`; resolves `${NAME}` references via `SecretsManager` |
+| `pyclopse/tui/app.py` | Textual TUI; `pyclopse/tui/screens.py` contains `ChatScreen` with streaming |
 
 ### MCP
 
 **FastMCP is the only MCP library used in this project.** We do not use the low-level `mcp` SDK directly, and we do not manage uvicorn ourselves for MCP — FastMCP provides the complete server implementation including its own HTTP transport.
 
-The pyclawops MCP server (`pyclawops/tools/server.py`) is a `FastMCP` instance:
+The pyclopse MCP server (`pyclopse/tools/server.py`) is a `FastMCP` instance:
 
 ```python
 from fastmcp import FastMCP
-mcp = FastMCP("pyclawops")
+mcp = FastMCP("pyclopse")
 
 @mcp.tool()
 def my_tool(...) -> str: ...
@@ -98,8 +98,8 @@ It is started via `mcp.run_http_async(host=host, port=port)` — FastMCP interna
 
 FastAgent is an MCP **client** — it connects to MCP servers to use their tools but does not host servers. FastAgent is configured entirely programmatically via `AgentRunner._build_fa_settings()` — there is no `fastagent.config.yaml` file. The gateway is responsible for ensuring MCP servers are running before agents initialize.
 
-- **MCP server (8081)** — `pyclawops/tools/server.py` — FastMCP app; this is what FastAgent connects to for tool calls
-- **REST API (8080)** — `pyclawops/api/app.py` — FastAPI/uvicorn app (we do own this one); MCP tools call it internally via `_jobs_api()`, `_todos_api()`, `_config_api()`; also exposed externally at `/docs`
+- **MCP server (8081)** — `pyclopse/tools/server.py` — FastMCP app; this is what FastAgent connects to for tool calls
+- **REST API (8080)** — `pyclopse/api/app.py` — FastAPI/uvicorn app (we do own this one); MCP tools call it internally via `_jobs_api()`, `_todos_api()`, `_config_api()`; also exposed externally at `/docs`
 
 The MCP tools are thin wrappers: agent → MCP tool call → HTTP to REST API → gateway internals.
 
@@ -121,49 +121,49 @@ Agent-type jobs run via `_agent_executor()` in `gateway.py`. The job creates an 
 
 YAML uses camelCase keys; Pydantic models use `validation_alias` or `AliasChoices` to accept them. Always test config parsing with `Model.model_validate({"camelCase": val})` not `Model(snake_case=val)`.
 
-Inline secret syntax: `${NAME}` — looks up `NAME` in the secrets registry loaded from `~/.pyclawops/secrets/secrets.yaml` (falls back to `secrets:` block in pyclawops.yaml). Each registry entry declares `source: env | keychain | file | exec` and its source-specific options. The reference in config YAML is always just `${NAME}` — no source type is embedded in the reference itself. See `pyclawops/secrets/manager.py` and `pyclawops/secrets/models.py`.
+Inline secret syntax: `${NAME}` — looks up `NAME` in the secrets registry loaded from `~/.pyclopse/secrets/secrets.yaml` (falls back to `secrets:` block in pyclopse.yaml). Each registry entry declares `source: env | keychain | file | exec` and its source-specific options. The reference in config YAML is always just `${NAME}` — no source type is embedded in the reference itself. See `pyclopse/secrets/manager.py` and `pyclopse/secrets/models.py`.
 
 ### Skills System
 
-Skills live in `~/.pyclawops/skills/` (global) or `~/.pyclawops/agents/{name}/skills/` (per-agent). Each skill is a directory containing a `SKILL.md` with YAML frontmatter (`name`, `description`, `version`, `allowed-tools`) and markdown body. The `{skill_dir}` token is substituted with the absolute skill path at read time. Skills are injected into agent system prompts as `<available_skills>` XML and exposed as `skill://` MCP resources via FastMCP `SkillProvider`.
+Skills live in `~/.pyclopse/skills/` (global) or `~/.pyclopse/agents/{name}/skills/` (per-agent). Each skill is a directory containing a `SKILL.md` with YAML frontmatter (`name`, `description`, `version`, `allowed-tools`) and markdown body. The `{skill_dir}` token is substituted with the absolute skill path at read time. Skills are injected into agent system prompts as `<available_skills>` XML and exposed as `skill://` MCP resources via FastMCP `SkillProvider`.
 
 ### Channel Plugin System
 
-Channel plugins implement `ChannelPlugin` ABC from `pyclawops/channels/plugin.py`. Discovery: entry points group `pyclawops.channels` or explicit `plugins.channels` list in config. Each plugin gets a `GatewayHandle` for dispatching inbound messages and sending outbound replies.
+Channel plugins implement `ChannelPlugin` ABC from `pyclopse/channels/plugin.py`. Discovery: entry points group `pyclopse.channels` or explicit `plugins.channels` list in config. Each plugin gets a `GatewayHandle` for dispatching inbound messages and sending outbound replies.
 
 ### Hook System
 
-Hooks fire on gateway events (`gateway:startup`, `message:received`, `command:reset`, etc.). Bundled hooks: `session-memory` (writes conversation history to memory on reset), `boot-md` (injects `BOOT.md` from `~/.pyclawops/BOOT.md` or `~/BOOT.md` into agent context at startup). Custom hooks are Python scripts registered in config.
+Hooks fire on gateway events (`gateway:startup`, `message:received`, `command:reset`, etc.). Bundled hooks: `session-memory` (writes conversation history to memory on reset), `boot-md` (injects `BOOT.md` from `~/.pyclopse/BOOT.md` or `~/BOOT.md` into agent context at startup). Custom hooks are Python scripts registered in config.
 
 
 ### Installation, Updates, and Removal
 
-pyclawops is distributed via PyPI as a `uv tool`.
+pyclopse is distributed via PyPI as a `uv tool`.
 
 **Install:**
 ```bash
-uv tool install pyclawops
+uv tool install pyclopse
 ```
 
 **Update:**
 ```bash
-uv tool upgrade pyclawops
+uv tool upgrade pyclopse
 ```
 
 **Uninstall:**
 ```bash
-uv tool uninstall pyclawops
+uv tool uninstall pyclopse
 ```
 
 **Removal (including data):**
 ```bash
-pyclawops uninstall          # removes the binary; prompts whether to delete ~/.pyclawops/
-pyclawops uninstall --purge  # removes binary + ~/.pyclawops/ without prompting
+pyclopse uninstall          # removes the binary; prompts whether to delete ~/.pyclopse/
+pyclopse uninstall --purge  # removes binary + ~/.pyclopse/ without prompting
 ```
 
 ### Release Workflow
 
-Versioning is managed by `hatch-vcs` — the version is derived automatically from the git tag at install/build time. **Never manually edit the version in `pyproject.toml` or `__init__.py`.** The generated `pyclawops/_version.py` is gitignored.
+Versioning is managed by `hatch-vcs` — the version is derived automatically from the git tag at install/build time. **Never manually edit the version in `pyproject.toml` or `__init__.py`.** The generated `pyclopse/_version.py` is gitignored.
 
 To cut a release:
 ```bash
@@ -172,7 +172,7 @@ git push origin v0.2.0
 gh release create v0.2.0 --title "v0.2.0" --notes "..." --latest
 ```
 
-Tag format must be `vMAJOR.MINOR.PATCH`. The `pyclawops update` stable path uses `git ls-remote --tags --sort=-v:refname` to find the latest tag — it only matches tags of this exact format (no pre-release suffixes). Pre-release tags (e.g. `v0.2.0-beta.1`) are ignored by `pyclawops update` stable but reachable via `pyclawops update --version 0.2.0-beta.1`.
+Tag format must be `vMAJOR.MINOR.PATCH`. The `pyclopse update` stable path uses `git ls-remote --tags --sort=-v:refname` to find the latest tag — it only matches tags of this exact format (no pre-release suffixes). Pre-release tags (e.g. `v0.2.0-beta.1`) are ignored by `pyclopse update` stable but reachable via `pyclopse update --version 0.2.0-beta.1`.
 
 ### Testing Patterns
 
@@ -184,7 +184,7 @@ gw._dedup_ttl_seconds = 60
 gw._usage = {"messages": 0, "tokens": 0}
 
 # Mock concurrency manager in AgentRunner tests
-with patch("pyclawops.core.concurrency.get_manager"):
+with patch("pyclopse.core.concurrency.get_manager"):
     ...
 
 # Config schema tests use model_validate with camelCase keys

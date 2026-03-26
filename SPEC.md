@@ -1,12 +1,12 @@
-# pyclawops - Python Gateway
+# pyclopse - Python Gateway
 
-> **⚠️ IMPORTANT: pyclawops is its own independent project.** It is inspired by OpenClaw but is NOT a port, clone, or 1:1 rewrite. pyclawops is designed to be **better**, **cleaner**, and **more secure** with its own architecture, naming conventions, and design philosophy.
+> **⚠️ IMPORTANT: pyclopse is its own independent project.** It is inspired by OpenClaw but is NOT a port, clone, or 1:1 rewrite. pyclopse is designed to be **better**, **cleaner**, and **more secure** with its own architecture, naming conventions, and design philosophy.
 
 ## Overview
 
-**pyclawops** is a Python-based gateway *inspired by* OpenClaw, but it is its own independent project—not a port or 1:1 clone. It is NOT an SDK or client library. It is a standalone gateway built with Python and `uv`, designed to be **better**, **cleaner**, and **more secure** than OpenClaw.
+**pyclopse** is a Python-based gateway *inspired by* OpenClaw, but it is its own independent project—not a port or 1:1 clone. It is NOT an SDK or client library. It is a standalone gateway built with Python and `uv`, designed to be **better**, **cleaner**, and **more secure** than OpenClaw.
 
-Different naming conventions, class names, and architectural patterns are explicitly welcome. pyclawops should reflect Python idioms and best practices rather than mirroring OpenClaw's TypeScript design.
+Different naming conventions, class names, and architectural patterns are explicitly welcome. pyclopse should reflect Python idioms and best practices rather than mirroring OpenClaw's TypeScript design.
 
 ## Goals
 
@@ -23,10 +23,10 @@ Different naming conventions, class names, and architectural patterns are explic
 ### 1.1 Python Package Layout
 
 ```
-pyclawops/
+pyclopse/
 ├── pyproject.toml              # uv project configuration
 ├── uv.lock                     # Locked dependencies
-├── pyclawops/                    # Main package
+├── pyclopse/                    # Main package
 │   ├── __init__.py
 │   ├── __main__.py           # CLI entry point
 │   ├── config/               # Configuration system
@@ -124,7 +124,7 @@ pyclawops/
 All agents (including main) are stored in the `agents/` directory:
 
 ```
-pyclawops/
+pyclopse/
 ├── agents/
 │   ├── main/                    # Main agent (NOT in workspace/)
 │   │   ├── SOUL.md              # Agent personality
@@ -146,7 +146,7 @@ pyclawops/
 
 **Key difference from OpenClaw:**
 - OpenClaw: Main agent in `workspace/`, subagents in `agents/`
-- pyclawops: All agents in `agents/` directory
+- pyclopse: All agents in `agents/` directory
 
 ---
 
@@ -154,9 +154,9 @@ pyclawops/
 
 ### File Name Aliases
 
-The gateway supports both pyclawops naming conventions AND OpenClaw naming conventions:
+The gateway supports both pyclopse naming conventions AND OpenClaw naming conventions:
 
-| pyclawops Name | OpenClaw Alias | Purpose |
+| pyclopse Name | OpenClaw Alias | Purpose |
 |-------------|-----------------|---------|
 | PULSE.md | HEARTBEAT.md | Pulse/heartbeat config |
 | AGENTS.md | (same) | Shared agent config |
@@ -168,11 +168,11 @@ The gateway supports both pyclawops naming conventions AND OpenClaw naming conve
 
 The gateway loads agent files as follows:
 
-1. **Check for pyclawops name first** (e.g., `PULSE.md`)
+1. **Check for pyclopse name first** (e.g., `PULSE.md`)
 2. **Fall back to OpenClaw name if not found** (e.g., `HEARTBEAT.md`)
 
 This allows easy migration:
-- Copy files from OpenClaw's `~/.openclaw/workspace/` to pyclawops's `agents/main/` should just work
+- Copy files from OpenClaw's `~/.openclaw/workspace/` to pyclopse's `agents/main/` should just work
 - Existing OpenClaw users can migrate by simply copying their agent files
 - No renaming required - the compatibility layer handles it
 
@@ -184,10 +184,10 @@ This allows easy migration:
 ~/.openclaw/workspace/RULES.md
 ~/.openclaw/workspace/HEARTBEAT.md
 
-# Copy to pyclawops (just works!)
-cp -r ~/.openclaw/workspace/* ~/.pyclawops/agents/main/
+# Copy to pyclopse (just works!)
+cp -r ~/.openclaw/workspace/* ~/.pyclopse/agents/main/
 
-# pyclawops automatically maps:
+# pyclopse automatically maps:
 # - HEARTBEAT.md → PULSE.md
 # - SOUL.md → SOUL.md (same name)
 # - RULES.md → RULES.md (same name)
@@ -197,7 +197,7 @@ cp -r ~/.openclaw/workspace/* ~/.pyclawops/agents/main/
 
 ```toml
 [project]
-name = "pyclawops"
+name = "pyclopse"
 version = "0.1.0"
 description = "Python gateway - rewrite of OpenClaw"
 requires-python = ">=3.11"
@@ -278,7 +278,7 @@ These are conceptual roles—naming is not required to match OpenClaw. Use Pytho
 
 ## Concurrency Strategy
 
-> ⚠️ **This section is critical for future implementers.** It describes a key architectural mistake in OpenClaw that pyclawops intentionally avoids.
+> ⚠️ **This section is critical for future implementers.** It describes a key architectural mistake in OpenClaw that pyclopse intentionally avoids.
 
 ### The OpenClaw Problem
 
@@ -294,9 +294,9 @@ This design means:
 - Long-running sessions prevent any new sessions from starting
 - The system cannot scale beyond a few concurrent users
 
-### pyclawops's Solution
+### pyclopse's Solution
 
-pyclawops uses a **true parallel execution model** based on Python's asyncio:
+pyclopse uses a **true parallel execution model** based on Python's asyncio:
 
 - **Per-agent async tasks**: Each agent/session gets its own independent async task
 - **No global lock**: Sessions run truly in parallel — no shared lock between different agents
@@ -304,7 +304,7 @@ pyclawops uses a **true parallel execution model** based on Python's asyncio:
 - **Per-session locking only**: Locking is only needed within the same session (if at all), not across sessions
 
 ```python
-# pyclawops approach - each session runs as its own async task
+# pyclopse approach - each session runs as its own async task
 async def handle_session(session_id: str, messages: list):
     """Each session runs independently in its own task"""
     agent = Agent(session_id=session_id)
@@ -325,7 +325,7 @@ async def gateway_main():
 3. **Use asyncio primitives** — `asyncio.create_task()`, `asyncio.gather()`, etc.
 4. **Isolate session state** — no shared mutable state between sessions
 
-This ensures pyclawops can handle many concurrent users without one blocking all others.
+This ensures pyclopse can handle many concurrent users without one blocking all others.
 
 ---
 
@@ -333,10 +333,10 @@ This ensures pyclawops can handle many concurrent users without one blocking all
 
 ### 3.1 YAML Configuration Format
 
-Configuration is stored in `~/.pyclawops/config.yaml`:
+Configuration is stored in `~/.pyclopse/config.yaml`:
 
 ```yaml
-# pyclawops configuration
+# pyclopse configuration
 version: "1.0"
 
 # Gateway settings
@@ -361,11 +361,11 @@ security:
     enabled: true
     type: "docker"  # docker, none
     docker:
-      image: "pyclawops-sandbox:latest"
+      image: "pyclopse-sandbox:latest"
       network: "none"
   audit:
     enabled: true
-    logFile: "~/.pyclawops/logs/audit.log"
+    logFile: "~/.pyclopse/logs/audit.log"
     retentionDays: 90
 
 # Memory (ClawVault)
@@ -391,13 +391,13 @@ providers:
 
 # Workflows (FastAgent)
 workflows:
-  configPath: "~/.pyclawops/workflows.yaml"
+  configPath: "~/.pyclopse/workflows.yaml"
   enabled: true
   defaultWorkflow: "research_and_write"
 
 # Agents (FastAgent-First)
 # 
-# pyclawops uses FastAgent as the backbone. YAML config compiles to @fast.agent decorators,
+# pyclopse uses FastAgent as the backbone. YAML config compiles to @fast.agent decorators,
 # OR you can load Python files that define agents directly with decorators.
 
 agents:
@@ -449,7 +449,7 @@ agents:
 # Jobs (cron)
 jobs:
   enabled: true
-  persistFile: "~/.pyclawops/jobs.json"
+  persistFile: "~/.pyclopse/jobs.json"
 
 # Channels
 channels:
@@ -507,7 +507,7 @@ plugins:
 
 ### Plugin Types
 
-pyclawops supports multiple plugin types:
+pyclopse supports multiple plugin types:
 
 | Type | Description | Use Case |
 |------|-------------|----------|
@@ -591,7 +591,7 @@ memoryQmd:
 ### 3.2 Pydantic Models
 
 ```python
-# pyclawops/config/schema.py
+# pyclopse/config/schema.py
 from pydantic import BaseModel, Field
 from typing import Optional, List, Dict, Any
 from enum import Enum
@@ -614,7 +614,7 @@ class SandboxConfig(BaseModel):
 
 class AuditConfig(BaseModel):
     enabled: bool = True
-    logFile: str = "~/.pyclawops/logs/audit.log"
+    logFile: str = "~/.pyclopse/logs/audit.log"
     retentionDays: int = 90
 
 class SecurityConfig(BaseModel):
@@ -657,7 +657,7 @@ class ProvidersConfig(BaseModel):
 - **None Mode**: No commands approved
 
 ```python
-# pyclawops/security/approvals.py
+# pyclopse/security/approvals.py
 from dataclasses import dataclass
 from typing import List, Set, Optional
 import re
@@ -702,7 +702,7 @@ class ExecApprovalSystem:
 - **None**: No sandboxing (development only)
 
 ```python
-# pyclawops/security/sandbox.py
+# pyclopse/security/sandbox.py
 import asyncio
 from typing import Optional, Dict, Any
 
@@ -711,7 +711,7 @@ class Sandbox:
         raise NotImplementedError
 
 class DockerSandbox(Sandbox):
-    def __init__(self, image: str = "pyclawops-sandbox:latest"):
+    def __init__(self, image: str = "pyclopse-sandbox:latest"):
         self.image = image
     
     async def execute(self, command: str, cwd: str, env: Dict[str, str]):
@@ -723,7 +723,7 @@ class DockerSandbox(Sandbox):
 ### 4.3 Audit Logging
 
 ```python
-# pyclawops/security/audit_logger.py
+# pyclopse/security/audit_logger.py
 import json
 import logging
 from datetime import datetime
@@ -733,7 +733,7 @@ class AuditLogger:
     def __init__(self, log_file: str, retention_days: int = 90):
         self.log_file = Path(log_file).expanduser()
         self.retention_days = retention_days
-        self.logger = logging.getLogger("pyclawops.audit")
+        self.logger = logging.getLogger("pyclopse.audit")
     
     async def log(self, event_type: str, data: dict):
         entry = {
@@ -757,7 +757,7 @@ class AuditLogger:
 ### 5.1 Base Adapter Pattern
 
 ```python
-# pyclawops/channels/base.py
+# pyclopse/channels/base.py
 from abc import ABC, abstractmethod
 from typing import Any, Dict, Optional
 from dataclasses import dataclass
@@ -811,7 +811,7 @@ class ChannelAdapter(ABC):
 ### 5.2 Channel Registry
 
 ```python
-# pyclawops/channels/registry.py
+# pyclopse/channels/registry.py
 from typing import Dict, Type
 from .base import ChannelAdapter
 
@@ -832,7 +832,7 @@ def get_channel(name: str, config: dict) -> ChannelAdapter:
 ### 5.3 Telegram Adapter Example
 
 ```python
-# pyclawops/channels/telegram.py
+# pyclopse/channels/telegram.py
 from .base import ChannelAdapter, Message, MessageTarget
 from telegram import Bot
 from telegram.error import TelegramError
@@ -870,7 +870,7 @@ class TelegramAdapter(ChannelAdapter):
 ClawVault is an npm package (`npm install -g clawvault`) that runs via CLI. We wrap it with subprocess:
 
 ```python
-# pyclawops/memory/client.py
+# pyclopse/memory/client.py
 import subprocess
 import json
 import asyncio
@@ -917,7 +917,7 @@ class ClawVaultClient:
 ### 6.2 Memory Integration
 
 ```python
-# pyclawops/memory/store.py
+# pyclopse/memory/store.py
 from .client import ClawVaultClient
 
 class MemoryStore:
@@ -947,7 +947,7 @@ class MemoryStore:
 
 > **Key Insight: Agents Can Chain to Other Agents**
 >
-> Every pyclawops agent can use other agents as building blocks:
+> Every pyclopse agent can use other agents as building blocks:
 >
 > ```yaml
 > agents:
@@ -976,11 +976,11 @@ class MemoryStore:
 >     agents: [order_agent, ship_agent, inventory_agent]
 > ```
 
-FastAgent uses **decorators** to define agents, NOT just config. pyclawops supports two approaches:
+FastAgent uses **decorators** to define agents, NOT just config. pyclopse supports two approaches:
 
 **Option A: YAML config that compiles to FastAgent decorators**
 ```yaml
-# pyclawops.yaml - compiles to @fast.agent decorators
+# pyclopse.yaml - compiles to @fast.agent decorators
 agents:
   # Base agents (single FastAgent)
   url_fetcher:
@@ -1014,7 +1014,7 @@ agents:
 # agents/assistant.py - direct FastAgent definition
 from fast_agent import FastAgent
 
-fast = FastAgent("pyclawops")
+fast = FastAgent("pyclopse")
 
 @fast.agent(
     name="assistant",
@@ -1027,17 +1027,17 @@ async def main():
         await agent.interactive()
 ```
 
-The key insight: **agents are defined with decorators in FastAgent**. pyclawops's YAML config is a convenience layer that compiles to these decorators at runtime.
+The key insight: **agents are defined with decorators in FastAgent**. pyclopse's YAML config is a convenience layer that compiles to these decorators at runtime.
 
 ### 7.2 FastAgent is the Backbone
 
-Every pyclawops "Agent" IS a FastAgent instance. This is the core insight:
+Every pyclopse "Agent" IS a FastAgent instance. This is the core insight:
 
 ```
-pyclawops Agent = FastAgent instance + Channel binding + Security layer
+pyclopse Agent = FastAgent instance + Channel binding + Security layer
 ```
 
-**What pyclawops adds to FastAgent:**
+**What pyclopse adds to FastAgent:**
 - Channel integrations (Telegram, Discord, etc.)
 - Security layer (exec approvals, audit)
 - CLI and TUI
@@ -1053,7 +1053,7 @@ pyclawops Agent = FastAgent instance + Channel binding + Security layer
 ### 7.2 Base Provider
 
 ```python
-# pyclawops/providers/base.py
+# pyclopse/providers/base.py
 from abc import ABC, abstractmethod
 from typing import List, Dict, Any, Optional, AsyncIterator
 from dataclasses import dataclass
@@ -1121,11 +1121,11 @@ We will use [FastAgent](https://github.com/evalstate/fast-agent) as the workflow
 
 **Implementation:**
 - Add fast-agent-mcp to dependencies
-- Create pyclawops/workflows/ module that wraps FastAgent
+- Create pyclopse/workflows/ module that wraps FastAgent
 - Define workflows in YAML config
 - Agents become FastAgent agents with MCP tools
 
-**Example pyclawops workflow config:**
+**Example pyclopse workflow config:**
 ```yaml
 workflows:
   research_and_write:
@@ -1137,19 +1137,19 @@ workflows:
 
 ### 7.4 FastAgent Detailed Integration
 
-This section provides comprehensive details on integrating FastAgent with pyclawops.
+This section provides comprehensive details on integrating FastAgent with pyclopse.
 
 #### 7.4.1 Agent Definition Syntax
 
 FastAgent uses the `@fast.agent` decorator to define agents:
 
 ```python
-# pyclawops/agents/definitions.py
+# pyclopse/agents/definitions.py
 import asyncio
 from fast_agent import FastAgent
 
 # Create FastAgent application
-fast = FastAgent("pyclawops")
+fast = FastAgent("pyclopse")
 
 @fast.agent(
     name="assistant",
@@ -1259,12 +1259,12 @@ async def main():
 
 #### 7.4.4 MCP Integration
 
-FastAgent MCP server configuration is built programmatically by `AgentRunner._build_fa_settings()` from the pyclawops config — no `fastagent.config.yaml` file is used or needed.
+FastAgent MCP server configuration is built programmatically by `AgentRunner._build_fa_settings()` from the pyclopse config — no `fastagent.config.yaml` file is used or needed.
 
-#### 7.4.5 YAML Configuration for pyclawops Agents
+#### 7.4.5 YAML Configuration for pyclopse Agents
 
 ```yaml
-# pyclawops.yaml - compiles to @fast.agent decorators
+# pyclopse.yaml - compiles to @fast.agent decorators
 agents:
   main:
     type: fastagent
@@ -1303,10 +1303,10 @@ workflows:
   default_agent: main
 ```
 
-#### 7.4.6 pyclawops Agent Factory
+#### 7.4.6 pyclopse Agent Factory
 
 ```python
-# pyclawops/agents/factory.py
+# pyclopse/agents/factory.py
 from fast_agent import FastAgent
 from typing import Dict, Any, Optional, List
 
@@ -1364,7 +1364,7 @@ class FastAgentFactory:
 #### FastAgent Provider Implementation
 
 ```python
-# pyclawops/providers/fastagent.py
+# pyclopse/providers/fastagent.py
 from .base import Provider
 from typing import List, Dict, Any, Optional, AsyncIterator
 import httpx
@@ -1428,7 +1428,7 @@ class FastAgentProvider(Provider):
 #### Workflow Runner
 
 ```python
-# pyclawops/workflows/runner.py
+# pyclopse/workflows/runner.py
 from typing import Dict, Any, List, Optional
 from dataclasses import dataclass
 from enum import Enum
@@ -1622,13 +1622,13 @@ agents:
 
 ### Skills (FastAgent Built-in)
 
-pyclawops uses FastAgent's built-in skills system (`fast_agent.skills`). The custom skills system has been removed.
+pyclopse uses FastAgent's built-in skills system (`fast_agent.skills`). The custom skills system has been removed.
 
 **Key Points:**
 - Skills are defined in FastAgent and loaded automatically
 - Use FastAgent's skill registry to manage skills
 - Skills provide additional capabilities to agents (e.g., web search, file operations)
-- pyclawops no longer has its own skills module - use FastAgent skills
+- pyclopse no longer has its own skills module - use FastAgent skills
 
 ```python
 # Example: Using FastAgent skills
@@ -1674,7 +1674,7 @@ FastAgent provides native MCP support. Agents can use MCP tools from the registr
 FastAgent provides native MCP support. Agents can use MCP tools from the registry:
 
 ```python
-# pyclawops/workflows/mcp_integration.py
+# pyclopse/workflows/mcp_integration.py
 from typing import Dict, Any, List
 
 class MCPToolRegistry:
@@ -1704,7 +1704,7 @@ class MCPToolRegistry:
 ### 8.4 Built-in Workflow Patterns
 
 ```python
-# pyclawops/workflows/patterns.py
+# pyclopse/workflows/patterns.py
 from .runner import WorkflowRunner, Workflow, WorkflowType
 from typing import Any, Dict
 
@@ -1757,7 +1757,7 @@ class WorkflowPatterns:
 ### 8.1 Plugin Loader
 
 ```python
-# pyclawops/plugins/loader.py
+# pyclopse/plugins/loader.py
 import importlib.util
 from pathlib import Path
 from typing import Dict, Any
@@ -1780,7 +1780,7 @@ class PluginLoader:
     def load_plugin(self, name: str, path: Path, config: Dict[str, Any]):
         """Load a plugin module"""
         spec = importlib.util.spec_from_file_location(
-            f"pyclawops.plugins.{name}",
+            f"pyclopse.plugins.{name}",
             path / "plugin.py"
         )
         module = importlib.util.module_from_spec(spec)
@@ -1836,11 +1836,11 @@ discord_plugin.register_routes(app)
 
 **The Problem:** OpenClaw plugins are TypeScript-only since they're part of the same Node.js process.
 
-**pyclawops's Solution:** Plugins are NOT limited to Python—any language can be a plugin via HTTP/RPC.
+**pyclopse's Solution:** Plugins are NOT limited to Python—any language can be a plugin via HTTP/RPC.
 
 #### Architecture
 
-- pyclawops runs on ONE port (e.g., 18789)
+- pyclopse runs on ONE port (e.g., 18789)
 - Plugins register ROUTES at startup (not their own servers!)
 - Main router dispatches: `/telegram/*` → Telegram plugin, `/discord/*` → Discord plugin
 
@@ -1918,7 +1918,7 @@ async fn main() -> std::io::Result<()> {
 #### Benefits
 
 - **Any language can be a plugin**: Python, Go, Rust, Node.js, etc.
-- **One port to manage**: pyclawops runs on a single port
+- **One port to manage**: pyclopse runs on a single port
 - **Easy to proxy**: Behind nginx, Caddy, or any reverse proxy
 - **Plugins distributed as binaries**: No language runtime required for plugin consumers
 
@@ -1927,7 +1927,7 @@ async fn main() -> std::io::Result<()> {
 External plugins register with the gateway:
 
 ```python
-# pyclawops/plugins/registry.py
+# pyclopse/plugins/registry.py
 from typing import Dict, Any, Optional
 from dataclasses import dataclass
 
@@ -1965,7 +1965,7 @@ class PluginRegistry:
 ### 8.2 Hook System
 
 ```python
-# pyclawops/plugins/hooks.py
+# pyclopse/plugins/hooks.py
 from typing import Callable, Dict, List, Any
 from enum import Enum
 
@@ -1996,7 +1996,7 @@ class HookRegistry:
 
 ## 9. Gateway Concepts
 
-These are gateway-level features that pyclawops must handle, which are outside the scope of FastAgent's agent/workflow engine:
+These are gateway-level features that pyclopse must handle, which are outside the scope of FastAgent's agent/workflow engine:
 
 ### 9.1 Compaction
 
@@ -2007,7 +2007,7 @@ These are gateway-level features that pyclawops must handle, which are outside t
 **How**: Summarize old messages while keeping recent context intact. This is critical for long-running sessions where the full message history would exceed the model's context window.
 
 ```python
-# pyclawops/core/compaction.py
+# pyclopse/core/compaction.py
 class ContextCompactor:
     def __init__(self, max_tokens: int = 100000):
         self.max_tokens = max_tokens
@@ -2033,7 +2033,7 @@ class ContextCompactor:
 **How**: Serialize messages, agent state, and metadata to disk (SQLite or JSON).
 
 ```python
-# pyclawops/core/session.py
+# pyclopse/core/session.py
 class SessionPersistence:
     def __init__(self, storage_path: str):
         self.storage_path = storage_path
@@ -2060,7 +2060,7 @@ class SessionPersistence:
 **How**: Track message token counts, monitor context usage, and proactively truncate or compact before hitting limits.
 
 ```python
-# pyclawops/core/context.py
+# pyclopse/core/context.py
 class ContextManager:
     def __init__(self, session: Session, max_tokens: int):
         self.session = session
@@ -2087,10 +2087,10 @@ class ContextManager:
 
 **How**: Asyncio tasks per agent that run at configured intervals, checking for updates or performing background work.
 
-> **Status**: Already implemented in `pyclawops/pulse/` module.
+> **Status**: Already implemented in `pyclopse/pulse/` module.
 
 ```python
-# pyclawops/pulse/runner.py
+# pyclopse/pulse/runner.py
 class PulseRunner:
     def __init__(self, agent: Agent, config: PulseConfig):
         self.agent = agent
@@ -2113,10 +2113,10 @@ class PulseRunner:
 
 **How**: Job queue with persistence (SQLite), scheduler runs jobs at configured times.
 
-> **Status**: Already implemented in `pyclawops/jobs/` module.
+> **Status**: Already implemented in `pyclopse/jobs/` module.
 
 ```python
-# pyclawops/jobs/scheduler.py
+# pyclopse/jobs/scheduler.py
 class JobScheduler:
     def __init__(self, job_store: JobStore):
         self.job_store = job_store
@@ -2167,14 +2167,14 @@ class JobScheduler:
 ### 9.1 FastAPI Application
 
 ```python
-# pyclawops/api/app.py
+# pyclopse/api/app.py
 from fastapi import FastAPI, HTTPException, Depends
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from pydantic import BaseModel
 from typing import List, Optional
 import jwt
 
-app = FastAPI(title="pyclawops API", version="0.1.0")
+app = FastAPI(title="pyclopse API", version="0.1.0")
 security = HTTPBearer()
 
 # Request/Response Models
@@ -2312,7 +2312,7 @@ async def search_memory(
 
 ### 11.1 Config Conversion
 
-Provide a tool to convert OpenClaw JSON config to pyclawops YAML:
+Provide a tool to convert OpenClaw JSON config to pyclopse YAML:
 
 ```python
 # scripts/convert_config.py
@@ -2324,8 +2324,8 @@ def convert_config(input_file: Path, output_file: Path):
     with open(input_file) as f:
         config = json.load(f)
     
-    # Convert to pyclawops format
-    pyclawops_config = {
+    # Convert to pyclopse format
+    pyclopse_config = {
         "version": "1.0",
         "gateway": {...},
         "security": {...},
@@ -2333,7 +2333,7 @@ def convert_config(input_file: Path, output_file: Path):
     }
     
     with open(output_file, "w") as f:
-        yaml.dump(pyclawops_config, f, default_flow_style=False)
+        yaml.dump(pyclopse_config, f, default_flow_style=False)
 ```
 
 ### 11.2 Data Migration
@@ -2346,7 +2346,7 @@ def convert_config(input_file: Path, output_file: Path):
 
 ## 12. Key Differences from OpenClaw
 
-| Aspect | OpenClaw | pyclawops |
+| Aspect | OpenClaw | pyclopse |
 |--------|----------|--------|
 | Language | TypeScript | Python |
 | Package Manager | npm | uv |
@@ -2387,7 +2387,7 @@ def convert_config(input_file: Path, output_file: Path):
 ```python
 # tests/test_approvals.py
 import pytest
-from pyclawops.security.approvals import ExecApprovalSystem, ApprovalRequest
+from pyclopse.security.approvals import ExecApprovalSystem, ApprovalRequest
 
 @pytest.fixture
 def approval_system():

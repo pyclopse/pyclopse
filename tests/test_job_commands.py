@@ -9,8 +9,8 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from pyclawops.jobs.models import Job, JobStatus, CommandRun, CronSchedule, IntervalSchedule, DeliverAnnounce
-from pyclawops.config.schema import JobsConfig
+from pyclopse.jobs.models import Job, JobStatus, CommandRun, CronSchedule, IntervalSchedule, DeliverAnnounce
+from pyclopse.config.schema import JobsConfig
 
 
 # ---------------------------------------------------------------------------
@@ -18,14 +18,14 @@ from pyclawops.config.schema import JobsConfig
 # ---------------------------------------------------------------------------
 
 def _make_scheduler(tmp_path):
-    from pyclawops.jobs.scheduler import JobScheduler
+    from pyclopse.jobs.scheduler import JobScheduler
     cfg = JobsConfig(enabled=True, agents_dir=str(tmp_path / "agents"))
     return JobScheduler(cfg)
 
 
 def _make_gateway_stub(tmp_path):
     """Minimal gateway-like object with _handle_job_command wired up."""
-    from pyclawops.core.gateway import Gateway
+    from pyclopse.core.gateway import Gateway
     from unittest.mock import MagicMock
 
     gw = MagicMock(spec=Gateway)
@@ -234,19 +234,19 @@ class TestJobCommandRun:
 class TestHttpApiSmoke:
 
     def test_create_app_returns_fastapi(self):
-        from pyclawops.api.app import create_app
+        from pyclopse.api.app import create_app
         from fastapi import FastAPI
         app = create_app()
         assert isinstance(app, FastAPI)
 
     def test_health_endpoint_registered(self):
-        from pyclawops.api.app import create_app
+        from pyclopse.api.app import create_app
         app = create_app()
         routes = {r.path for r in app.routes}
         assert "/health" in routes
 
     def test_api_routes_registered(self):
-        from pyclawops.api.app import create_app
+        from pyclopse.api.app import create_app
         app = create_app()
         paths = {r.path for r in app.routes}
         assert any("/api/v1/jobs" in p for p in paths)
@@ -254,7 +254,7 @@ class TestHttpApiSmoke:
 
     @pytest.mark.asyncio
     async def test_health_returns_200(self):
-        from pyclawops.api.app import create_app
+        from pyclopse.api.app import create_app
         from httpx import AsyncClient, ASGITransport
         app = create_app()
         async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as c:

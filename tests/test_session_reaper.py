@@ -4,12 +4,12 @@ Tests for the session reaper added to SessionManager.
 
 import asyncio
 from datetime import datetime, timedelta
-from pyclawops.utils.time import now
+from pyclopse.utils.time import now
 
 import pytest
 
-from pyclawops.core.session import SessionManager
-from pyclawops.config.schema import JobsConfig
+from pyclopse.core.session import SessionManager
+from pyclopse.config.schema import JobsConfig
 
 
 # ---------------------------------------------------------------------------

@@ -10,19 +10,19 @@ import json
 import tempfile
 import uuid
 from datetime import datetime, timedelta
-from pyclawops.utils.time import now
+from pyclopse.utils.time import now
 from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from pyclawops.jobs.models import (
+from pyclopse.jobs.models import (
     Job, JobRun, JobStatus,
     CommandRun, IntervalSchedule, CronSchedule,
 )
-from pyclawops.jobs.scheduler import JobScheduler
-from pyclawops.config.schema import JobsConfig
-from pyclawops.core.session import Session, SessionManager
+from pyclopse.jobs.scheduler import JobScheduler
+from pyclopse.config.schema import JobsConfig
+from pyclopse.core.session import Session, SessionManager
 
 
 # ---------------------------------------------------------------------------
@@ -127,7 +127,7 @@ class TestContinuousCron:
             schedule=CronSchedule(expr="continuous 7-14 * * 1-5"),
         )
         # Inside window: Wednesday 10:00
-        with patch("pyclawops.jobs.scheduler.now", return_value=datetime(2025, 1, 8, 10, 0, 0)):
+        with patch("pyclopse.jobs.scheduler.now", return_value=datetime(2025, 1, 8, 10, 0, 0)):
             sched._recalc_next_run(job)
         assert job.next_run == datetime(2025, 1, 8, 10, 0, 0)
 
@@ -140,7 +140,7 @@ class TestContinuousCron:
             schedule=CronSchedule(expr="continuous 7-14 * * 1-5"),
         )
         # Outside window: Wednesday 20:00
-        with patch("pyclawops.jobs.scheduler.now", return_value=datetime(2025, 1, 8, 20, 0, 0)):
+        with patch("pyclopse.jobs.scheduler.now", return_value=datetime(2025, 1, 8, 20, 0, 0)):
             sched._recalc_next_run(job)
         assert job.next_run > datetime(2025, 1, 8, 20, 0, 0)
         assert job.next_run.hour == 7
@@ -276,7 +276,7 @@ class TestJobNotifyCallback:
         bot = AsyncMock()
         chat_id = "12345"
 
-        from pyclawops.jobs.models import JobStatus, DeliverAnnounce
+        from pyclopse.jobs.models import JobStatus, DeliverAnnounce
 
         async def _job_notify(job, run):
             ok = run.status == JobStatus.COMPLETED

@@ -1,4 +1,4 @@
-"""Tests for the pyclawops skill system.
+"""Tests for the pyclopse skill system.
 
 Covers:
   - SkillInfo / parse from SKILL.md
@@ -16,7 +16,7 @@ import pytest
 from mcp import ClientSession, StdioServerParameters
 from mcp.client.stdio import stdio_client
 
-from pyclawops.skills.registry import (
+from pyclopse.skills.registry import (
     SkillInfo,
     discover_skills,
     find_skill,
@@ -65,8 +65,8 @@ def skill_tree(tmp_path):
 
 
 @pytest.fixture
-def pyclawops_home(skill_tree):
-    """Temp pyclawops home directory with the skill tree."""
+def pyclopse_home(skill_tree):
+    """Temp pyclopse home directory with the skill tree."""
     return skill_tree
 
 
@@ -99,8 +99,8 @@ class TestSkillRegistry:
         dirs = get_skill_dirs(config_dir=str(tmp_path), extra_dirs=[str(extra)])
         assert extra in dirs
 
-    def test_discover_finds_skills(self, pyclawops_home):
-        skills = discover_skills(config_dir=str(pyclawops_home))
+    def test_discover_finds_skills(self, pyclopse_home):
+        skills = discover_skills(config_dir=str(pyclopse_home))
         names = {s.name for s in skills}
         assert "hello-world" in names
         assert "file-counter" in names
@@ -109,38 +109,38 @@ class TestSkillRegistry:
         skills = discover_skills(config_dir=str(tmp_path))
         assert skills == []
 
-    def test_skill_info_fields(self, pyclawops_home):
-        skills = discover_skills(config_dir=str(pyclawops_home))
+    def test_skill_info_fields(self, pyclopse_home):
+        skills = discover_skills(config_dir=str(pyclopse_home))
         hw = next(s for s in skills if s.name == "hello-world")
         assert hw.version == "1.2.3"
         assert hw.description == "Prints hello world"
         assert hw.skill_md.exists()
         assert hw.path.is_dir()
 
-    def test_skill_allowed_tools(self, pyclawops_home):
-        skills = discover_skills(config_dir=str(pyclawops_home))
+    def test_skill_allowed_tools(self, pyclopse_home):
+        skills = discover_skills(config_dir=str(pyclopse_home))
         fc = next(s for s in skills if s.name == "file-counter")
         assert fc.allowed_tools == ["bash"]
 
-    def test_skill_dir_substitution(self, pyclawops_home):
-        skills = discover_skills(config_dir=str(pyclawops_home))
+    def test_skill_dir_substitution(self, pyclopse_home):
+        skills = discover_skills(config_dir=str(pyclopse_home))
         hw = next(s for s in skills if s.name == "hello-world")
         content = hw.read_content()
         # {skill_dir} should be replaced with the absolute path
         assert "{skill_dir}" not in content
         assert str(hw.path) in content
 
-    def test_find_skill_found(self, pyclawops_home):
-        skill = find_skill("hello-world", config_dir=str(pyclawops_home))
+    def test_find_skill_found(self, pyclopse_home):
+        skill = find_skill("hello-world", config_dir=str(pyclopse_home))
         assert skill is not None
         assert skill.name == "hello-world"
 
-    def test_find_skill_case_insensitive(self, pyclawops_home):
-        skill = find_skill("Hello-World", config_dir=str(pyclawops_home))
+    def test_find_skill_case_insensitive(self, pyclopse_home):
+        skill = find_skill("Hello-World", config_dir=str(pyclopse_home))
         assert skill is not None
 
-    def test_find_skill_not_found(self, pyclawops_home):
-        assert find_skill("nonexistent-xyz", config_dir=str(pyclawops_home)) is None
+    def test_find_skill_not_found(self, pyclopse_home):
+        assert find_skill("nonexistent-xyz", config_dir=str(pyclopse_home)) is None
 
     def test_agent_skill_overrides_global(self, tmp_path):
         """Per-agent skill with same name overrides global skill."""
@@ -173,14 +173,14 @@ class TestFormatForPrompt:
     def test_empty_list(self):
         assert format_for_prompt([]) == ""
 
-    def test_contains_skill_name(self, pyclawops_home):
-        skills = discover_skills(config_dir=str(pyclawops_home))
+    def test_contains_skill_name(self, pyclopse_home):
+        skills = discover_skills(config_dir=str(pyclopse_home))
         text = format_for_prompt(skills)
         assert "hello-world" in text
         assert "file-counter" in text
 
-    def test_xml_structure(self, pyclawops_home):
-        skills = discover_skills(config_dir=str(pyclawops_home))
+    def test_xml_structure(self, pyclopse_home):
+        skills = discover_skills(config_dir=str(pyclopse_home))
         text = format_for_prompt(skills)
         assert "<available_skills>" in text
         assert "<skill>" in text
@@ -188,8 +188,8 @@ class TestFormatForPrompt:
         assert "<description>" in text
         assert "<location>" in text
 
-    def test_custom_read_tool_name(self, pyclawops_home):
-        skills = discover_skills(config_dir=str(pyclawops_home))
+    def test_custom_read_tool_name(self, pyclopse_home):
+        skills = discover_skills(config_dir=str(pyclopse_home))
         text = format_for_prompt(skills, read_tool_name="my_skill_tool")
         assert "my_skill_tool" in text
 
@@ -202,7 +202,7 @@ class TestPromptBuilderSkillInjection:
 
     def test_skills_injected_in_prompt(self, tmp_path):
         """Skills are appended to system prompt when agent dir + skills dir exist."""
-        from pyclawops.core.prompt_builder import build_system_prompt
+        from pyclopse.core.prompt_builder import build_system_prompt
 
         # Create agent dir with at least one file
         agent_dir = tmp_path / "agents" / "test-agent"
@@ -221,7 +221,7 @@ class TestPromptBuilderSkillInjection:
         assert "<available_skills>" in prompt
 
     def test_no_skills_no_injection(self, tmp_path):
-        from pyclawops.core.prompt_builder import build_system_prompt
+        from pyclopse.core.prompt_builder import build_system_prompt
         agent_dir = tmp_path / "agents" / "no-skill-agent"
         agent_dir.mkdir(parents=True)
         (agent_dir / "IDENTITY.md").write_text("# Identity\nI am test.")
@@ -229,7 +229,7 @@ class TestPromptBuilderSkillInjection:
         assert "<available_skills>" not in prompt
 
     def test_subagent_no_skill_injection(self, tmp_path):
-        from pyclawops.core.prompt_builder import build_system_prompt
+        from pyclopse.core.prompt_builder import build_system_prompt
         agent_dir = tmp_path / "agents" / "sub"
         agent_dir.mkdir(parents=True)
         (agent_dir / "IDENTITY.md").write_text("# Identity\nI am sub.")
@@ -246,7 +246,7 @@ class TestPromptBuilderSkillInjection:
 # MCP tools: skills_list, skill_read
 # ---------------------------------------------------------------------------
 
-async def _pyclawops_mcp_session(home_dir: str):
+async def _pyclopse_mcp_session(home_dir: str):
     env = {
         **os.environ,
         "HOME": home_dir,
@@ -255,7 +255,7 @@ async def _pyclawops_mcp_session(home_dir: str):
     }
     return StdioServerParameters(
         command="uv",
-        args=["run", "python", "-m", "pyclawops.tools.server"],
+        args=["run", "python", "-m", "pyclopse.tools.server"],
         env=env,
     )
 
@@ -268,7 +268,7 @@ async def _call(session: ClientSession, tool: str, args: dict) -> str:
 @pytest.mark.asyncio
 async def test_mcp_skills_list_no_skills(tmp_path):
     """skills_list returns a 'no skills' message when nothing is installed."""
-    params = await _pyclawops_mcp_session(str(tmp_path))
+    params = await _pyclopse_mcp_session(str(tmp_path))
     async with stdio_client(params) as (r, w):
         async with ClientSession(r, w) as session:
             await session.initialize()
@@ -278,13 +278,13 @@ async def test_mcp_skills_list_no_skills(tmp_path):
 
 @pytest.mark.asyncio
 async def test_mcp_skills_list_with_skills(tmp_path):
-    """skills_list finds and lists skills in HOME/.pyclawops/skills/."""
-    pyclawops_dir = tmp_path / ".pyclawops" / "skills" / "demo-skill"
-    pyclawops_dir.mkdir(parents=True)
-    (pyclawops_dir / "SKILL.md").write_text(
+    """skills_list finds and lists skills in HOME/.pyclopse/skills/."""
+    pyclopse_dir = tmp_path / ".pyclopse" / "skills" / "demo-skill"
+    pyclopse_dir.mkdir(parents=True)
+    (pyclopse_dir / "SKILL.md").write_text(
         "---\nname: demo-skill\ndescription: A demo skill for testing\n---\n## Demo\nDo the demo.\n"
     )
-    params = await _pyclawops_mcp_session(str(tmp_path))
+    params = await _pyclopse_mcp_session(str(tmp_path))
     async with stdio_client(params) as (r, w):
         async with ClientSession(r, w) as session:
             await session.initialize()
@@ -296,7 +296,7 @@ async def test_mcp_skills_list_with_skills(tmp_path):
 @pytest.mark.asyncio
 async def test_mcp_skill_read(tmp_path):
     """skill_read returns full SKILL.md content with {skill_dir} substituted."""
-    skill_dir = tmp_path / ".pyclawops" / "skills" / "reader-skill"
+    skill_dir = tmp_path / ".pyclopse" / "skills" / "reader-skill"
     skill_dir.mkdir(parents=True)
     (skill_dir / "SKILL.md").write_text(
         "---\nname: reader-skill\ndescription: Test read skill\n---\n"
@@ -304,7 +304,7 @@ async def test_mcp_skill_read(tmp_path):
     )
     (skill_dir / "main.py").write_text("print('hello')\n")
 
-    params = await _pyclawops_mcp_session(str(tmp_path))
+    params = await _pyclopse_mcp_session(str(tmp_path))
     async with stdio_client(params) as (r, w):
         async with ClientSession(r, w) as session:
             await session.initialize()
@@ -316,7 +316,7 @@ async def test_mcp_skill_read(tmp_path):
 
 @pytest.mark.asyncio
 async def test_mcp_skill_read_not_found(tmp_path):
-    params = await _pyclawops_mcp_session(str(tmp_path))
+    params = await _pyclopse_mcp_session(str(tmp_path))
     async with stdio_client(params) as (r, w):
         async with ClientSession(r, w) as session:
             await session.initialize()
@@ -335,9 +335,9 @@ class TestSkillCommands:
     We test the handlers directly without a full gateway, using a minimal stub.
     """
 
-    def _make_ctx(self, pyclawops_home, agent_id="test"):
+    def _make_ctx(self, pyclopse_home, agent_id="test"):
         from unittest.mock import MagicMock
-        from pyclawops.core.commands import CommandContext
+        from pyclopse.core.commands import CommandContext
 
         session = MagicMock()
         session.id = "sess-001"
@@ -358,7 +358,7 @@ class TestSkillCommands:
     @pytest.mark.asyncio
     async def test_cmd_skills_no_skills(self, tmp_path):
         """Test /skills command when no skills are installed."""
-        from pyclawops.core.commands import CommandRegistry, register_builtin_commands
+        from pyclopse.core.commands import CommandRegistry, register_builtin_commands
         from unittest.mock import MagicMock, patch
 
         registry = CommandRegistry()
@@ -366,21 +366,21 @@ class TestSkillCommands:
         gw._agent_manager = None
         register_builtin_commands(registry, gw)
 
-        from pyclawops.core.commands import CommandContext
+        from pyclopse.core.commands import CommandContext
         session = MagicMock()
         session.id = "s1"
         session.agent_id = "agent1"
         ctx = CommandContext(gateway=gw, session=session, sender_id="u1", channel="test")
 
-        with patch("pyclawops.skills.registry.get_skill_dirs", return_value=[]):
+        with patch("pyclopse.skills.registry.get_skill_dirs", return_value=[]):
             result = await registry.dispatch("/skills", ctx)
         assert result is not None
         assert "No skills" in result or "skill" in result.lower()
 
     @pytest.mark.asyncio
-    async def test_cmd_skills_lists_skills(self, pyclawops_home):
+    async def test_cmd_skills_lists_skills(self, pyclopse_home):
         """Test /skills command lists discovered skills."""
-        from pyclawops.core.commands import CommandRegistry, register_builtin_commands, CommandContext
+        from pyclopse.core.commands import CommandRegistry, register_builtin_commands, CommandContext
         from unittest.mock import MagicMock, patch
 
         registry = CommandRegistry()
@@ -394,8 +394,8 @@ class TestSkillCommands:
         ctx = CommandContext(gateway=gw, session=session, sender_id="u1", channel="test")
 
         with patch(
-            "pyclawops.skills.registry.get_skill_dirs",
-            return_value=[pyclawops_home / "skills"],
+            "pyclopse.skills.registry.get_skill_dirs",
+            return_value=[pyclopse_home / "skills"],
         ):
             result = await registry.dispatch("/skills", ctx)
 
@@ -404,9 +404,9 @@ class TestSkillCommands:
         assert "file-counter" in result
 
     @pytest.mark.asyncio
-    async def test_cmd_skill_no_args(self, pyclawops_home):
+    async def test_cmd_skill_no_args(self, pyclopse_home):
         """Test /skill with no args returns usage."""
-        from pyclawops.core.commands import CommandRegistry, register_builtin_commands, CommandContext
+        from pyclopse.core.commands import CommandRegistry, register_builtin_commands, CommandContext
         from unittest.mock import MagicMock
 
         registry = CommandRegistry()
@@ -424,9 +424,9 @@ class TestSkillCommands:
         assert "Usage" in result or "usage" in result.lower()
 
     @pytest.mark.asyncio
-    async def test_cmd_skill_not_found(self, pyclawops_home):
+    async def test_cmd_skill_not_found(self, pyclopse_home):
         """Test /skill with unknown name returns helpful error."""
-        from pyclawops.core.commands import CommandRegistry, register_builtin_commands, CommandContext
+        from pyclopse.core.commands import CommandRegistry, register_builtin_commands, CommandContext
         from unittest.mock import MagicMock, patch
 
         registry = CommandRegistry()
@@ -440,8 +440,8 @@ class TestSkillCommands:
         ctx = CommandContext(gateway=gw, session=session, sender_id="u1", channel="test")
 
         with patch(
-            "pyclawops.skills.registry.get_skill_dirs",
-            return_value=[pyclawops_home / "skills"],
+            "pyclopse.skills.registry.get_skill_dirs",
+            return_value=[pyclopse_home / "skills"],
         ):
             result = await registry.dispatch("/skill nonexistent-xyz", ctx)
 

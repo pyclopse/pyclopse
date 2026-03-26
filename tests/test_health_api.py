@@ -11,8 +11,8 @@ from fastapi.testclient import TestClient
 # ---------------------------------------------------------------------------
 
 def _make_gateway(initialized=True, running=True, sessions=3, agents=None):
-    from pyclawops.core.gateway import Gateway
-    from pyclawops.config.schema import Config, AgentsConfig, SecurityConfig
+    from pyclopse.core.gateway import Gateway
+    from pyclopse.config.schema import Config, AgentsConfig, SecurityConfig
 
     gw = Gateway.__new__(Gateway)
     gw._initialized = initialized
@@ -46,7 +46,7 @@ def _make_gateway(initialized=True, running=True, sessions=3, agents=None):
 
 
 def _make_app(gateway):
-    from pyclawops.api.app import create_app, set_gateway
+    from pyclopse.api.app import create_app, set_gateway
     set_gateway(gateway)
     return create_app(gateway)
 

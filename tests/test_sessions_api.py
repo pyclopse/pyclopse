@@ -45,8 +45,8 @@ def _make_message(msg_id="m1", role="user", content="hello"):
 
 def _make_app(session_manager):
     """Create a FastAPI app with a mock gateway wired to the given session_manager."""
-    from pyclawops.api.app import create_app
-    import pyclawops.api.app as _api_app
+    from pyclopse.api.app import create_app
+    import pyclopse.api.app as _api_app
 
     gateway = MagicMock()
     gateway.session_manager = session_manager
@@ -66,7 +66,7 @@ class TestListSessions:
 
     @pytest.mark.asyncio
     async def test_list_returns_empty(self, tmp_path):
-        from pyclawops.core.session import SessionManager
+        from pyclopse.core.session import SessionManager
         sm = SessionManager(agents_dir=str(tmp_path / "s"))
         app = _make_app(sm)
         async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as c:
@@ -78,7 +78,7 @@ class TestListSessions:
 
     @pytest.mark.asyncio
     async def test_list_returns_sessions(self, tmp_path):
-        from pyclawops.core.session import SessionManager
+        from pyclopse.core.session import SessionManager
         sm = SessionManager(agents_dir=str(tmp_path / "s"))
         await sm.start()
         await sm.create_session("agent1", "telegram", "user1")
@@ -94,7 +94,7 @@ class TestListSessions:
 
     @pytest.mark.asyncio
     async def test_list_filters_by_channel(self, tmp_path):
-        from pyclawops.core.session import SessionManager
+        from pyclopse.core.session import SessionManager
         sm = SessionManager(agents_dir=str(tmp_path / "s"))
         await sm.start()
         await sm.create_session("a1", "telegram", "u1")
@@ -109,7 +109,7 @@ class TestListSessions:
 
     @pytest.mark.asyncio
     async def test_list_session_fields(self, tmp_path):
-        from pyclawops.core.session import SessionManager
+        from pyclopse.core.session import SessionManager
         sm = SessionManager(agents_dir=str(tmp_path / "s"))
         await sm.start()
         await sm.create_session("agent1", "telegram", "user99")
@@ -131,7 +131,7 @@ class TestGetSession:
     @pytest.mark.asyncio
     async def test_get_existing_session_no_history(self, tmp_path):
         """GET /sessions/{id} returns session metadata; messages are empty when no history file."""
-        from pyclawops.core.session import SessionManager
+        from pyclopse.core.session import SessionManager
         sm = SessionManager(agents_dir=str(tmp_path / "s"))
         await sm.start()
         session = await sm.create_session("agent1", "telegram", "user1")
@@ -148,7 +148,7 @@ class TestGetSession:
     async def test_get_existing_session_with_history(self, tmp_path):
         """GET /sessions/{id} returns messages loaded from history.json."""
         import json as _json
-        from pyclawops.core.session import SessionManager
+        from pyclopse.core.session import SessionManager
         sm = SessionManager(agents_dir=str(tmp_path / "s"))
         await sm.start()
         session = await sm.create_session("agent1", "telegram", "user1")
@@ -173,7 +173,7 @@ class TestGetSession:
 
     @pytest.mark.asyncio
     async def test_get_missing_session_returns_404(self, tmp_path):
-        from pyclawops.core.session import SessionManager
+        from pyclopse.core.session import SessionManager
         sm = SessionManager(agents_dir=str(tmp_path / "s"))
         app = _make_app(sm)
         async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as c:
@@ -184,7 +184,7 @@ class TestGetSession:
     async def test_get_session_message_fields(self, tmp_path):
         """Message objects have the expected fields."""
         import json as _json
-        from pyclawops.core.session import SessionManager
+        from pyclopse.core.session import SessionManager
         sm = SessionManager(agents_dir=str(tmp_path / "s"))
         await sm.start()
         session = await sm.create_session("agent1", "telegram", "user1")
@@ -211,7 +211,7 @@ class TestDeleteSession:
 
     @pytest.mark.asyncio
     async def test_delete_existing_session(self, tmp_path):
-        from pyclawops.core.session import SessionManager
+        from pyclopse.core.session import SessionManager
         sm = SessionManager(agents_dir=str(tmp_path / "s"))
         await sm.start()
         session = await sm.create_session("agent1", "telegram", "user1")
@@ -228,7 +228,7 @@ class TestDeleteSession:
 
     @pytest.mark.asyncio
     async def test_delete_missing_session_returns_404(self, tmp_path):
-        from pyclawops.core.session import SessionManager
+        from pyclopse.core.session import SessionManager
         sm = SessionManager(agents_dir=str(tmp_path / "s"))
         app = _make_app(sm)
         async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as c:
@@ -238,7 +238,7 @@ class TestDeleteSession:
     @pytest.mark.asyncio
     async def test_delete_keeps_session_files_on_disk(self, tmp_path):
         """Deleting a session removes it from the index but keeps files on disk."""
-        from pyclawops.core.session import SessionManager
+        from pyclopse.core.session import SessionManager
         sm = SessionManager(agents_dir=str(tmp_path / "s"))
         await sm.start()
         session = await sm.create_session("agent1", "telegram", "user1")
@@ -261,7 +261,7 @@ class TestDeleteSession:
 class TestRoutesRegistered:
 
     def test_sessions_routes_in_app(self):
-        from pyclawops.api.app import create_app
+        from pyclopse.api.app import create_app
         app = create_app()
         paths = {r.path for r in app.routes}
         assert any("/api/v1/sessions" in p for p in paths)
