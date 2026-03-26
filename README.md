@@ -66,7 +66,7 @@ uv tool uninstall pyclopse
 ### Development install
 
 ```bash
-git clone https://github.com/jondecker76/pyclopse.git
+git clone https://github.com/pyclopse/pyclopse.git
 cd pyclopse
 uv sync
 uv run python -m pyclopse run
@@ -299,7 +299,7 @@ The Vault stores atomic semantic facts as individual Markdown files with YAML fr
 | **Real-time** | HTTP polling | WebSocket-first (streaming, live updates, agent state broadcast) |
 | **API docs** | Auto-generated OpenAPI at `/docs` | None |
 | **Auth** | None built-in | Rate limiting, bearer token validation, hook replay protection |
-| **Route groups** | agents, channels, config, jobs, sessions, usage, tools, health, todos, hooks, subagents, self | health, channels, hooks, tools, OpenAI-compat, plugin routes |
+| **Route groups** | agents, channels, config, jobs, sessions, usage, tools, health, todos, hooks, subagents, reflect | health, channels, hooks, tools, OpenAI-compat, plugin routes |
 
 ### TUI / UI
 
