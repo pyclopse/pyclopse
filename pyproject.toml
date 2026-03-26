@@ -26,6 +26,8 @@ dependencies = [
     "croniter>=6.0.0",
     "fastmcp>=3.1.0",
     "ruamel-yaml>=0.18.0",
+    "fast-agent-mcp>=0.6.0",
+    "python-frontmatter>=1.1.0",
 ]
 
 [project.optional-dependencies]
