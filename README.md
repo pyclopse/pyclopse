@@ -69,53 +69,59 @@ uv tool uninstall pyclopse
 git clone https://github.com/pyclopse/pyclopse.git
 cd pyclopse
 uv sync
-uv run python -m pyclopse run
+uv run python -m pyclopse
 ```
 
-### Configure
+### First Run
 
-Create `~/.pyclopse/config.yaml`. A minimal working config:
+Just run pyclopse. If no configuration is found it will offer to launch the setup wizard automatically:
 
-```yaml
-version: "1.0"
+```
+$ pyclopse
 
-providers:
-  anthropic:
-    apiKey: "${ANTHROPIC_API_KEY}"      # register ANTHROPIC_API_KEY in secrets.yaml
-    models:
-      claude-sonnet-4-6:
-        enabled: true
-        concurrency: 2
+No configuration found.
+  Run setup wizard now? [Y/n]:
+```
 
-agents:
-  main:
-    name: Main
-    model: anthropic/claude-sonnet-4-6
-    contextWindow: 200000
-    use_fastagent: true
-    mcp_servers:
-      - pyclopse
-      - fetch
-      - time
-      - filesystem
+Or run the wizard explicitly at any time:
 
-gateway:
-  host: 0.0.0.0
-  port: 8080
-  log_level: info
+```bash
+pyclopse onboard
+```
+
+The wizard walks you through:
+1. **Security notice** — what agents can do on your system
+2. **Providers** — choose Anthropic, OpenAI, or any OpenAI-compatible endpoint; enter your API key
+3. **Agents** — name your first agent, pick a model, choose MCP servers
+4. **Channels** — optionally connect Telegram and/or Slack
+
+Required steps (providers and agents) are marked with a red `*` and must be completed before you can save. Channels are optional. Press `q` at any menu to quit without saving.
+
+When done, the wizard writes:
+- `~/.pyclopse/config/pyclopse.yaml` — main config
+- `~/.pyclopse/secrets/secrets.yaml` — secrets registry
+- `~/.pyclopse/.env` — API keys (chmod 600)
+
+You can re-run the wizard at any time to add or change providers, agents, or channels:
+
+```bash
+pyclopse onboard              # full menu
+pyclopse onboard --providers  # jump straight to providers
+pyclopse onboard --agents     # jump straight to agents
+pyclopse onboard --channels   # jump straight to channels
 ```
 
 ### Run
 
 ```bash
 # With TUI dashboard (default)
-pyclopse run
+pyclopse
 
-# Headless (no TUI)
-pyclopse run --headless
+# Headless (no TUI — stdout only)
+pyclopse --headless
 
 # With a specific config file
-pyclopse run --config /path/to/pyclopse.yaml
+pyclopse --config /path/to/pyclopse.yaml
 
 # Validate config only
 pyclopse validate
