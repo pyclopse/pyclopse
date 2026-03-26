@@ -15,13 +15,13 @@ uv run pytest tests/test_gateway.py
 uv run pytest tests/test_commands.py::test_help_command -v
 
 # Run the gateway with dashboard TUI (default)
-uv run python -m pyclopse run
+uv run python -m pyclopse
 
 # Run headless (no TUI — stdout only)
-uv run python -m pyclopse run --headless
+uv run python -m pyclopse --headless
 
 # Run with a specific config
-uv run python -m pyclopse run --config ~/.pyclopse/config.yaml
+uv run python -m pyclopse --config ~/.pyclopse/config.yaml
 
 # Validate config
 uv run python -m pyclopse validate

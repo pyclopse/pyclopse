@@ -1,12 +1,13 @@
 """CLI entry point for pyclopse.
 
 Usage:
-    python -m pyclopse              # Run gateway + dashboard TUI
-    python -m pyclopse --help      # Show help
-    python -m pyclopse init        # Create default config
-    python -m pyclopse validate     # Validate config
-    python -m pyclopse run          # Run with dashboard TUI (default)
-    python -m pyclopse run --headless  # Run without TUI (stdout only)
+    pyclopse                        # Run gateway + TUI dashboard
+    pyclopse --headless             # Run without TUI (stdout only)
+    pyclopse --config ~/my.yaml    # Use a specific config file
+    pyclopse --host 0.0.0.0 --port 9000
+    pyclopse onboard                # First-time setup wizard
+    pyclopse validate               # Validate config
+    pyclopse update                 # Update to latest release
 """
 
 import argparse
@@ -43,12 +44,56 @@ def create_parser() -> argparse.ArgumentParser:
     )
 
     parser.add_argument(
+        "--headless",
+        action="store_true",
+        help="Run without TUI (stdout only)",
+    )
+    parser.add_argument(
+        "--host",
+        type=str,
+        default=None,
+        help="Host to bind to (overrides config)",
+    )
+    parser.add_argument(
+        "--port",
+        type=int,
+        default=None,
+        help="Port to bind to (overrides config)",
+    )
+    parser.add_argument(
         "--debug",
         action="store_true",
         help="Enable debug mode",
     )
 
     subparsers = parser.add_subparsers(dest="command", help="Commands")
+
+    # onboard command
+    onboard_parser = subparsers.add_parser(
+        "onboard",
+        help="Interactive setup wizard (first-time or reconfigure)",
+    )
+    onboard_parser.add_argument(
+        "--data-dir",
+        type=str,
+        default=None,
+        help="Data directory to use (default: ~/.pyclopse)",
+    )
+    onboard_parser.add_argument(
+        "--providers",
+        action="store_true",
+        help="Jump directly to provider configuration",
+    )
+    onboard_parser.add_argument(
+        "--agents",
+        action="store_true",
+        help="Jump directly to agent configuration",
+    )
+    onboard_parser.add_argument(
+        "--channels",
+        action="store_true",
+        help="Jump directly to channel configuration",
+    )
 
     # init command
     init_parser = subparsers.add_parser(
@@ -152,40 +197,6 @@ def create_parser() -> argparse.ArgumentParser:
     secret_get_parser = secret_sub.add_parser("get", help="Retrieve a secret value by name")
     secret_get_parser.add_argument("name", help="Secret name as registered in secrets config (e.g. MINIMAX_API_KEY)")
 
-    # run command
-    run_parser = subparsers.add_parser(
-        "run",
-        help="Run the gateway server (with optional TUI)",
-    )
-    run_parser.add_argument(
-        "--host",
-        type=str,
-        default=None,
-        help="Host to bind to (overrides config)",
-    )
-    run_parser.add_argument(
-        "--port",
-        type=int,
-        default=None,
-        help="Port to bind to (overrides config)",
-    )
-    run_parser.add_argument(
-        "--headless",
-        action="store_true",
-        help="Run without TUI (headless mode, stdout only)",
-    )
-    # Legacy alias — kept for backward compat but ignored (dashboard is always on)
-    run_parser.add_argument(
-        "--tui",
-        "-t",
-        action="store_true",
-        help=argparse.SUPPRESS,
-    )
-    run_parser.add_argument(
-        "--debug",
-        action="store_true",
-        help="Enable debug mode",
-    )
 
     return parser
 
@@ -447,6 +458,34 @@ async def run_gateway_with_tui(
     _force_exit()
 
 
+def cmd_onboard(args):
+    """Handle onboard command."""
+    data_dir_str = args.data_dir or "~/.pyclopse"
+    data_dir = Path(data_dir_str).expanduser()
+
+    # Determine which section to jump to (mutually exclusive flags)
+    section = None
+    if getattr(args, "providers", False):
+        section = "providers"
+    elif getattr(args, "agents", False):
+        section = "agents"
+    elif getattr(args, "channels", False):
+        section = "channels"
+
+    from .onboard import run_onboard
+    run_onboard(data_dir, section=section)
+
+
+def _check_needs_onboard(config_path_override: str | None = None) -> Path | None:
+    """Return the default data dir if no config exists, else None."""
+    from .config.loader import find_config_file
+    if config_path_override:
+        return None  # explicit path — user knows what they're doing
+    if find_config_file() is None:
+        return Path("~/.pyclopse").expanduser()
+    return None
+
+
 def cmd_init(args):
     """Handle init command."""
     path = Path(args.path).expanduser()
@@ -573,8 +612,17 @@ def cmd_uninstall(args):
 
 def main():
     """Main entry point."""
+    import sys as _sys
+    # `pyclopse run [flags]` → strip "run" and treat flags as top-level (backward compat)
+    if len(_sys.argv) > 1 and _sys.argv[1] == "run":
+        _sys.argv.pop(1)
+
     parser = create_parser()
     args = parser.parse_args()
+
+    if args.command == "onboard":
+        cmd_onboard(args)
+        return
 
     if args.command == "init":
         cmd_init(args)
@@ -601,20 +649,23 @@ def main():
         cmd_import_openclaw(args)
         return
 
-    if args.command == "run":
+    # Default: run gateway (bare `pyclopse`)
+    if args.command is None:
+        needs_onboard = _check_needs_onboard(args.config)
+        if needs_onboard:
+            print("No configuration found.")
+            from .onboard.menu import confirm
+            if confirm("Run setup wizard now?", default=True):
+                from .onboard import run_onboard
+                run_onboard(needs_onboard)
+            else:
+                print("Run 'pyclopse onboard' when you're ready to set up.")
+            return
         try:
             if args.headless:
                 asyncio.run(run_gateway(args.config, args.host, args.port, args.debug))
             else:
                 asyncio.run(run_gateway_with_tui(args.config, args.host, args.port, args.debug))
-        except KeyboardInterrupt:
-            print("\nShutting down...")
-        return
-
-    # Default: run gateway + dashboard TUI
-    if args.command is None:
-        try:
-            asyncio.run(run_gateway_with_tui(args.config, debug=args.debug))
         except KeyboardInterrupt:
             print("\nShutting down...")
         return
