@@ -40,20 +40,36 @@ PyClawOps is inspired by [OpenClaw](https://github.com/openclaw/openclaw) but is
 
 ## Quick Start
 
-> **Note:** The deployment process is currently being finalised. This section will be updated once a distribution strategy is decided. The steps below reflect the development workflow.
-
 ### Prerequisites
 
-- Python 3.13+
 - [uv](https://docs.astral.sh/uv/) — `curl -LsSf https://astral.sh/uv/install.sh | sh`
 - At least one LLM provider API key (Anthropic, OpenAI, MiniMax, etc.)
 
-### Install (Development)
+### Install
+
+```bash
+uv tool install pyclawops
+```
+
+### Update
+
+```bash
+uv tool upgrade pyclawops
+```
+
+### Uninstall
+
+```bash
+uv tool uninstall pyclawops
+```
+
+### Development install
 
 ```bash
 git clone git@github.com:jondecker76/pyclawops.git
 cd pyclawops
 uv sync
+uv run python -m pyclawops run
 ```
 
 ### Configure
@@ -93,16 +109,16 @@ gateway:
 
 ```bash
 # With TUI dashboard (default)
-uv run python -m pyclawops run
+pyclawops run
 
 # Headless (no TUI)
-uv run python -m pyclawops run --headless
+pyclawops run --headless
 
 # With a specific config file
-uv run python -m pyclawops run --config /path/to/pyclawops.yaml
+pyclawops run --config /path/to/pyclawops.yaml
 
 # Validate config only
-uv run python -m pyclawops validate
+pyclawops validate
 ```
 
 ### Data Directory
