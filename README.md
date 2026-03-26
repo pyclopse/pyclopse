@@ -1,6 +1,6 @@
 # Pyclopse
 
-**Pyclopse** (Pronouced "Pyclopse") is a modular AI agent gateway written in Python. It connects one or more LLM agents — powered by under the hood by the excellent [FastAgent](https://github.com/evalstate/fast-agent) library — to messaging channels (Telegram, Slack, TUI, HTTP), tools (via MCP), long-term memory, scheduled jobs, and an extensible hook system. All subsystems are wired together by a central **Gateway** process.
+**Pyclopse** is a modular AI agent gateway written in Python. It connects one or more LLM agents — powered by under the hood by the excellent [FastAgent](https://github.com/evalstate/fast-agent) library — to messaging channels (Telegram, Slack, TUI, HTTP), tools (via MCP), long-term memory, scheduled jobs, and an extensible hook system. All subsystems are wired together by a central **Gateway** process.
 
 Pyclopse is inspired by [OpenClaw](https://github.com/openclaw/openclaw) but is a ground-up Python rewrite with its own architecture, idioms, and feature set. See [Pyclopse vs OpenClaw](#pyclopse-vs-openclaw) for a detailed comparison.
 
