@@ -185,7 +185,7 @@ Pyclopse is **not** a port of OpenClaw. It is an independent Python rewrite insp
 |---|---|---|
 |**Sessions**|Only one active session per agent, accessible via different communication channels|Each channel gets it's own session|
 |**Concurrency**|Number of concurrent API calls configurable per model.  Made to work well with coding plans that have concurrency limits.| Lane system which is sequential - one agent's calls block other agents|
-|**Scheduling**|Unified Jobs system covers cron, interval, one-shot, subagents (isolated AgentRun), shell command execution, and delivery notifications — all in one `jobs.yaml` per agent|Unified cron service with `agentTurn` (isolated agent run) and `systemEvent` (broadcast to active session) payload types; stagger, delivery destinations, failure alerting|
+|**Scheduling**|Unified Jobs system covers cron, interval, one-shot, subagents (isolated AgentRun), shell command execution, delivery notifications, and Pulse/heartbeat monitoring — all in one `jobs.yaml` per agent|Unified cron service with `agentTurn` (isolated agent run) and `systemEvent` (broadcast to active session) payload types; stagger, delivery destinations, failure alerting. Pulse/heartbeat is a separate system.|
 |**Memory**|Default `FileMemoryBackend` (append-only daily markdown journals per agent, optional vector embeddings) + optional per-agent Vault (structured semantic fact store with ULID IDs, lifecycle states, 13 fact types, hybrid search)|SQLite + sqlite-vec vector extension + FTS5 full-text search; token-based file chunking (400 tokens / 80 overlap); hybrid BM25 + vector search; 6 embedding providers with auto-fallback|
 |**Self Awareness**|Built-in reflection system allows agents to inspect how the system works.  This is useful for having agents help you self-improve your setup.|No self-reflection system built in|
 |**Plugins**|Channels: Python ABC + pip/uv entry-point discovery; Hooks: Python in-process functions; MCP: HTTP transport (FastMCP server hosted in-process)|Channels: TypeScript plugin SDK (npm packages, git repos, bundled modules) with setup wizards, multi-account, and message actions; Hooks: npm packages, git repos, or bundled TypeScript; MCP: stdio (spawned subprocess)|
@@ -265,6 +265,7 @@ The Vault stores atomic semantic facts as individual Markdown files with YAML fr
 | **Prompt composition** | Granular `include_*` flags per job: personality, identity, memory, tools, skills, files, model override | Lightweight context flag (`lightContext`) |
 | **Storage** | Per-agent `jobs.yaml` + per-job JSONL run history | Central `cron/jobs.json` (JSON5 with comments) |
 | **Failure handling** | Max retries + consecutive error alerts | Auto-disable after 3 schedule errors + alert threshold |
+| **Pulse / heartbeat** | Built into the Jobs system — a `pulse` job type sends periodic heartbeat pings and alerts if an agent or endpoint goes silent | Separate Pulse system, independent of the cron/jobs scheduler |
 
 ### Configuration
 
