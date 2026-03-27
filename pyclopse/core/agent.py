@@ -1069,11 +1069,18 @@ class Agent:
 
 
 def _get_provider_cfg(pyclopse_config: Any, provider_name: str) -> Any:
-    """Return the provider config for *provider_name*, checking both named fields and model_extra."""
+    """Return the provider config for *provider_name*, checking both named fields and model_extra.
+
+    Hyphens in provider names (e.g. ``minimax-coding``) are normalised to underscores
+    so they resolve against pydantic field names (e.g. ``minimax_coding``).
+    """
     providers = getattr(pyclopse_config, "providers", None) if pyclopse_config else None
     if providers is None:
         return None
     cfg = getattr(providers, provider_name, None)
+    # Normalise hyphens → underscores for hyphenated IDs like "minimax-coding"
+    if cfg is None and "-" in provider_name:
+        cfg = getattr(providers, provider_name.replace("-", "_"), None)
     if cfg is None and hasattr(providers, "model_extra"):
         cfg = (providers.model_extra or {}).get(provider_name)
     return cfg

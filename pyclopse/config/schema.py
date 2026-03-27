@@ -322,10 +322,11 @@ MiniMaxProviderConfig = GenericProviderConfig
 class ProvidersConfig(BaseModel):
     """Providers configuration.
 
-    Named providers (openai, anthropic, google, fastagent, minimax) are typed
-    fields.  Any additional OpenAI-compatible provider (e.g. ``zai``, ``groq``)
-    can be added directly in YAML without any code change — it is validated into
-    a ``GenericProviderConfig`` and works identically to minimax.
+    Named providers (openai, anthropic, google, fastagent, minimax, minimax-coding,
+    zai, zai-coding) are typed fields.  Any additional OpenAI-compatible provider
+    can be added directly in YAML without any code change — it is validated into a
+    ``GenericProviderConfig`` and works identically to the named generic-backed
+    providers.
     """
     model_config = ConfigDict(extra="allow")
 
@@ -334,10 +335,19 @@ class ProvidersConfig(BaseModel):
     google: Optional[GoogleProviderConfig] = None
     fastagent: Optional[FastAgentProviderConfig] = None
     minimax: Optional[GenericProviderConfig] = None
+    minimax_coding: Optional[GenericProviderConfig] = Field(
+        default=None,
+        validation_alias=AliasChoices("minimax_coding", "minimax-coding"),
+    )
+    zai: Optional[GenericProviderConfig] = None
+    zai_coding: Optional[GenericProviderConfig] = Field(
+        default=None,
+        validation_alias=AliasChoices("zai_coding", "zai-coding"),
+    )
 
     @model_validator(mode="after")
     def _coerce_extra_providers(self) -> "ProvidersConfig":
-        """Validate extra provider entries (e.g. zai) into GenericProviderConfig."""
+        """Validate extra provider entries into GenericProviderConfig."""
         if self.model_extra:
             for name, value in self.model_extra.items():
                 if isinstance(value, dict):

@@ -812,7 +812,11 @@ class AgentRunner:
                 elif "generic." in self.model:
                     _all_providers = {
                         name: getattr(providers, name, None)
-                        for name in ("minimax", "fastagent", "openai", "anthropic", "google")
+                        for name in (
+                            "minimax", "minimax_coding",
+                            "zai", "zai_coding",
+                            "fastagent", "openai", "anthropic", "google",
+                        )
                     }
                     _all_providers.update(providers.model_extra or {})
                     for _p in _all_providers.values():

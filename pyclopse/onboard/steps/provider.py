@@ -18,6 +18,7 @@ KNOWN_PROVIDERS = {
         "fastagent_provider": None,
         "default_concurrency": 3,
         "needs_url": False,
+        "default_url": None,
     },
     "openai": {
         "label": "OpenAI (GPT)",
@@ -29,9 +30,58 @@ KNOWN_PROVIDERS = {
         "fastagent_provider": None,
         "default_concurrency": 5,
         "needs_url": False,
+        "default_url": None,
+    },
+    "minimax": {
+        "label": "MiniMax (International)",
+        "key_name": "MINIMAX_API_KEY",
+        "key_hint": "your-minimax-api-key",
+        "default_model": "MiniMax-M2.7",
+        "default_models": ["MiniMax-M2.7", "MiniMax-M2.5", "MiniMax-M2.1", "MiniMax-M2"],
+        "config_key": "api_key",
+        "fastagent_provider": "generic",
+        "default_concurrency": 10,
+        "needs_url": True,
+        "default_url": "https://api.minimax.io/v1",
+    },
+    "minimax-coding": {
+        "label": "MiniMax Coding Plan (China region)",
+        "key_name": "MINIMAX_CODING_API_KEY",
+        "key_hint": "your-minimax-coding-api-key",
+        "default_model": "MiniMax-M2.7",
+        "default_models": ["MiniMax-M2.7", "MiniMax-M2.5", "MiniMax-M2.1", "MiniMax-M2"],
+        "config_key": "api_key",
+        "fastagent_provider": "generic",
+        "default_concurrency": 10,
+        "needs_url": True,
+        "default_url": "https://api.minimaxi.com/v1",
+    },
+    "zai": {
+        "label": "Z.ai (GLM) — Standard",
+        "key_name": "ZAI_API_KEY",
+        "key_hint": "your-z.ai-api-key",
+        "default_model": "glm-5",
+        "default_models": ["glm-5", "glm-4.7", "glm-4.6", "glm-4.5"],
+        "config_key": "api_key",
+        "fastagent_provider": "generic",
+        "default_concurrency": 2,
+        "needs_url": True,
+        "default_url": "https://api.z.ai/api/paas/v4",
+    },
+    "zai-coding": {
+        "label": "Z.ai (GLM) — Coding Plan",
+        "key_name": "ZAI_CODING_API_KEY",
+        "key_hint": "your-z.ai-coding-plan-api-key",
+        "default_model": "glm-5",
+        "default_models": ["glm-5", "glm-4.7", "glm-4.6", "glm-4.5"],
+        "config_key": "api_key",
+        "fastagent_provider": "generic",
+        "default_concurrency": 2,
+        "needs_url": True,
+        "default_url": "https://api.z.ai/api/coding/paas/v4",
     },
     "generic": {
-        "label": "OpenAI-compatible endpoint (Ollama, MiniMax, etc.)",
+        "label": "Other OpenAI-compatible endpoint (Ollama, etc.)",
         "key_name": "GENERIC_API_KEY",
         "key_hint": "your-api-key  (or 'none' for local Ollama)",
         "default_model": "my-model",
@@ -40,8 +90,32 @@ KNOWN_PROVIDERS = {
         "fastagent_provider": "generic",
         "default_concurrency": 5,
         "needs_url": True,
+        "default_url": "http://localhost:11434/v1",
     },
 }
+
+
+# ---------------------------------------------------------------------------
+# Live model discovery
+# ---------------------------------------------------------------------------
+
+def _fetch_available_models(base_url: str, api_key: str) -> list[str] | None:
+    """Try GET {base_url}/models and return model IDs, or None on failure."""
+    try:
+        import httpx
+        r = httpx.get(
+            f"{base_url.rstrip('/')}/models",
+            headers={"Authorization": f"Bearer {api_key}"},
+            timeout=8,
+        )
+        if r.status_code != 200:
+            return None
+        data = r.json()
+        if isinstance(data, dict) and isinstance(data.get("data"), list):
+            return [m["id"] for m in data["data"] if isinstance(m, dict) and m.get("id")]
+    except Exception:
+        pass
+    return None
 
 
 # ---------------------------------------------------------------------------
@@ -77,12 +151,24 @@ def _configure_single_provider(
             env[key_name] = raw_key
         secrets[key_name] = {"source": "env"}
 
-    # --- Base URL (generic only) ---
-    api_url = existing.get("api_url", "http://localhost:11434/v1") if existing else "http://localhost:11434/v1"
+    # --- Base URL (generic-backed providers) ---
+    fallback_url = pdef.get("default_url") or "http://localhost:11434/v1"
+    api_url = existing.get("api_url", fallback_url) if existing else fallback_url
     if pdef["needs_url"]:
         api_url = menu.ask("API base URL", default=api_url)
 
     # --- Models ---
+    # Resolve the effective API key for live discovery (may be newly entered or existing)
+    effective_api_key = env.get(key_name) or (existing or {}).get("api_key", "")
+    fetched_models: list[str] | None = None
+    if pdef["needs_url"] and effective_api_key and effective_api_key not in ("none", ""):
+        menu.info("  Fetching available models from provider...")
+        fetched_models = _fetch_available_models(api_url, effective_api_key)
+        if fetched_models:
+            menu.success(f"Found {len(fetched_models)} model(s).")
+        else:
+            menu.warn("Could not fetch models from provider — using known defaults.")
+
     existing_models: dict = existing.get("models", {}) if existing else {}
     menu.console.print()
     if existing_models:
@@ -90,9 +176,9 @@ def _configure_single_provider(
         if not menu.confirm("Edit models?", default=False):
             models = existing_models
         else:
-            models = _configure_models(provider_id, existing_models)
+            models = _configure_models(provider_id, existing_models, fetched_models)
     else:
-        models = _configure_models(provider_id, {})
+        models = _configure_models(provider_id, {}, fetched_models)
 
     # --- Build config block ---
     cfg: dict[str, Any] = {"enabled": True}
@@ -110,31 +196,56 @@ def _configure_single_provider(
     return cfg, secrets, env
 
 
-def _configure_models(provider_id: str, existing: dict) -> dict:
-    """Configure models for a provider. Returns models dict."""
+def _configure_models(
+    provider_id: str,
+    existing: dict,
+    fetched_models: list[str] | None = None,
+) -> dict:
+    """Configure models for a provider. Returns models dict.
+
+    Priority for the selectable list:
+      1. fetched_models  — live from provider /models endpoint
+      2. default_models  — curated list in KNOWN_PROVIDERS
+      3. free-form entry — fallback when neither is available
+    """
     pdef = KNOWN_PROVIDERS[provider_id]
     models: dict = dict(existing)
 
     menu.section("Models", style="cyan")
 
-    if pdef["default_models"]:
-        # Show preset list
-        menu.info("  Select which models to enable:")
-        for m in pdef["default_models"]:
+    candidate_list: list[str] = fetched_models or pdef["default_models"]
+
+    if candidate_list:
+        source = "from provider" if fetched_models else "recommended"
+        menu.info(f"  Available models ({source}):")
+        for i, m in enumerate(candidate_list, 1):
             currently_on = m in models
-            default_on = m == pdef["default_model"]
-            current_label = "[green]on[/green]" if currently_on else "[dim]off[/dim]"
-            menu.info(f"    {m}  [{current_label}]{'  ← recommended' if default_on else ''}")
+            is_default = m == pdef.get("default_model")
+            status = "[green]✓[/green]" if currently_on else f"[dim]{i}[/dim]"
+            tag = "  ← default" if is_default else ""
+            menu.info(f"    [{status}]  {m}{tag}")
 
         menu.console.print()
+        default_selection = ",".join(models.keys()) if models else (pdef.get("default_model") or candidate_list[0])
         raw = menu.ask(
-            "Enter model names to enable (comma-separated, or 'all')",
-            default=",".join(models.keys()) if models else pdef["default_model"],
+            "Models to enable (comma-separated names or numbers, or 'all')",
+            default=default_selection,
         )
+
         if raw.strip().lower() == "all":
-            selected = pdef["default_models"]
+            selected = candidate_list
         else:
-            selected = [m.strip() for m in raw.split(",") if m.strip()]
+            selected = []
+            for token in raw.split(","):
+                token = token.strip()
+                if not token:
+                    continue
+                if token.isdigit():
+                    idx = int(token) - 1
+                    if 0 <= idx < len(candidate_list):
+                        selected.append(candidate_list[idx])
+                else:
+                    selected.append(token)
 
         models = {}
         for m in selected:
@@ -142,10 +253,10 @@ def _configure_models(provider_id: str, existing: dict) -> dict:
             concurrency = existing_cfg.get("concurrency", pdef["default_concurrency"])
             models[m] = {"enabled": True, "concurrency": concurrency}
     else:
-        # Generic provider — free-form model entry
+        # No list available — free-form entry
         raw = menu.ask(
             "Model name(s) to enable (comma-separated)",
-            default=",".join(models.keys()) if models else pdef["default_model"],
+            default=",".join(models.keys()) if models else pdef.get("default_model", "my-model"),
         )
         selected = [m.strip() for m in raw.split(",") if m.strip()]
         models = {}
