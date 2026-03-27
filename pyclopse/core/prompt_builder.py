@@ -318,6 +318,20 @@ def build_job_prompt(
         except Exception as e:
             logger.debug(f"Skill injection skipped in job prompt: {e}")
 
+    # Delivery token rule — always injected so agents don't need to repeat it in
+    # every PULSE.md or SKILL.md.  The gateway reads the first characters of the
+    # response literally; markdown decoration defeats token detection.
+    lines += [
+        "## Delivery Tokens (System Rule)",
+        "",
+        "When your response includes a delivery token (`NO_REPLY` or `SUMMARIZE`), "
+        "it must be the literal first word of your raw response — plain text only. "
+        "Do not wrap it in markdown bold (`**NO_REPLY**`), code fences, or any other "
+        "formatting. The delivery system reads the first characters of your response "
+        "and will miss the token if it is decorated.",
+        "",
+    ]
+
     # Append instruction (always, even if everything else is empty)
     instruction = getattr(agent_run, "instruction", None) if agent_run is not None else None
     if instruction:
