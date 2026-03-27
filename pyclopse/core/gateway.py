@@ -19,8 +19,11 @@ from pyclopse.core.router import MessageRouter, IncomingMessage, OutgoingMessage
 from pyclopse.core.queue import QueueManager
 
 
+_TOKEN_LOOK_AHEAD = 20  # chars to scan for a delivery token regardless of leading markdown
+
+
 def _parse_job_token(response: str) -> tuple[str, str]:
-    """Detect a delivery token at the start of a job or subagent response.
+    """Detect a delivery token near the start of a job or subagent response.
 
     Tokens are written by agents at the start of their response to signal how
     the result should reach the user.  All delivery paths (``report_to_agent``
@@ -31,17 +34,19 @@ def _parse_job_token(response: str) -> tuple[str, str]:
     ---------------
     ``NO_REPLY``
         The agent wants to be silent toward the user but still have the result
-        in its history for future context.  Detected when the stripped response
-        starts with the literal word ``NO_REPLY`` (case-insensitive, any length).
+        in its history for future context.  Detected when ``NO_REPLY`` appears
+        within the first ``_TOKEN_LOOK_AHEAD`` characters of the stripped
+        response (case-insensitive).  The look-ahead window tolerates leading
+        markdown formatting such as ``**NO_REPLY…`` or `` ```\\nNO_REPLY… ``.
         Typical use: heartbeat / pulse jobs where nothing needs attention.
 
         Result: injected into session history only; channel receives nothing.
 
     ``SUMMARIZE``
         The agent produced raw data and wants the receiving agent's LLM to
-        summarize it before relaying to the user.  Detected when the first
-        whitespace-separated word is ``SUMMARIZE`` (case-insensitive).  The
-        content delivered to the LLM is everything after the token.
+        summarize it before relaying to the user.  Detected when ``SUMMARIZE``
+        appears within the first ``_TOKEN_LOOK_AHEAD`` characters (case-insensitive).
+        The content delivered to the LLM is everything after the token keyword.
 
         Result: content injected into history; ``handle_message`` called so the
         agent LLM reads, summarizes, and sends its own reply to the channel.
@@ -65,11 +70,16 @@ def _parse_job_token(response: str) -> tuple[str, str]:
         tuple[str, str]: ``(token, content)`` delivery directive and payload.
     """
     stripped = response.strip()
-    if stripped.upper().startswith("NO_REPLY"):
+    head = stripped[:_TOKEN_LOOK_AHEAD].upper()
+
+    if "NO_REPLY" in head:
         return "NO_REPLY", stripped
-    words = stripped.split(None, 1)
-    if words and words[0].upper() == "SUMMARIZE":
-        return "SUMMARIZE", words[1].strip() if len(words) > 1 else ""
+
+    summarize_pos = head.find("SUMMARIZE")
+    if summarize_pos != -1:
+        content = stripped[summarize_pos + len("SUMMARIZE"):].strip()
+        return "SUMMARIZE", content
+
     return "", response
 
 
@@ -1003,25 +1013,12 @@ class Gateway:
                     except Exception as _re:
                         self._logger.error(f"report_to_agent delivery failed: {_re}", exc_info=True)
                 elif report_agent and not response:
-                    self._logger.warning(f"Job {job.name}: report_to_agent={report_agent!r} but response is empty")
-                    try:
-                        target_session = await self.session_manager.get_active_session(report_agent)
-                        if target_session:
-                            channel = target_session.last_channel or target_session.channel
-                            user_id = target_session.last_user_id or target_session.user_id
-                            await self.handle_message(
-                                channel=channel,
-                                sender="job-scheduler",
-                                sender_id=user_id,
-                                content=(
-                                    f"[System] Job '{job.name}' completed but returned no summary. "
-                                    f"Please let the user know the scan ran but produced no output."
-                                ),
-                                agent_id=report_agent,
-                                dispatch_response=True,
-                            )
-                    except Exception as _re:
-                        self._logger.error(f"report_to_agent empty-response delivery failed: {_re}", exc_info=True)
+                    # Empty response — treat as implicit NO_REPLY and drop silently.
+                    # Escalating to handle_message would cause the agent to generate
+                    # an unnecessary reply to the user about a job that had nothing to say.
+                    self._logger.warning(
+                        f"Job {job.name}: report_to_agent={report_agent!r} but response is empty — dropped"
+                    )
 
                 return {
                     "success": True,
