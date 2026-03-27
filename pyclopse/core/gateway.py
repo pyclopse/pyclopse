@@ -20,29 +20,52 @@ from pyclopse.core.queue import QueueManager
 
 
 def _parse_job_token(response: str) -> tuple[str, str]:
-    """Detect a delivery token at the start of a job response.
+    """Detect a delivery token at the start of a job or subagent response.
 
-    Tokens control how the job result is delivered to the report_to_agent
-    session.  The token (if present) is stripped from the returned content.
+    Tokens are written by agents at the start of their response to signal how
+    the result should reach the user.  All delivery paths (``report_to_agent``
+    for scheduled jobs and ``report_to_session`` for subagents) use this same
+    function so behaviour is identical regardless of origin.
 
-    Returns ``(token, content)`` where *token* is one of:
+    Token semantics
+    ---------------
+    ``NO_REPLY``
+        The agent wants to be silent toward the user but still have the result
+        in its history for future context.  Detected when the stripped response
+        starts with the literal word ``NO_REPLY`` (case-insensitive, any length).
+        Typical use: heartbeat / pulse jobs where nothing needs attention.
 
-    - ``'NO_REPLY'``  — full response is ≤ 100 chars and starts with ``NO_REPLY``
-    - ``'SUMMARIZE'`` — first whitespace-separated word is ``SUMMARIZE``
-    - ``''``          — no token; delivery is verbatim
+        Result: injected into session history only; channel receives nothing.
 
-    *content* is the response with the token prefix stripped (or the full
-    response when there is no token or for ``NO_REPLY``).
+    ``SUMMARIZE``
+        The agent produced raw data and wants the receiving agent's LLM to
+        summarize it before relaying to the user.  Detected when the first
+        whitespace-separated word is ``SUMMARIZE`` (case-insensitive).  The
+        content delivered to the LLM is everything after the token.
+
+        Result: content injected into history; ``handle_message`` called so the
+        agent LLM reads, summarizes, and sends its own reply to the channel.
+
+    *(no token — default)*
+        Verbatim delivery.  The raw response is injected into history AND sent
+        directly to the user's channel without an additional LLM round-trip.
+        Use when output is already user-ready (e.g. formatted scan results).
+
+        Result: response injected into history; raw text posted to channel.
+
+    Returns ``(token, content)`` where *token* is one of ``'NO_REPLY'``,
+    ``'SUMMARIZE'``, or ``''`` (empty string = verbatim).  *content* is the
+    payload with the token prefix stripped, or the full response for NO_REPLY
+    and the verbatim case.
 
     Args:
-        response (str): Raw response string from the agent job run.
+        response (str): Raw response string from the agent job or subagent run.
 
     Returns:
-        tuple[str, str]: ``(token, content)`` where token is the delivery
-            directive (empty string means verbatim) and content is the payload.
+        tuple[str, str]: ``(token, content)`` delivery directive and payload.
     """
     stripped = response.strip()
-    if stripped.upper().startswith("NO_REPLY") and len(stripped) <= 100:
+    if stripped.upper().startswith("NO_REPLY"):
         return "NO_REPLY", stripped
     words = stripped.split(None, 1)
     if words and words[0].upper() == "SUMMARIZE":
@@ -971,95 +994,12 @@ class Gateway:
                             f"Job {job.name}: report_to_agent={report_agent!r} "
                             f"target_session={target_session.id if target_session else None}"
                         )
-
-                        token, content = _parse_job_token(response)
-                        token_label = token if token else "VERBATIM"
-                        self._logger.info(
-                            f"Job {job.name}: delivery token={token_label!r}"
-                        )
-
-                        async def _try_inject(result_text: str) -> None:
-                            """Inject a job result turn into the target session history.
-
-                            Uses the live session runner when available.  Falls back to
-                            writing directly to the history file on disk so that injection
-                            always succeeds even when no runner has been created yet (e.g.
-                            after a reboot or midnight session rollover before the first
-                            user message).  The runner picks up the injected turns via
-                            _load_history() on the next user interaction.
-                            """
-                            if not target_session:
-                                self._logger.info(
-                                    f"Job {job.name}: inject skipped — no active session for {report_agent!r}"
-                                )
-                                return
-                            if not self._agent_manager:
-                                self._logger.info(
-                                    f"Job {job.name}: inject skipped — agent manager not ready"
-                                )
-                                return
-                            target_agent = self._agent_manager.get_agent(report_agent)
-                            if not target_agent:
-                                self._logger.info(
-                                    f"Job {job.name}: inject skipped — agent {report_agent!r} not found in manager"
-                                )
-                                return
-                            turns = _build_job_tool_turns(
-                                job.name, result_text
+                        if target_session:
+                            await self._deliver_result(job.name, report_agent, target_session, response)
+                        else:
+                            self._logger.warning(
+                                f"Job {job.name}: no active session for {report_agent!r}, result dropped"
                             )
-                            target_runner = target_agent._session_runners.get(target_session.id)
-                            if target_runner:
-                                await target_runner.inject_turns(turns)
-                                return
-                            # No live runner — write directly to the history file
-                            history_path = getattr(target_session, "history_path", None)
-                            if not history_path:
-                                self._logger.info(
-                                    f"Job {job.name}: inject skipped — session {target_session.id} has no history_path"
-                                )
-                                return
-                            await _inject_turns_to_disk(
-                                history_path, turns, job.name, self._logger
-                            )
-
-                        if token == "NO_REPLY":
-                            await _try_inject(response)
-                            self._logger.info(
-                                f"Job {job.name}: NO_REPLY — delivery suppressed"
-                            )
-
-                        elif token == "SUMMARIZE":
-                            await _try_inject(content)
-                            if target_session:
-                                channel = target_session.last_channel or target_session.channel
-                                user_id = target_session.last_user_id or target_session.user_id
-                                await self.handle_message(
-                                    channel=channel,
-                                    sender="job-scheduler",
-                                    sender_id=user_id,
-                                    content=(
-                                        f"[System] Job '{job.name}' completed. "
-                                        f"Please summarize and report this to the user.\n\n{content}"
-                                    ),
-                                    agent_id=report_agent,
-                                    dispatch_response=True,
-                                )
-                            else:
-                                self._logger.warning(
-                                    f"Job {job.name}: SUMMARIZE — no active session for"
-                                    f" {report_agent!r}, result dropped"
-                                )
-
-                        else:  # verbatim
-                            await _try_inject(response)
-                            if target_session:
-                                await self._deliver_to_session(target_session, response)
-                            else:
-                                self._logger.warning(
-                                    f"Job {job.name}: verbatim — no active session for"
-                                    f" {report_agent!r}, result dropped"
-                                )
-
                     except Exception as _re:
                         self._logger.error(f"report_to_agent delivery failed: {_re}", exc_info=True)
                 elif report_agent and not response:
@@ -2483,8 +2423,23 @@ class Gateway:
             })
         return session
 
-    async def _deliver_to_session(self, session: Any, text: str) -> None:
-        """Deliver a text message to the user via the session's active channel."""
+    async def _deliver_to_channel(self, session: Any, text: str) -> None:
+        """Send text directly to the user's channel without involving the agent LLM.
+
+        Extracts the channel type and recipient from the session's routing fields
+        (``last_channel`` / ``last_user_id``) and posts ``text`` verbatim via the
+        appropriate transport (Telegram bot API, Slack Web API, etc.).
+
+        Does NOT update session history.  History injection is handled separately
+        by ``_deliver_result`` before this method is called (for the verbatim
+        delivery path) or is omitted entirely (for status notifications fired by
+        ``_job_notify``).
+
+        Use ``_deliver_result`` for job/subagent result delivery — it injects into
+        history and then calls this method for the verbatim token path.  Call this
+        directly only for operational notifications that should not appear in the
+        agent's conversation history (e.g. "✅ Job started").
+        """
         channel = session.last_channel or session.channel
         user_id = session.last_user_id or session.user_id
         thread_ts = getattr(session, "last_thread_ts", None)
@@ -2497,7 +2452,7 @@ class Gateway:
                     for chunk in self._split_message(text):
                         await bot.send_message(chat_id=chat_id, text=chunk)
                 except Exception as e:
-                    self._logger.error(f"_deliver_to_session telegram failed: {e}")
+                    self._logger.error(f"_deliver_to_channel telegram failed: {e}")
         elif channel == "slack":
             if self._slack_web_client:
                 try:
@@ -2506,7 +2461,74 @@ class Gateway:
                         kwargs["thread_ts"] = thread_ts
                     await self._slack_web_client.chat_postMessage(**kwargs)
                 except Exception as e:
-                    self._logger.error(f"_deliver_to_session slack failed: {e}")
+                    self._logger.error(f"_deliver_to_channel slack failed: {e}")
+
+    async def _deliver_result(
+        self,
+        label: str,
+        agent_id: str,
+        session: Any,
+        response: str,
+    ) -> None:
+        """Deliver a job or subagent result to a session using token-based routing.
+
+        Parses the delivery token from ``response`` and routes accordingly:
+
+        - ``NO_REPLY``  — inject raw response into history; nothing sent to user
+        - ``SUMMARIZE`` — inject content into history; agent LLM summarizes and relays
+        - verbatim (default) — inject into history and send raw text to channel
+
+        Both ``report_to_agent`` (scheduled jobs) and ``report_to_session``
+        (subagents) converge here so all delivery paths share identical behaviour.
+
+        Args:
+            label: Human-readable name for the job or subagent (used in history labels).
+            agent_id: ID of the agent that owns the target session.
+            session: The resolved target session.
+            response: Full response string from the job or subagent run.
+        """
+        token, content = _parse_job_token(response)
+
+        async def _inject(text: str) -> None:
+            """Write result turns into the target session's conversation history."""
+            if not self._agent_manager:
+                return
+            target_agent = self._agent_manager.get_agent(agent_id)
+            if not target_agent:
+                return
+            turns = _build_job_tool_turns(label, text)
+            target_runner = target_agent._session_runners.get(session.id)
+            if target_runner:
+                await target_runner.inject_turns(turns)
+                return
+            history_path = getattr(session, "history_path", None)
+            if history_path:
+                await _inject_turns_to_disk(history_path, turns, label, self._logger)
+
+        channel = session.last_channel or session.channel
+        user_id = session.last_user_id or session.user_id
+
+        if token == "NO_REPLY":
+            await _inject(response)
+            self._logger.info(f"{label}: NO_REPLY — delivery suppressed")
+
+        elif token == "SUMMARIZE":
+            await _inject(content)
+            await self.handle_message(
+                channel=channel,
+                sender="job-scheduler",
+                sender_id=user_id,
+                content=(
+                    f"[System] '{label}' results below. Relay these to the user now — "
+                    f"include the actual data, not commentary about the delivery:\n\n{content}"
+                ),
+                agent_id=agent_id,
+                dispatch_response=True,
+            )
+
+        else:  # verbatim
+            await _inject(response)
+            await self._deliver_to_channel(session, response)
 
     async def _deliver_to_spawning_session(
         self,
@@ -2515,7 +2537,16 @@ class Gateway:
         response: Optional[str],
         prefix: str = "📋",
     ) -> None:
-        """Deliver a subagent result back to the session that spawned it."""
+        """Deliver a subagent result back to the session that spawned it.
+
+        Routes through ``_deliver_result`` so token-based delivery (NO_REPLY,
+        SUMMARIZE, verbatim) works identically to the ``report_to_agent`` path.
+
+        For sub-subagents whose spawning session is a job-channel session,
+        delivery is skipped — the parent subagent retrieves results synchronously
+        via ``subagent_await()``.  The result is cached in the scheduler's
+        ``_subagent_results`` dict by ``_run_job`` before this method is called.
+        """
         if not response:
             return
         report_session_id = getattr(agent_run, "report_to_session", None)
@@ -2523,26 +2554,24 @@ class Gateway:
             return
         try:
             target_session = await self._session_manager.get_session(report_session_id)
-            if target_session:
-                label = getattr(job, "name", job.id)
-                channel = target_session.last_channel or target_session.channel
-                user_id = target_session.last_user_id or target_session.user_id
-                agent_id = target_session.agent_id
-                await self.handle_message(
-                    channel=channel,
-                    sender="job-scheduler",
-                    sender_id=user_id,
-                    content=(
-                        f"[System] Subagent '{label}' has completed with the following results. "
-                        f"Please summarize and report this to the user.\n\n{response}"
-                    ),
-                    agent_id=agent_id,
-                    dispatch_response=True,
-                )
-            else:
+            if not target_session:
                 self._logger.warning(
                     f"report_to_session: session {report_session_id[:8]}… not found"
                 )
+                return
+            label = getattr(job, "name", job.id)
+            channel = target_session.last_channel or target_session.channel
+            agent_id = target_session.agent_id
+            # Skip delivery to job-channel sessions (sub-subagents).
+            # The parent subagent retrieves the result via subagent_await() instead,
+            # avoiding _run_lock contention that would occur with handle_message().
+            if channel == "job":
+                self._logger.debug(
+                    f"report_to_session: skipping delivery to job-channel session "
+                    f"{report_session_id[:8]}… (result cached for subagent_await)"
+                )
+                return
+            await self._deliver_result(label, agent_id, target_session, response)
         except Exception as _e:
             self._logger.error(f"report_to_session delivery failed: {_e}")
 
@@ -2746,7 +2775,7 @@ class Gateway:
 
         # Auto-dispatch the response back via the session's channel when requested
         if dispatch_response and response_text and session:
-            await self._deliver_to_session(session, response_text)
+            await self._deliver_to_channel(session, response_text)
 
         return response_text
 

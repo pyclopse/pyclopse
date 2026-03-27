@@ -67,8 +67,13 @@ class AgentRun(BaseModel):
         skills (Optional[List[str]]): Named skills to inject; None means all discovered skills.
         include_files (Optional[List[str]]): File paths whose contents are appended to the prompt.
         instruction (Optional[str]): Instruction appended to the system prompt.
-        report_to_agent (Optional[str]): Agent whose active session channel receives the result.
-        report_to_session (Optional[str]): Specific session ID to deliver the result to.
+        report_to_agent (Optional[str]): Deliver result to this agent's current active session.
+            Dynamic — resolves at delivery time so it survives daily session rollover.
+            Use for scheduled jobs.  Do not use for subagents (see report_to_session).
+        report_to_session (Optional[str]): Deliver result to this exact session ID.
+            Pinned — set at spawn time and never changes.  Used exclusively by the
+            subagent system (``spawn_subagent`` sets this automatically from the
+            ``x-session-id`` MCP header).  Do not set manually in job config YAML.
     """
 
     kind: Literal["agent"] = "agent"
@@ -103,12 +108,17 @@ class AgentRun(BaseModel):
     # Optional instruction appended to the system prompt (after all include_* content)
     instruction: Optional[str] = None
 
-    # When set, deliver the job result into this agent's active session channel
+    # Dynamic delivery: resolves to the agent's active session at delivery time.
+    # Survives daily session rollover. Use for scheduled jobs.
+    # The active-session pointer only tracks user-facing channels (telegram, slack,
+    # TUI) — job sessions never overwrite it, so resolution is always safe.
     report_to_agent: Optional[str] = None
 
-    # When set, deliver the job result into this specific session (by session ID).
-    # Takes precedence over report_to_agent. Used by the subagent system to pin
-    # result delivery to the exact session that spawned the subagent.
+    # Pinned delivery: targets an exact session ID captured at spawn time.
+    # Takes precedence over report_to_agent. Set automatically by spawn_subagent()
+    # from the x-session-id MCP request header — do not set in job config YAML.
+    # For sub-subagents targeting a job-channel session, delivery is skipped and
+    # the result is cached for retrieval via the subagent_await() MCP tool instead.
     report_to_session: Optional[str] = None
 
     @model_validator(mode="after")

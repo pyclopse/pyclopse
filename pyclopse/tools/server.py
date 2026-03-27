@@ -848,6 +848,14 @@ def subagent_spawn(
         if not target_agent:
             return "[ERROR] Cannot determine agent — pass agent= explicitly"
 
+        # Pass the calling session ID explicitly so results are delivered back
+        # to the exact session that spawned this subagent.  Without this the
+        # API falls back to get_active_session(agent), which always resolves to
+        # the agent's top-level user session — causing every intermediate
+        # orchestrator subagent's acknowledgment to flood the user's session.
+        headers = get_http_headers()
+        caller_session_id = (headers.get("x-session-id") or None) if headers else None
+
         data = _subagents_api("/", method="POST", json={
             "agent": target_agent,
             "task": task,
@@ -855,6 +863,7 @@ def subagent_spawn(
             "timeout_seconds": timeout_seconds,
             "prompt_preset": prompt_preset,
             "instruction": instruction,
+            "spawned_by_session": caller_session_id,
         })
         return (
             f"[SUBAGENT SPAWNED]\n"
@@ -866,6 +875,59 @@ def subagent_spawn(
         )
     except Exception as e:
         return _fmt_http_err(e) if hasattr(e, "response") else f"[ERROR] {e}"
+
+
+@mcp.tool()
+async def subagent_await(job_id: str, timeout_seconds: int = 300) -> str:
+    """
+    Wait for a sub-subagent to complete and return its result inline.
+
+    Intended for use within a subagent (job) context where the calling agent
+    has spawned a sub-subagent and needs its result before continuing.  Unlike
+    the async delivery path used for top-level agents, this call blocks until
+    the sub-subagent finishes or the timeout expires.
+
+    Do NOT call this from an interactive user session — it will block the
+    agent's response to the user for the full duration.  For top-level agent
+    sessions, results are delivered asynchronously via the normal delivery path.
+
+    Args:
+        job_id: The job_id returned by subagent_spawn()
+        timeout_seconds: Maximum seconds to wait before giving up (default 300)
+
+    Returns a string containing the sub-subagent's result, or an error token.
+    """
+    import asyncio as _asyncio
+
+    try:
+        gw = _get_gateway()
+        scheduler = getattr(gw, "_job_scheduler", None)
+        if not scheduler:
+            return "[ERROR] Job scheduler not available"
+
+        deadline = _asyncio.get_event_loop().time() + timeout_seconds
+        poll_interval = 0.5
+
+        while _asyncio.get_event_loop().time() < deadline:
+            result = scheduler.pop_subagent_result(job_id)
+            if result is not None:
+                return result if result else "[NO_REPLY]"
+
+            # Check if job still exists (still running) or is gone without a result
+            job = scheduler.jobs.get(job_id)
+            if job is None and result is None:
+                # Job was deleted before we could read — check one more time
+                # (race: cache populated just after our pop above)
+                result = scheduler.pop_subagent_result(job_id)
+                if result is not None:
+                    return result if result else "[NO_REPLY]"
+                return f"[NOT FOUND] Subagent '{job_id}' not found — may have failed or never existed"
+
+            await _asyncio.sleep(poll_interval)
+
+        return f"[TIMEOUT] Subagent '{job_id}' did not complete within {timeout_seconds}s"
+    except Exception as e:
+        return f"[ERROR] {e}"
 
 
 @mcp.tool()

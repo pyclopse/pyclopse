@@ -27,9 +27,66 @@ class JobScheduler:
     any job whose next_run time has passed. Cron expressions are evaluated using
     croniter; interval jobs are re-scheduled from completion time.
 
-    Supports two run types (CommandRun, AgentRun) and three delivery types
-    (DeliverNone, DeliverAnnounce, DeliverWebhook). Also provides a subagent
-    API for spawning ephemeral one-shot agent jobs from within an agent session.
+    Supports two run types (``CommandRun``, ``AgentRun``) and three notification
+    types (``DeliverNone``, ``DeliverAnnounce``, ``DeliverWebhook``).
+
+    ## Result delivery
+
+    Delivery of job/subagent *results* is separate from the notification system
+    and is controlled by fields on ``AgentRun``, not by the ``deliver`` config:
+
+    ``report_to_agent`` (scheduled jobs)
+        Dynamic routing — resolves to the named agent's current active session
+        at delivery time.  Use this for scheduled jobs where the user session
+        may have rolled over since the job was configured.  The active-session
+        pointer is maintained by ``_get_active_session()`` in the gateway and
+        only ever reflects user-facing channels (telegram, slack, TUI) — job
+        sessions never overwrite it, so resolution is always safe.
+
+    ``report_to_session`` (subagents)
+        Pinned routing — delivers to an exact session ID captured at spawn time.
+        Used by the subagent system so results return to the precise interactive
+        session that spawned the subagent, not merely "wherever the agent is
+        currently active".  Set automatically by ``spawn_subagent()`` from the
+        ``x-session-id`` MCP request header — never set manually.
+
+    Both paths converge at ``Gateway._deliver_result()`` which applies token-based
+    delivery logic identically regardless of origin.
+
+    ## Delivery tokens
+
+    The agent's response text may begin with a token that controls how the result
+    reaches the user:
+
+    - ``NO_REPLY``  — result is injected into the agent's history so future turns
+      have context, but nothing is sent to the user's channel.  Used for background
+      tasks (heartbeats, pulse checks) where the agent should be aware but silent.
+    - ``SUMMARIZE`` — result content is injected into history and the agent LLM is
+      asked to summarize and relay it to the user.  Use when the raw output needs
+      context, formatting, or the agent's voice.
+    - *(no token)*  — verbatim delivery: result is injected into history AND sent
+      directly to the user's channel without an additional LLM round-trip.  Use
+      when the raw output is already user-ready.
+
+    ## Subagent orchestration
+
+    The subagent API (``spawn_subagent``, ``kill_subagent``, etc.) creates
+    ephemeral one-shot ``AtSchedule`` jobs from within an agent session.  For
+    top-level subagents (spawned from a user-facing session) results are delivered
+    asynchronously via ``_deliver_to_spawning_session()``, keeping the user's
+    session non-blocking.
+
+    For sub-subagents (spawned from within a job/subagent session), async delivery
+    is skipped to avoid ``_run_lock`` contention.  Instead, the result is cached
+    in ``_subagent_results`` and the parent subagent retrieves it synchronously
+    via the ``subagent_await()`` MCP tool.
+
+    ## Notification vs delivery
+
+    The ``deliver`` field on ``Job`` (``DeliverAnnounce`` etc.) controls *status
+    notifications* only — the "▶️ started" / "✅ finished" channel pings sent by
+    ``_job_notify``.  These are operationally separate from result delivery and go
+    directly to the channel without touching the agent's history.
 
     Attributes:
         config (JobsConfig): Scheduler configuration from the gateway config.
@@ -72,6 +129,9 @@ class JobScheduler:
         # Subagent tracking — all ephemeral, never persisted
         self._subagent_sessions: Dict[str, str] = {}          # job_id → session_id
         self._subagent_message_queue: Dict[str, List[str]] = {}  # job_id → pending msgs
+        # Result cache for sub-subagent orchestration via subagent_await().
+        # Populated in _run_job before the job is deleted; consumed by subagent_await.
+        self._subagent_results: Dict[str, str] = {}           # job_id → stdout
         # Timezone used when a CronSchedule has no explicit timezone set.
         # Falls back to the system local timezone if neither config nor job specifies one.
         cfg_tz = getattr(config, "default_timezone", None)
@@ -226,6 +286,7 @@ class JobScheduler:
         job.updated_at = now()
         self._flush()
 
+        _notified = False
         try:
             self._logger.info(f"Running job: {job.name} [{job.run.kind}]")
             if self._notify_callback:
@@ -251,6 +312,9 @@ class JobScheduler:
                 # One-shot: delete after success
                 if job.delete_after_run and isinstance(job.schedule, AtSchedule):
                     runs_dir = self._agent_runs_dir(job.id)
+                    # Cache result before deletion so subagent_await() can retrieve it
+                    # for sub-subagent orchestration (parent polls this dict).
+                    self._subagent_results[job.id] = run.stdout or ""
                     agent_id = self._job_agents.pop(job.id, None)
                     self.jobs.pop(job.id, None)
                     if agent_id:
@@ -264,6 +328,7 @@ class JobScheduler:
                     append_run_log(run, runs_dir)
                     if self._notify_callback:
                         asyncio.create_task(self._notify_callback(job, run))
+                    _notified = True
                     return
             else:
                 job.status = JobStatus.FAILED
@@ -300,7 +365,7 @@ class JobScheduler:
             if job.spawned_by_session is not None:
                 self._subagent_sessions.pop(job.id, None)
                 self._subagent_message_queue.pop(job.id, None)
-            if self._notify_callback:
+            if self._notify_callback and not _notified:
                 asyncio.create_task(self._notify_callback(job, run))
 
     async def _execute(self, job: Job) -> Dict[str, Any]:
@@ -1040,6 +1105,26 @@ class JobScheduler:
             List[str]: All pending message strings in FIFO order.
         """
         return self._subagent_message_queue.pop(job_id, [])
+
+    def pop_subagent_result(self, job_id: str) -> Optional[str]:
+        """Consume and return the cached result for a completed subagent job.
+
+        Returns the subagent's stdout string if available, or ``None`` if the
+        job has not yet completed or the result was already consumed.  Removes
+        the entry from the cache on retrieval.
+
+        Used by ``subagent_await()`` in the MCP tool layer to allow a parent
+        subagent (job session) to synchronously receive a sub-subagent's result
+        without going through ``handle_message()`` (which would deadlock on
+        ``_run_lock``).
+
+        Args:
+            job_id (str): The UUID of the completed subagent job.
+
+        Returns:
+            Optional[str]: The subagent's stdout, or ``None`` if not yet ready.
+        """
+        return self._subagent_results.pop(job_id, None)
 
     def list_subagents(self, spawned_by_agent: Optional[str] = None) -> List[Tuple[Job, str]]:
         """Return (job, session_id) tuples for all current in-memory subagent jobs.
