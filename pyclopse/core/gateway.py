@@ -1590,12 +1590,13 @@ class Gateway:
             agent_id, chat_id, bot_name, list(self._known_endpoints.get(agent_id, {}).keys()),
         )
         # Publish inbound message to the event bus so other channels (e.g. TUI) see it
-        self._publish(agent_id, {
-            "type": "user_message",
-            "channel": "telegram",
-            "sender": sender_name,
-            "content": text,
-        })
+        if getattr(getattr(agent, "config", None), "channel_sync", True):
+            self._publish(agent_id, {
+                "type": "user_message",
+                "channel": "telegram",
+                "sender": sender_name,
+                "content": text,
+            })
 
         # Send typing indicator immediately so the user sees activity
         try:
@@ -1795,14 +1796,14 @@ class Gateway:
                         )
                         if _think_matches:
                             _tui_thinking = "\n".join(t.strip() for t in _think_matches)
-                self._publish(agent_id, {
-                    "type": "agent_response",
-                    "agent_name": agent.name,
-                    "content": clean_response,
-                    "thinking": _tui_thinking,
-                    "originating_channel": "telegram",
-                })
                 if getattr(getattr(agent, "config", None), "channel_sync", True):
+                    self._publish(agent_id, {
+                        "type": "agent_response",
+                        "agent_name": agent.name,
+                        "content": clean_response,
+                        "thinking": _tui_thinking,
+                        "originating_channel": "telegram",
+                    })
                     await self._fan_out_response(session, originating_channel="telegram", response_text=clean_response)
 
             # Usage counters
@@ -2971,16 +2972,20 @@ class Gateway:
                 "endpoint registered: agent=%s channel=%s sender_id=%s known=%s",
                 agent_id, channel, sender_id, list(self._known_endpoints.get(agent_id, {}).keys()),
             )
-            self._publish(agent_id, {
-                "type": "user_message",
-                "channel": channel,
-                "sender": sender,
-                "content": content,
-            })
+            _channel_sync = getattr(getattr(agent, "config", None), "channel_sync", True)
+            # Always publish TUI's own messages (needed for streaming state); gate
+            # cross-channel publishes on channel_sync.
+            if _channel_sync or channel == "tui":
+                self._publish(agent_id, {
+                    "type": "user_message",
+                    "channel": channel,
+                    "sender": sender,
+                    "content": content,
+                })
             # Forward the user's message to every other channel so all parties
             # see the full conversation, not just the agent's replies.
             # Fire-and-forget: don't block the LLM call on Telegram/Slack network I/O.
-            if getattr(getattr(agent, "config", None), "channel_sync", True):
+            if _channel_sync:
                 asyncio.create_task(
                     self._fan_out_user_message(
                         session, originating_channel=channel, sender=sender, content=content,
@@ -3025,14 +3030,17 @@ class Gateway:
         if session.context.get("send_policy") == "off":
             response_text = None
 
-        # Publish agent response to event bus (after send_policy so suppressed replies don't broadcast)
+        # Publish agent response to event bus (after send_policy so suppressed replies don't broadcast).
+        # Always publish for TUI channel (needed to reset streaming state); gate others on channel_sync.
         if response_text and channel not in ("job",):
-            self._publish(agent_id, {
-                "type": "agent_response",
-                "agent_name": agent.name,
-                "content": response_text,
-                "originating_channel": channel,
-            })
+            _channel_sync = getattr(getattr(agent, "config", None), "channel_sync", True)
+            if _channel_sync or channel == "tui":
+                self._publish(agent_id, {
+                    "type": "agent_response",
+                    "agent_name": agent.name,
+                    "content": response_text,
+                    "originating_channel": channel,
+                })
 
         # Fire agent:after_response
         await self._fire(HookEvent.AGENT_RESPONSE, {

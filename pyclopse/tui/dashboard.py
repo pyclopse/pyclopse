@@ -1328,7 +1328,58 @@ class ChatView(Vertical):
                 self.gateway.unsubscribe_agent(self._subscribed_agent_id, self._event_queue)
             self._event_queue = self.gateway.subscribe_agent(agent_id)
             self._subscribed_agent_id = agent_id
+        # Clear log and reload history for the new agent
+        self._log.clear()
+        self._streaming_buffer = ""
+        self._streaming_thinking = ""
+        self._streaming_line_count = 0
+        self._streaming_agent_name = ""
+        self._load_agent_history(agent_id, name)
         self._input.focus()
+
+    @work(exclusive=False)
+    async def _load_agent_history(self, agent_id: str, agent_name: str) -> None:
+        """Load and display the active session's message history for agent_id."""
+        import json
+        try:
+            sm = getattr(self.gateway, "session_manager", None)
+            if not sm:
+                return
+            session = await sm.get_active_session(agent_id)
+            if not session or not session.history_path or not session.history_path.exists():
+                return
+            with open(session.history_path, encoding="utf-8") as fh:
+                data = json.load(fh)
+            messages = data.get("messages", [])
+            if not messages:
+                return
+
+            from pyclopse.agents.runner import strip_thinking_tags
+
+            self._log.write(f"[dim]── history ──[/dim]")
+            for msg in messages[-40:]:  # last 40 messages
+                role = msg.get("role", "")
+                content = msg.get("content", "")
+                # content may be a string or a list of parts
+                if isinstance(content, list):
+                    text = " ".join(
+                        p.get("text", "") for p in content
+                        if isinstance(p, dict) and p.get("type") == "text"
+                    ).strip()
+                else:
+                    text = str(content).strip()
+                if not text:
+                    continue
+                if role == "user":
+                    self._log.write(f"[blue]You:[/blue] {text}")
+                elif role == "assistant":
+                    clean = strip_thinking_tags(text)
+                    if clean.strip():
+                        self._log.write(f"[green]{agent_name}:[/green] {clean.strip()}")
+            self._log.write(f"[dim]── now ──[/dim]")
+            self._log.write("")
+        except Exception:
+            pass  # history load failure is non-fatal
 
     # ── Event bus: cross-channel activity display ─────────────────────────────
 
