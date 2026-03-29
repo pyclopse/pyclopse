@@ -990,6 +990,7 @@ class JobScheduler:
         timeout_seconds: int = 300,
         prompt_preset: str = "minimal",
         instruction: Optional[str] = None,
+        report_to_agent: Optional[str] = None,
     ) -> str:
         """Create and immediately fire a one-shot ephemeral subagent job.
 
@@ -1027,6 +1028,7 @@ class JobScheduler:
             prompt_preset=prompt_preset,
             instruction=instruction,
             report_to_session=spawned_by_session,
+            report_to_agent=report_to_agent,
         )
 
         job = Job(

@@ -51,6 +51,10 @@ class SpawnSubagentRequest(BaseModel):
     instruction: Optional[str] = None
     # If omitted, the endpoint resolves the agent's current active session.
     spawned_by_session: Optional[str] = None
+    # Fallback delivery target agent when spawned_by_session is a job-channel
+    # session (which would be dead at delivery time). Defaults to the spawning
+    # agent so results always reach a live user-facing session.
+    report_to_agent: Optional[str] = None
 
 
 class InterruptSubagentRequest(BaseModel):
@@ -106,6 +110,7 @@ async def spawn_subagent(req: SpawnSubagentRequest):
         timeout_seconds=req.timeout_seconds,
         prompt_preset=req.prompt_preset,
         instruction=req.instruction,
+        report_to_agent=req.report_to_agent,
     )
 
     return {

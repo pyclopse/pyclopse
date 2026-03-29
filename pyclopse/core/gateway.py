@@ -4,7 +4,7 @@ import asyncio
 from pyclopse.reflect import reflect_system
 import logging
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Awaitable, Callable, Dict, List, Optional
 
 from pyclopse.config.loader import ConfigLoader, Config
 from pyclopse.config.schema import AgentConfig, SecurityConfig
@@ -255,6 +255,12 @@ class Gateway:
         self._initialized = False
         self._startup_tasks: List[asyncio.Task] = []
         self._logger = logging.getLogger("pyclopse.gateway")
+        # Cross-channel event bus: agent_id → subscriber queues
+        self._agent_listeners: Dict[str, List[asyncio.Queue]] = {}
+        # Gateway-level endpoint cache: agent_id → channel → {sender_id, sender}
+        # Updated on every inbound message so fan-out works even before session
+        # context has accumulated endpoints (e.g. first TUI message before Telegram).
+        self._known_endpoints: Dict[str, Dict[str, dict]] = {}
 
         # Channel adapters (to be implemented)
         self._channels: Dict[str, Any] = {}
@@ -1420,6 +1426,17 @@ class Gateway:
                     self._logger.error(f"Failed to send command reply: {e}")
                 return
 
+        # Register the Telegram endpoint now — before the streaming/non-streaming split —
+        # so fan-out always knows the correct bot and chat_id regardless of path.
+        # chat_id (not user_id) is what Telegram requires for send_message, and
+        # bot_name is stored so fan-out can pick the exact bot, not just the first one.
+        _tg_ep_full = {"sender_id": chat_id, "sender": sender_name, "bot_name": bot_name}
+        self._known_endpoints.setdefault(agent_id, {})["telegram"] = _tg_ep_full
+        self._logger.info(
+            "endpoint registered (pre-route): agent=%s channel=telegram chat_id=%s bot=%s known=%s",
+            agent_id, chat_id, bot_name, list(self._known_endpoints.get(agent_id, {}).keys()),
+        )
+
         # Resolve per-bot streaming flag
         streaming = getattr(effective_tg, "streaming", False) if effective_tg else False
 
@@ -1558,6 +1575,28 @@ class Gateway:
         object.__setattr__(agent, "_last_recall_facts", None)
         text = await agent._prepend_vault_context(text, "telegram", session_id=session.id)
 
+        # Update session-level Telegram endpoint (merge so bot_name set by handler is kept).
+        # Use chat_id (not user_id) as sender_id — that is the correct target for send_message.
+        _sess_tg = session.context.setdefault("channel_endpoints", {}).setdefault("telegram", {})
+        _sess_tg["sender_id"] = chat_id
+        _sess_tg["sender"] = sender_name
+        _sess_tg.setdefault("bot_name", bot_name)
+        _gw_tg = self._known_endpoints.setdefault(agent_id, {}).setdefault("telegram", {})
+        _gw_tg["sender_id"] = chat_id
+        _gw_tg["sender"] = sender_name
+        _gw_tg.setdefault("bot_name", bot_name)
+        self._logger.info(
+            "endpoint registered (stream): agent=%s channel=telegram chat_id=%s bot=%s known=%s",
+            agent_id, chat_id, bot_name, list(self._known_endpoints.get(agent_id, {}).keys()),
+        )
+        # Publish inbound message to the event bus so other channels (e.g. TUI) see it
+        self._publish(agent_id, {
+            "type": "user_message",
+            "channel": "telegram",
+            "sender": sender_name,
+            "content": text,
+        })
+
         # Send typing indicator immediately so the user sees activity
         try:
             await bot.send_chat_action(chat_id=chat_id, action="typing")
@@ -1614,51 +1653,59 @@ class Gateway:
         async def _run_stream() -> None:
             nonlocal stream_msg_id, last_edit_time, thinking_buffer, response_buffer, typing_active
 
-            async for chunk_text, is_reasoning in runner.run_stream(text):
-                if is_reasoning:
-                    thinking_buffer += chunk_text
-                else:
-                    response_buffer += chunk_text
+            _rstream = runner.run_stream(text)
+            try:
+                async for chunk_text, is_reasoning in _rstream:
+                    if is_reasoning:
+                        thinking_buffer += chunk_text
+                    else:
+                        response_buffer += chunk_text
 
-                # Build a single unified HTML display — blockquote for thinking,
-                # plain text after it for the response.  Every edit sends a
-                # complete, valid HTML string so there's no phase transition.
-                if show_thinking and thinking_buffer:
-                    tail = thinking_buffer[-600:] if len(thinking_buffer) > 600 else thinking_buffer
-                    safe_t = _html.escape(tail, quote=False)
-                    display = f"<blockquote expandable><i>💭 {safe_t}</i></blockquote>"
-                    response_part = _live_display(response_buffer)
-                    if response_part:
-                        display += f"\n\n{_html.escape(response_part, quote=False)}"
-                    mid_parse_mode: Optional[str] = "HTML"
-                else:
-                    display = _live_display(response_buffer)
-                    if not display:
-                        continue
-                    mid_parse_mode = None
+                    # Build a single unified HTML display — blockquote for thinking,
+                    # plain text after it for the response.  Every edit sends a
+                    # complete, valid HTML string so there's no phase transition.
+                    if show_thinking and thinking_buffer:
+                        tail = thinking_buffer[-600:] if len(thinking_buffer) > 600 else thinking_buffer
+                        safe_t = _html.escape(tail, quote=False)
+                        display = f"<blockquote expandable><i>💭 {safe_t}</i></blockquote>"
+                        response_part = _live_display(response_buffer)
+                        if response_part:
+                            display += f"\n\n{_html.escape(response_part, quote=False)}"
+                        mid_parse_mode: Optional[str] = "HTML"
+                    else:
+                        display = _live_display(response_buffer)
+                        if not display:
+                            continue
+                        mid_parse_mode = None
 
-                now = time.monotonic()
-                if stream_msg_id is None:
-                    try:
-                        msg = await bot.send_message(
-                            chat_id=chat_id, text=display,
-                            **({"parse_mode": mid_parse_mode} if mid_parse_mode else {}),
-                        )
-                        stream_msg_id = msg.message_id
-                        last_edit_time = now
-                    except Exception as _se:
-                        self._logger.warning(f"Stream: initial send failed: {_se}")
-                elif now - last_edit_time >= THROTTLE_S:
-                    try:
-                        await bot.edit_message_text(
-                            chat_id=chat_id,
-                            message_id=stream_msg_id,
-                            text=display,
-                            **({"parse_mode": mid_parse_mode} if mid_parse_mode else {}),
-                        )
-                        last_edit_time = now
-                    except Exception:
-                        pass  # "message is not modified" etc. are harmless
+                    now = time.monotonic()
+                    if stream_msg_id is None:
+                        try:
+                            msg = await bot.send_message(
+                                chat_id=chat_id, text=display,
+                                **({"parse_mode": mid_parse_mode} if mid_parse_mode else {}),
+                            )
+                            stream_msg_id = msg.message_id
+                            last_edit_time = now
+                        except Exception as _se:
+                            self._logger.warning(f"Stream: initial send failed: {_se}")
+                    elif now - last_edit_time >= THROTTLE_S:
+                        try:
+                            await bot.edit_message_text(
+                                chat_id=chat_id,
+                                message_id=stream_msg_id,
+                                text=display,
+                                **({"parse_mode": mid_parse_mode} if mid_parse_mode else {}),
+                            )
+                            last_edit_time = now
+                        except Exception:
+                            pass  # "message is not modified" etc. are harmless
+            except BaseException:
+                # Abnormal exit: close generator immediately so _run_lock is not
+                # deferred to GC. On normal exhaustion the generator releases the
+                # lock itself; calling aclose() there would raise RuntimeError.
+                await _rstream.aclose()
+                raise
 
             # ── final edit ────────────────────────────────────────────────
             clean_response = strip_thinking_tags(response_buffer)
@@ -1732,6 +1779,30 @@ class Gateway:
 
             # Update session activity
             session.touch(count_delta=2)
+
+            # Publish agent response to event bus and fan out to other channels
+            if clean_response:
+                # Extract thinking for TUI display (native reasoning or <think> tags)
+                _tui_thinking = ""
+                if show_thinking:
+                    if thinking_buffer:
+                        _tui_thinking = thinking_buffer.strip()
+                    else:
+                        import re as _re2
+                        _think_matches = _re2.findall(
+                            r'<(?:thinking|think)>(.*?)</(?:thinking|think)>',
+                            response_buffer, _re2.DOTALL | _re2.IGNORECASE,
+                        )
+                        if _think_matches:
+                            _tui_thinking = "\n".join(t.strip() for t in _think_matches)
+                self._publish(agent_id, {
+                    "type": "agent_response",
+                    "agent_name": agent.name,
+                    "content": clean_response,
+                    "thinking": _tui_thinking,
+                    "originating_channel": "telegram",
+                })
+                await self._fan_out_response(session, originating_channel="telegram", response_text=clean_response)
 
             # Usage counters
             self._usage["messages_total"] += 1
@@ -2404,6 +2475,11 @@ class Gateway:
         if session is None:
             return None
 
+        # Restore persisted channel endpoints into the in-memory cache so
+        # fan-out works even after a gateway restart.
+        for _ch, _ep in session.context.get("channel_endpoints", {}).items():
+            self._known_endpoints.setdefault(agent_id, {}).setdefault(_ch, _ep)
+
         # Update routing fields so replies go back via the right channel
         session.last_channel = channel
         session.last_user_id = user_id
@@ -2562,11 +2638,30 @@ class Gateway:
             # Skip delivery to job-channel sessions (sub-subagents).
             # The parent subagent retrieves the result via subagent_await() instead,
             # avoiding _run_lock contention that would occur with handle_message().
+            # If report_to_agent is set, fall back to that agent's live user-facing
+            # session so results from job-spawned subagents are not silently dropped.
             if channel == "job":
-                self._logger.debug(
-                    f"report_to_session: skipping delivery to job-channel session "
-                    f"{report_session_id[:8]}… (result cached for subagent_await)"
-                )
+                fallback_agent = getattr(agent_run, "report_to_agent", None)
+                if fallback_agent and self._session_manager:
+                    self._logger.info(
+                        f"report_to_session: job-channel session — falling back to "
+                        f"report_to_agent={fallback_agent!r} for {label}"
+                    )
+                    try:
+                        fallback_session = await self._session_manager.get_active_session(fallback_agent)
+                        if fallback_session:
+                            await self._deliver_result(label, fallback_agent, fallback_session, response)
+                        else:
+                            self._logger.warning(
+                                f"report_to_agent fallback: no active session for {fallback_agent!r}, result dropped"
+                            )
+                    except Exception as _fe:
+                        self._logger.error(f"report_to_agent fallback delivery failed: {_fe}")
+                else:
+                    self._logger.debug(
+                        f"report_to_session: skipping delivery to job-channel session "
+                        f"{report_session_id[:8]}… (result cached for subagent_await)"
+                    )
                 return
             await self._deliver_result(label, agent_id, target_session, response)
         except Exception as _e:
@@ -2616,6 +2711,142 @@ class Gateway:
         finally:
             self._active_tasks.pop(session_key, None)
 
+    # ── Cross-channel event bus ───────────────────────────────────────────────
+
+    def subscribe_agent(self, agent_id: str) -> "asyncio.Queue[dict]":
+        """Subscribe to all message events for an agent. Returns a drain queue."""
+        q: asyncio.Queue = asyncio.Queue(maxsize=500)
+        self._agent_listeners.setdefault(agent_id, []).append(q)
+        return q
+
+    def unsubscribe_agent(self, agent_id: str, q: "asyncio.Queue[dict]") -> None:
+        """Remove a subscriber queue registered via subscribe_agent()."""
+        lst = self._agent_listeners.get(agent_id, [])
+        try:
+            lst.remove(q)
+        except ValueError:
+            pass
+
+    def _publish(self, agent_id: str, event: dict) -> None:
+        """Publish a message event to all subscribers for this agent (non-blocking)."""
+        for q in list(self._agent_listeners.get(agent_id, [])):
+            try:
+                q.put_nowait(event)
+            except asyncio.QueueFull:
+                pass  # slow consumer — drop rather than block
+
+    async def _fan_out_user_message(
+        self,
+        session: Any,
+        originating_channel: str,
+        sender: str,
+        content: str,
+    ) -> None:
+        """Forward an inbound user message to every other channel endpoint.
+
+        Mirrors what the event bus does for the TUI (show all channels' traffic
+        in one view), but for channels that receive messages via API calls rather
+        than an event queue — currently Telegram and Slack.
+        """
+        gw_eps = self._known_endpoints.get(session.agent_id, {})
+        sess_eps = session.context.get("channel_endpoints", {})
+        endpoints: Dict[str, dict] = dict(gw_eps)
+        endpoints.update(sess_eps)
+        for ch, ep in endpoints.items():
+            if ch in (originating_channel, "tui", "job"):
+                continue
+            if ch == "telegram":
+                _ep_bot_name = ep.get("bot_name")
+                self._ensure_tg_dicts()
+                if _ep_bot_name and _ep_bot_name in self._tg_bots:
+                    bot = self._tg_bots[_ep_bot_name]
+                else:
+                    bot, _ = self._bot_and_chat_for_agent(session.agent_id)
+                chat_id = ep.get("sender_id", "")
+                if bot and chat_id:
+                    try:
+                        await bot.send_message(
+                            chat_id=chat_id,
+                            text=f"🖥️ {sender}: {content}",
+                        )
+                    except Exception as e:
+                        self._logger.error(f"fan-out user message telegram error: {e}")
+            elif ch == "slack":
+                if self._slack_web_client:
+                    try:
+                        await self._slack_web_client.chat_postMessage(
+                            channel=ep.get("sender_id", ""),
+                            text=f"🖥️ {sender}: {content}",
+                        )
+                    except Exception as e:
+                        self._logger.error(f"fan-out user message slack error: {e}")
+
+    async def _fan_out_response(
+        self,
+        session: Any,
+        originating_channel: str,
+        response_text: str,
+    ) -> None:
+        """Deliver an agent response to every channel endpoint OTHER than the originator.
+
+        Channel endpoints are accumulated in ``session.context["channel_endpoints"]``
+        each time a message arrives.  The TUI receives responses via the event bus
+        (already published by the caller) so it is excluded from direct delivery here.
+
+        The gateway-level ``_known_endpoints`` cache is also consulted so that
+        fan-out works even when the session has been reset or when a channel hasn't
+        sent a message yet in this session (e.g. first TUI message before Telegram).
+        """
+        # Merge gateway-level cache with session-level endpoints; session wins
+        gw_eps = self._known_endpoints.get(session.agent_id, {})
+        sess_eps = session.context.get("channel_endpoints", {})
+        endpoints: Dict[str, dict] = dict(gw_eps)
+        endpoints.update(sess_eps)
+        self._logger.info(
+            "fan-out: agent=%s originating=%s gw_endpoints=%s sess_endpoints=%s merged=%s",
+            session.agent_id, originating_channel,
+            list(gw_eps.keys()), list(sess_eps.keys()), list(endpoints.keys()),
+        )
+        for ch, ep in endpoints.items():
+            if ch in (originating_channel, "tui", "job"):
+                self._logger.info("fan-out: skipping channel=%s (excluded)", ch)
+                continue
+            sender_id = ep.get("sender_id", "")
+            if ch == "telegram":
+                # Use the stored bot_name if available — it points to the exact bot
+                # the user is chatting with. Fall back to agent-level lookup otherwise.
+                _ep_bot_name = ep.get("bot_name")
+                self._ensure_tg_dicts()
+                if _ep_bot_name and _ep_bot_name in self._tg_bots:
+                    bot = self._tg_bots[_ep_bot_name]
+                else:
+                    bot, _ = self._bot_and_chat_for_agent(session.agent_id)
+                chat_id = sender_id
+                self._logger.info(
+                    "fan-out: telegram bot=%s (name=%s) chat_id=%s",
+                    bot is not None, _ep_bot_name, chat_id,
+                )
+                if bot and chat_id:
+                    try:
+                        for chunk in self._split_message(response_text):
+                            await bot.send_message(chat_id=chat_id, text=chunk)
+                        self._logger.info("fan-out: delivered to telegram chat_id=%s", chat_id)
+                    except Exception as e:
+                        self._logger.error(f"fan-out telegram error: {e}")
+                else:
+                    self._logger.warning(
+                        "fan-out: telegram skipped — bot=%s chat_id=%r", bot is not None, chat_id
+                    )
+            elif ch == "slack":
+                if self._slack_web_client:
+                    try:
+                        await self._slack_web_client.chat_postMessage(
+                            channel=sender_id,
+                            text=response_text,
+                        )
+                    except Exception as e:
+                        self._logger.error(f"fan-out slack error: {e}")
+
     async def handle_message(
         self,
         channel: str,
@@ -2625,6 +2856,7 @@ class Gateway:
         message_id: Optional[str] = None,
         agent_id: Optional[str] = None,
         dispatch_response: bool = False,
+        on_chunk: Optional[Callable[[str, bool], Awaitable[None]]] = None,
     ) -> Optional[str]:
         """Handle an incoming message."""
         # Create incoming message
@@ -2724,9 +2956,64 @@ class Gateway:
                 "bootstrap_files": loaded_files,
             })
 
+        # Track per-channel delivery endpoint and publish inbound event to all subscribers.
+        # Merge into existing entry rather than replacing, so extra fields like bot_name
+        # (set by the Telegram handler before routing) are preserved.
+        if channel not in ("job",):
+            _gw_ep = self._known_endpoints.setdefault(agent_id, {}).setdefault(channel, {})
+            _gw_ep["sender_id"] = sender_id
+            _gw_ep["sender"] = sender
+            _sess_ep = session.context.setdefault("channel_endpoints", {}).setdefault(channel, {})
+            _sess_ep["sender_id"] = sender_id
+            _sess_ep["sender"] = sender
+            self._logger.info(
+                "endpoint registered: agent=%s channel=%s sender_id=%s known=%s",
+                agent_id, channel, sender_id, list(self._known_endpoints.get(agent_id, {}).keys()),
+            )
+            self._publish(agent_id, {
+                "type": "user_message",
+                "channel": channel,
+                "sender": sender,
+                "content": content,
+            })
+            # Forward the user's message to every other channel so all parties
+            # see the full conversation, not just the agent's replies.
+            # Fire-and-forget: don't block the LLM call on Telegram/Slack network I/O.
+            asyncio.create_task(
+                self._fan_out_user_message(
+                    session, originating_channel=channel, sender=sender, content=content,
+                )
+            )
+
+        # For non-job channels, always stream via event bus so all subscribers
+        # (including the TUI) get live chunk updates without needing an on_chunk
+        # callback from the caller.  If the caller also provides on_chunk, it is
+        # called in addition to the event-bus publish.
+        _effective_on_chunk = on_chunk
+        if channel not in ("job",):
+            _agent_ref = agent
+            _caller_on_chunk = on_chunk
+            async def _bus_chunk(chunk_text: str, is_reasoning: bool) -> None:
+                self._publish(agent_id, {
+                    "type": "stream_chunk",
+                    "chunk": chunk_text,
+                    "is_reasoning": is_reasoning,
+                    "agent_name": _agent_ref.name,
+                    "originating_channel": channel,
+                })
+                if _caller_on_chunk is not None:
+                    await _caller_on_chunk(chunk_text, is_reasoning)
+            _effective_on_chunk = _bus_chunk
+
         # Handle message
-        response = await agent.handle_message(message, session)
+        response = await agent.handle_message(message, session, on_chunk=_effective_on_chunk)
         response_text = response.content if response else None
+        self._logger.info(
+            "handle_message: channel=%s agent=%s response_len=%s preview=%r",
+            channel, agent_id,
+            len(response_text) if response_text else None,
+            (response_text or "")[:80],
+        )
 
         # Snapshot context token count into session after each response so that
         # /status can display it even before the runner is next accessed.
@@ -2735,6 +3022,15 @@ class Gateway:
         # Check send_policy — "off" suppresses the outbound reply
         if session.context.get("send_policy") == "off":
             response_text = None
+
+        # Publish agent response to event bus (after send_policy so suppressed replies don't broadcast)
+        if response_text and channel not in ("job",):
+            self._publish(agent_id, {
+                "type": "agent_response",
+                "agent_name": agent.name,
+                "content": response_text,
+                "originating_channel": channel,
+            })
 
         # Fire agent:after_response
         await self._fire(HookEvent.AGENT_RESPONSE, {
@@ -2773,6 +3069,10 @@ class Gateway:
         # Auto-dispatch the response back via the session's channel when requested
         if dispatch_response and response_text and session:
             await self._deliver_to_channel(session, response_text)
+
+        # Fan out to every other channel that has interacted with this session
+        if response_text and session and channel not in ("job",):
+            await self._fan_out_response(session, originating_channel=channel, response_text=response_text)
 
         return response_text
 

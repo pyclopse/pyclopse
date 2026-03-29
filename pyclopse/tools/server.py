@@ -828,6 +828,7 @@ def subagent_spawn(
     timeout_seconds: int = 300,
     prompt_preset: str = "minimal",
     instruction: Optional[str] = None,
+    report_to_agent: Optional[str] = None,
 ) -> str:
     """
     Spawn a background subagent to handle a task. Returns immediately with a job_id.
@@ -841,12 +842,21 @@ def subagent_spawn(
         timeout_seconds: Max execution time in seconds (default 300)
         prompt_preset: System prompt preset — "minimal" (default), "full", or "task"
         instruction: Optional extra instruction appended to the subagent's system prompt
+        report_to_agent: Agent to deliver the result to (defaults to the calling agent).
+            Leave blank to deliver to yourself. Set explicitly only when routing to a
+            different agent. This is used as a fallback when the spawning session is a
+            job session (i.e. you are running inside a scheduled job), so the result
+            reaches the agent's live user-facing session rather than being dropped.
     """
     try:
         caller = _get_caller_agent()
         target_agent = agent or caller
         if not target_agent:
             return "[ERROR] Cannot determine agent — pass agent= explicitly"
+
+        # Default report_to_agent to the calling agent so results always have
+        # a fallback delivery target, even when spawned from a job session.
+        resolved_report_to = report_to_agent or caller
 
         # Pass the calling session ID explicitly so results are delivered back
         # to the exact session that spawned this subagent.  Without this the
@@ -864,6 +874,7 @@ def subagent_spawn(
             "prompt_preset": prompt_preset,
             "instruction": instruction,
             "spawned_by_session": caller_session_id,
+            "report_to_agent": resolved_report_to,
         })
         return (
             f"[SUBAGENT SPAWNED]\n"

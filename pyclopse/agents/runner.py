@@ -1175,16 +1175,24 @@ class AgentRunner:
             self._message_history.append({"role": "user", "content": prompt})
 
             _completed = False
+            _response_parts: list[str] = []
             _agent_logger.info("%s [STREAM] prompt: %s", _p, prompt[:500] + ("…" if len(prompt) > 500 else ""))
             try:
                 # Enforce per-model concurrency limit (usage-throttle check included)
                 from pyclopse.core.concurrency import get_manager
                 async with get_manager().acquire(self.model, self.priority):
-                    async for item in self._run_stream_inner(prompt):
-                        yield item
+                    async for chunk_text, is_reasoning in self._run_stream_inner(prompt):
+                        _response_parts.append(chunk_text)
+                        yield chunk_text, is_reasoning
                 _completed = True
             finally:
                 if _completed:
+                    # Save the assistant response to history (mirrors run() behaviour)
+                    full = "".join(_response_parts)
+                    if not self.show_thinking:
+                        full = strip_thinking_tags(full)
+                    if full:
+                        self._message_history.append({"role": "assistant", "content": full})
                     _agent_logger.info("%s [STREAM] completed", _p)
                     await self._save_history()
 

@@ -644,6 +644,7 @@ class Agent:
         self,
         message: IncomingMessage,
         session: Session,
+        on_chunk: Optional[Callable[[str, bool], Awaitable[None]]] = None,
     ) -> Optional[OutgoingMessage]:
         """Handle an incoming message and return the agent's response.
 
@@ -655,6 +656,9 @@ class Agent:
         Args:
             message (IncomingMessage): The incoming message to process.
             session (Session): The active session for this message.
+            on_chunk: Optional async callback fired with ``(text, is_reasoning)``
+                for each streaming chunk.  When provided, the runner uses
+                ``run_stream()`` instead of ``run()``.
 
         Returns:
             Optional[OutgoingMessage]: The agent's reply, or an error message
@@ -668,7 +672,9 @@ class Agent:
                 raise RuntimeError(
                     f"Agent {self.name} has no FastAgent runner configured. FastAgent is required."
                 )
-            response_content = await self._handle_with_fastagent(message.content, session)
+            response_content = await self._handle_with_fastagent(
+                message.content, session, on_chunk=on_chunk
+            )
             session.touch(count_delta=2)
 
             return OutgoingMessage(
@@ -697,6 +703,7 @@ class Agent:
         self,
         prompt: str,
         session: Session,
+        on_chunk: Optional[Callable[[str, bool], Awaitable[None]]] = None,
     ) -> str:
         """Handle a message using a per-session FastAgent runner with fallback support.
 
@@ -751,7 +758,26 @@ class Agent:
         enriched_prompt = await self._prepend_vault_context(prompt, channel, session_id=session.id)
 
         try:
-            response = await runner.run(enriched_prompt)
+            if on_chunk is not None:
+                # Streaming path: fire on_chunk for each chunk, accumulate for vault/return
+                from pyclopse.agents.runner import strip_thinking_tags as _strip
+                _buf: List[str] = []
+                _stream = runner.run_stream(enriched_prompt)
+                try:
+                    async for chunk_text, is_reasoning in _stream:
+                        _buf.append(chunk_text)
+                        await on_chunk(chunk_text, is_reasoning)
+                except BaseException:
+                    # Abnormal exit (exception or CancelledError): close the generator
+                    # immediately so _run_lock is released now, not deferred to GC.
+                    # On normal exhaustion the generator closes itself during the last
+                    # __anext__() call, so aclose() must NOT be called in that case
+                    # (it would raise StopIteration → RuntimeError inside a coroutine).
+                    await _stream.aclose()
+                    raise
+                response = _strip("".join(_buf)) if not runner.show_thinking else "".join(_buf)
+            else:
+                response = await runner.run(enriched_prompt)
             # Fire background vault ingestion (non-blocking)
             self._schedule_vault_ingest(session, channel, prompt, response)
             return self._append_recall_block(response)
@@ -778,6 +804,9 @@ class Agent:
                 priority=priority,
             )
             result = await runner.run(enriched_prompt)
+            # Fallback always delivers as a single chunk (streaming already failed)
+            if on_chunk is not None:
+                await on_chunk(result, False)
             self._schedule_vault_ingest(session, channel, prompt, result)
             notice = f"↪️ Model Fallback: {next_model} (tried {effective_model}; {reason})"
             return self._append_recall_block(f"{notice}\n\n{result}")

@@ -13,9 +13,9 @@ Three-pane layout:
   └────────────────────────────────────────────────────────┘
 
 Key bindings:
-  0  Agent Card  1  Sessions   2  History   3  Jobs   4  Sys Prompt
-  5  Config      6  Files      7  Skills    8  Run Hist   9  Agent Log
-  t  OTel Traces
+  c  Chat        0  Agent Card  1  Sessions   2  History   3  Jobs
+  4  Sys Prompt  5  Config      6  Files      7  Skills    8  Run Hist
+  9  Agent Log   t  OTel Traces
   h  Load history for selected session
   r  Run selected job now
   v  View run history for selected job
@@ -26,6 +26,7 @@ Key bindings:
 """
 from __future__ import annotations
 
+import asyncio
 import json
 from pyclopse.reflect import reflect_system
 import logging
@@ -38,19 +39,23 @@ from typing import Any, Dict, List, Optional, Tuple
 from textual import on, work
 from textual.app import App, ComposeResult
 from textual.binding import Binding
-from textual.containers import ScrollableContainer, Vertical
+from textual.containers import Horizontal, ScrollableContainer, Vertical
 from textual.reactive import reactive
 from textual.widgets import (
+    Button,
     ContentSwitcher,
     DataTable,
     Footer,
     Header,
+    Input,
+    OptionList,
     RichLog,
     Static,
     Tab,
     Tabs,
     TextArea,
 )
+from textual.widgets.option_list import Option
 
 logger = logging.getLogger(__name__)
 
@@ -1234,6 +1239,354 @@ def _build_a2a_card(agent_id: str, gateway: Any) -> dict:
     return card
 
 
+# ─────────────────────────────── View: Chat ──────────────────────────────────
+
+
+class ChatView(Vertical):
+    """Interactive chat tab — send messages to the active agent and stream replies."""
+
+    DEFAULT_CSS = """
+    ChatView {
+        height: 1fr;
+        overflow: hidden hidden;
+    }
+    #chat-hint {
+        height: 1;
+        background: $panel;
+        padding: 0 1;
+        color: $text-muted;
+    }
+    #chat-log {
+        height: 1fr;
+        overflow-y: scroll;
+        overflow-x: hidden;
+    }
+    #chat-completions {
+        display: none;
+        height: auto;
+        max-height: 10;
+        border-top: solid $border;
+        background: $surface;
+    }
+    #chat-input-row {
+        height: 3;
+        padding: 0 1;
+        background: $panel;
+        border-top: solid $border;
+    }
+    #chat-send-btn {
+        width: auto;
+        min-width: 8;
+    }
+    #chat-msg-input {
+        width: 1fr;
+    }
+    """
+
+    def __init__(self, gateway: Any, **kwargs: Any) -> None:
+        super().__init__(**kwargs)
+        self.gateway = gateway
+        self._current_agent_id: str = ""
+        self._is_processing: bool = False
+        self._event_queue: Optional[asyncio.Queue] = None
+        self._subscribed_agent_id: str = ""
+        # Streaming state — updated by stream_chunk events from the event bus
+        self._streaming_buffer: str = ""
+        self._streaming_thinking: str = ""
+        self._streaming_line_count: int = 0
+        self._streaming_agent_name: str = ""
+
+    def compose(self) -> ComposeResult:
+        yield Static("No agent selected", id="chat-hint")
+        yield RichLog(id="chat-log", auto_scroll=True, markup=True, highlight=False)
+        yield OptionList(id="chat-completions")
+        with Horizontal(id="chat-input-row"):
+            yield Input(placeholder="Type a message or /command…", id="chat-msg-input")
+            yield Button("Send", id="chat-send-btn", variant="primary")
+
+    def on_mount(self) -> None:
+        self._log = self.query_one("#chat-log", RichLog)
+        self._input = self.query_one("#chat-msg-input", Input)
+        self._hint = self.query_one("#chat-hint", Static)
+        self._completions = self.query_one("#chat-completions", OptionList)
+        self.set_interval(0.3, self._drain_events)
+
+    def refresh_for_agent(self, agent_id: str) -> None:
+        self._current_agent_id = agent_id
+        name = agent_id
+        am = getattr(self.gateway, "_agent_manager", None)
+        if am and hasattr(am, "agents"):
+            a = am.agents.get(agent_id)
+            if a and hasattr(a, "name"):
+                name = a.name
+        self._hint.update(
+            f"Chatting with [bold]{name}[/bold]  — Enter to send  |  /command for slash commands"
+        )
+        # Subscribe to this agent's event bus (resubscribe if agent changed)
+        if self.gateway and agent_id != self._subscribed_agent_id:
+            if self._event_queue and self._subscribed_agent_id:
+                self.gateway.unsubscribe_agent(self._subscribed_agent_id, self._event_queue)
+            self._event_queue = self.gateway.subscribe_agent(agent_id)
+            self._subscribed_agent_id = agent_id
+        self._input.focus()
+
+    # ── Event bus: cross-channel activity display ─────────────────────────────
+
+    def _drain_events(self) -> None:
+        """Drain the event bus queue and display any cross-channel activity."""
+        if not self._event_queue:
+            return
+        while True:
+            try:
+                event = self._event_queue.get_nowait()
+                self._display_event(event)
+            except asyncio.QueueEmpty:
+                break
+
+    _CHANNEL_ICON: Dict[str, str] = {
+        "telegram": "📱",
+        "slack": "💬",
+        "http": "🌐",
+        "slack_socket": "💬",
+    }
+
+    def _display_event(self, event: dict) -> None:
+        """Render a cross-channel event in the chat log."""
+        from pyclopse.agents.runner import strip_thinking_tags as _strip_thinking
+        import re as _re_ev
+        _OPEN_THINK_EV = _re_ev.compile(r"<(thinking|think)>", _re_ev.IGNORECASE)
+
+        channel = event.get("channel", "")
+        etype = event.get("type", "")
+        originating = event.get("originating_channel", "")
+
+        _agent = (
+            self.gateway.agent_manager.get_agent(self._current_agent_id)
+            if self.gateway and self._current_agent_id else None
+        )
+        show_thinking = bool(
+            getattr(getattr(_agent, "fast_agent_runner", None), "show_thinking", False)
+        )
+
+        # ── Streaming chunks from our own TUI conversation ────────────────────
+        if etype == "stream_chunk":
+            if originating != "tui":
+                return  # only render our own stream here
+            chunk = event.get("chunk", "")
+            is_reasoning = event.get("is_reasoning", False)
+            agent_name = event.get("agent_name", "agent")
+            if not chunk:
+                return
+            if not self._streaming_agent_name:
+                self._streaming_agent_name = agent_name
+                self._log.write("")  # blank line before first chunk
+            if is_reasoning:
+                self._streaming_thinking += chunk
+            else:
+                self._streaming_buffer += chunk
+            # Build display — strip complete/partial thinking tags from response buffer
+            clean_resp = _strip_thinking(self._streaming_buffer)
+            m = _OPEN_THINK_EV.search(clean_resp)
+            clean_resp = clean_resp[: m.start()].strip() if m else clean_resp
+            if show_thinking and self._streaming_thinking:
+                safe_t = self._streaming_thinking.replace("[", "\\[")
+                display = f"[dim]{safe_t}[/dim]\n\n{clean_resp}"
+            else:
+                display = clean_resp
+            header = f"[green]{self._streaming_agent_name}:[/green] "
+            self._streaming_line_count = self._stream_replace_lines(
+                f"{header}{display}", self._streaming_line_count
+            )
+            return
+
+        # ── Agent response complete ───────────────────────────────────────────
+        if etype == "agent_response" and originating == "tui":
+            # Stream is done — reset streaming state; content already shown via chunks
+            self._streaming_buffer = ""
+            self._streaming_thinking = ""
+            self._streaming_line_count = 0
+            self._streaming_agent_name = ""
+            return
+
+        # ── Skip our own TUI user messages (shown inline) ─────────────────────
+        if channel == "tui" or originating == "tui":
+            return
+
+        # ── Cross-channel events ──────────────────────────────────────────────
+        icon = self._CHANNEL_ICON.get(channel, "📡")
+        label = f"[dim]{icon} {channel}[/dim]"
+
+        if etype == "user_message":
+            sender = event.get("sender", "user")
+            content = event.get("content", "")
+            self._log.write("")
+            self._log.write(f"{label} [blue]{sender}:[/blue] {content}")
+        elif etype == "agent_response":
+            agent_name = event.get("agent_name", "agent")
+            content = event.get("content", "")
+            thinking = event.get("thinking", "")
+            self._log.write("")
+            if thinking and show_thinking:
+                safe_thinking = thinking.replace("[", "\\[")
+                self._log.write(f"{label} [dim]{safe_thinking}[/dim]")
+            self._log.write(f"{label} [green]{agent_name}:[/green] {content}")
+
+    # ── Command completion ────────────────────────────────────────────────────
+
+    def _all_commands(self) -> List[Tuple[str, str]]:
+        """Return sorted (name, description) for all registered slash commands."""
+        registry = getattr(self.gateway, "_command_registry", None) if self.gateway else None
+        if not registry:
+            return []
+        return [
+            (cmd.name, cmd.description)
+            for cmd in sorted(registry._commands.values(), key=lambda c: c.name)
+        ]
+
+    def on_input_changed(self, event: Input.Changed) -> None:
+        if event.input.id != "chat-msg-input":
+            return
+        value = event.value
+        # Only complete the command name (before any space / args)
+        if not value.startswith("/") or " " in value:
+            self._hide_completions()
+            return
+        typed = value[1:].lower()
+        matches = [(n, d) for n, d in self._all_commands() if n.startswith(typed)]
+        if matches:
+            self._show_completions(matches)
+        else:
+            self._hide_completions()
+
+    def _show_completions(self, matches: List[Tuple[str, str]]) -> None:
+        self._completions.clear_options()
+        for name, desc in matches:
+            short = desc[:55] + "…" if len(desc) > 55 else desc
+            self._completions.add_option(Option(f"/{name}  [dim]{short}[/dim]", id=name))
+        self._completions.highlighted = 0
+        self._completions.display = True
+
+    def _hide_completions(self) -> None:
+        self._completions.display = False
+        self._completions.clear_options()
+
+    @on(OptionList.OptionSelected, "#chat-completions")
+    def on_completion_selected(self, event: OptionList.OptionSelected) -> None:
+        """Fill in the selected command and return focus to the input."""
+        self._input.value = f"/{event.option.id} "
+        self._input.cursor_position = len(self._input.value)
+        self._hide_completions()
+        self._input.focus()
+
+    def on_key(self, event) -> None:
+        """Route Down/Escape between input and completion list."""
+        if not hasattr(self, "_completions") or not self._completions.display:
+            return
+        focused = self.app.focused
+        if event.key == "down" and focused is self._input:
+            self._completions.focus()
+            event.stop()
+        elif event.key == "escape":
+            self._hide_completions()
+            self._input.focus()
+            event.stop()
+
+    # ── Message sending ───────────────────────────────────────────────────────
+
+    def on_input_submitted(self, event: Input.Submitted) -> None:
+        if event.input.id == "chat-msg-input":
+            # If the completion list is open, select the highlighted item instead
+            if self._completions.display and self._completions.option_count > 0:
+                idx = self._completions.highlighted or 0
+                opt = self._completions.get_option_at_index(idx)
+                self._input.value = f"/{opt.id} "
+                self._input.cursor_position = len(self._input.value)
+                self._hide_completions()
+                return
+            self._send_message(event.value)
+
+    def on_button_pressed(self, event: Button.Pressed) -> None:
+        if event.button.id == "chat-send-btn":
+            self._send_message(self._input.value)
+
+    def _send_message(self, message: str) -> None:
+        if not message.strip() or self._is_processing:
+            return
+        self._input.value = ""
+        if message.startswith("/") and self.gateway:
+            self._dispatch_command(message)
+            return
+        self._log.write("")
+        self._log.write(f"[blue]You:[/blue] {message}")
+        if self.gateway and self._current_agent_id:
+            self._process_message(message)
+        else:
+            self._log.write("")
+            self._log.write("[yellow]System:[/yellow] No agent selected.")
+
+    @work(exclusive=False)
+    async def _dispatch_command(self, message: str) -> None:
+        self._log.write("")
+        self._log.write(f"[blue]You:[/blue] {message}")
+        try:
+            from pyclopse.core.commands import CommandContext
+            session = None
+            if self.gateway.session_manager and self._current_agent_id:
+                try:
+                    session = await self.gateway.session_manager.get_or_create_session(
+                        agent_id=self._current_agent_id,
+                        channel="tui",
+                        user_id="tui_user",
+                    )
+                except Exception:
+                    pass
+            ctx = CommandContext(
+                gateway=self.gateway,
+                session=session,
+                sender_id="tui_user",
+                channel="tui",
+            )
+            result = await self.gateway._command_registry.dispatch(message, ctx)
+            self._log.write("")
+            if result is not None:
+                self._log.write(f"[cyan]Command:[/cyan] {result}")
+        except Exception as e:
+            self._log.write("")
+            self._log.write(f"[red]Command error:[/red] {str(e)}")
+
+    def _stream_replace_lines(self, text: str, previous_line_count: int) -> int:
+        """Replace last N rendered lines in place for live streaming output."""
+        from textual.geometry import Size
+        log = self._log
+        if previous_line_count > 0 and log.lines:
+            del log.lines[-previous_line_count:]
+            log._line_cache.clear()
+            log.virtual_size = Size(log._widest_line_width, len(log.lines))
+        before = len(log.lines)
+        log.write(text)
+        return len(log.lines) - before
+
+    @work(exclusive=True)
+    async def _process_message(self, message: str) -> None:
+        self._is_processing = True
+        try:
+            # Gateway streams chunks via the event bus (_bus_chunk) so the TUI's
+            # _drain_events / _display_event handles live rendering safely on the
+            # Textual main thread.  No on_chunk callback needed here.
+            await self.gateway.handle_message(
+                channel="tui",
+                sender="tui_user",
+                sender_id="tui_user",
+                content=message,
+                agent_id=self._current_agent_id,
+            )
+        except Exception as e:
+            self._log.write("")
+            self._log.write(f"[red]Error:[/red] {str(e)}")
+        finally:
+            self._is_processing = False
+
+
 # ─────────────────────────────── View: Agent Card ────────────────────────────
 
 
@@ -1576,6 +1929,7 @@ class GatewayDashboard(App):
     """
 
     BINDINGS = [
+        Binding("c", "view_chat", "c:Chat", show=True),
         Binding("0", "view_agentcard", "0:Card", show=True),
         Binding("1", "view_sessions", "1:Sessions", show=True),
         Binding("2", "view_history", "2:History", show=True),
@@ -1603,7 +1957,7 @@ class GatewayDashboard(App):
 
     _log_pct: reactive[int] = reactive(30)
     _active_agent: reactive[str] = reactive("")
-    _active_view: reactive[str] = reactive("agentcard")
+    _active_view: reactive[str] = reactive("chat")
 
     def __init__(self, gateway: Any = None) -> None:
         super().__init__()
@@ -1617,6 +1971,7 @@ class GatewayDashboard(App):
         yield Header(show_clock=True)
         yield Tabs(id="agent-tabs")
         yield Tabs(
+            Tab("Chat", id="tab-chat"),
             Tab("Card", id="tab-agentcard"),
             Tab("Sessions", id="tab-sessions"),
             Tab("History", id="tab-history"),
@@ -1633,7 +1988,8 @@ class GatewayDashboard(App):
         yield Static("", id="status-bar")
 
         with Vertical(id="split-area"):
-            with ContentSwitcher(id="detail-pane", initial="view-agentcard"):
+            with ContentSwitcher(id="detail-pane", initial="view-chat"):
+                yield ChatView(self.gateway, id="view-chat")
                 yield AgentCardView(self.gateway, id="view-agentcard")
                 yield SessionsView(self.gateway, id="view-sessions")
                 yield HistoryView(self.gateway, id="view-history")
@@ -1721,6 +2077,7 @@ class GatewayDashboard(App):
             agent_tabs.add_tab(Tab(agent_id, id=f"agent-{agent_id}"))
         if agents:
             self._active_agent = agents[0]
+            self.query_one(ChatView).refresh_for_agent(agents[0])
 
     @on(Tabs.TabActivated, "#agent-tabs")
     def on_agent_tab_activated(self, event: Tabs.TabActivated) -> None:
@@ -1735,6 +2092,7 @@ class GatewayDashboard(App):
     @on(Tabs.TabActivated, "#view-tabs")
     def on_view_tab_activated(self, event: Tabs.TabActivated) -> None:
         tab_map = {
+            "tab-chat": "chat",
             "tab-agentcard": "agentcard",
             "tab-sessions": "sessions",
             "tab-history": "history",
@@ -1766,7 +2124,9 @@ class GatewayDashboard(App):
         if not agent_id or agent_id == "(no agents)":
             return
         view = self._active_view
-        if view == "agentcard":
+        if view == "chat":
+            self.query_one(ChatView).refresh_for_agent(agent_id)
+        elif view == "agentcard":
             self.query_one(AgentCardView).refresh_for_agent(agent_id)
         elif view == "sessions":
             self.query_one(SessionsView).refresh_for_agent(agent_id)
@@ -1842,6 +2202,10 @@ class GatewayDashboard(App):
         bar.update("  |  ".join(parts) if parts else "Gateway active")
 
     # ── Actions ───────────────────────────────────────────────────────────────
+
+    def action_view_chat(self) -> None:
+        self._switch_view("chat")
+        self._set_view_tab("tab-chat")
 
     def action_view_agentcard(self) -> None:
         self._switch_view("agentcard")
@@ -1956,7 +2320,7 @@ class GatewayDashboard(App):
     def action_refresh_view(self) -> None:
         if self._active_view == "agentcard":
             self.query_one(AgentCardView).force_refresh()
-        else:
+        elif self._active_view != "chat":
             self._refresh_view_for_agent(self._active_agent)
 
     def action_shrink_log(self) -> None:
