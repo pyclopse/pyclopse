@@ -1802,7 +1802,8 @@ class Gateway:
                     "thinking": _tui_thinking,
                     "originating_channel": "telegram",
                 })
-                await self._fan_out_response(session, originating_channel="telegram", response_text=clean_response)
+                if getattr(getattr(agent, "config", None), "channel_sync", True):
+                    await self._fan_out_response(session, originating_channel="telegram", response_text=clean_response)
 
             # Usage counters
             self._usage["messages_total"] += 1
@@ -2767,7 +2768,7 @@ class Gateway:
                     try:
                         await bot.send_message(
                             chat_id=chat_id,
-                            text=f"🖥️ {sender}: {content}",
+                            text=content,
                         )
                     except Exception as e:
                         self._logger.error(f"fan-out user message telegram error: {e}")
@@ -2776,7 +2777,7 @@ class Gateway:
                     try:
                         await self._slack_web_client.chat_postMessage(
                             channel=ep.get("sender_id", ""),
-                            text=f"🖥️ {sender}: {content}",
+                            text=content,
                         )
                     except Exception as e:
                         self._logger.error(f"fan-out user message slack error: {e}")
@@ -2979,11 +2980,12 @@ class Gateway:
             # Forward the user's message to every other channel so all parties
             # see the full conversation, not just the agent's replies.
             # Fire-and-forget: don't block the LLM call on Telegram/Slack network I/O.
-            asyncio.create_task(
-                self._fan_out_user_message(
-                    session, originating_channel=channel, sender=sender, content=content,
+            if getattr(getattr(agent, "config", None), "channel_sync", True):
+                asyncio.create_task(
+                    self._fan_out_user_message(
+                        session, originating_channel=channel, sender=sender, content=content,
+                    )
                 )
-            )
 
         # For non-job channels, always stream via event bus so all subscribers
         # (including the TUI) get live chunk updates without needing an on_chunk
@@ -3072,7 +3074,8 @@ class Gateway:
 
         # Fan out to every other channel that has interacted with this session
         if response_text and session and channel not in ("job",):
-            await self._fan_out_response(session, originating_channel=channel, response_text=response_text)
+            if getattr(getattr(agent, "config", None), "channel_sync", True):
+                await self._fan_out_response(session, originating_channel=channel, response_text=response_text)
 
         return response_text
 

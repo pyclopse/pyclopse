@@ -470,6 +470,14 @@ class AgentConfig(BaseModel):
         default_factory=_VaultConfig,
         validation_alias=AliasChoices("vault"),
     )
+    # Cross-channel sync — when enabled, messages and agent responses are
+    # mirrored to every other channel that has interacted with this agent.
+    # Messages appear natively in each channel's history (no source prefix).
+    # Defaults to True so all channels stay in sync out of the box.
+    channel_sync: bool = Field(
+        default=True,
+        validation_alias=AliasChoices("channel_sync", "channelSync"),
+    )
 
     # ── Workflow: orchestrator / iterative_planner ────────────────────────────
     # workflow: orchestrator

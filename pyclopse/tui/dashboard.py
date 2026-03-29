@@ -1343,13 +1343,6 @@ class ChatView(Vertical):
             except asyncio.QueueEmpty:
                 break
 
-    _CHANNEL_ICON: Dict[str, str] = {
-        "telegram": "📱",
-        "slack": "💬",
-        "http": "🌐",
-        "slack_socket": "💬",
-    }
-
     def _display_event(self, event: dict) -> None:
         """Render a cross-channel event in the chat log."""
         from pyclopse.agents.runner import strip_thinking_tags as _strip_thinking
@@ -1412,15 +1405,12 @@ class ChatView(Vertical):
         if channel == "tui" or originating == "tui":
             return
 
-        # ── Cross-channel events ──────────────────────────────────────────────
-        icon = self._CHANNEL_ICON.get(channel, "📡")
-        label = f"[dim]{icon} {channel}[/dim]"
-
+        # ── Cross-channel events — appear natively, no source label ──────────
         if etype == "user_message":
             sender = event.get("sender", "user")
             content = event.get("content", "")
             self._log.write("")
-            self._log.write(f"{label} [blue]{sender}:[/blue] {content}")
+            self._log.write(f"[blue]{sender}:[/blue] {content}")
         elif etype == "agent_response":
             agent_name = event.get("agent_name", "agent")
             content = event.get("content", "")
@@ -1428,8 +1418,8 @@ class ChatView(Vertical):
             self._log.write("")
             if thinking and show_thinking:
                 safe_thinking = thinking.replace("[", "\\[")
-                self._log.write(f"{label} [dim]{safe_thinking}[/dim]")
-            self._log.write(f"{label} [green]{agent_name}:[/green] {content}")
+                self._log.write(f"[dim]{safe_thinking}[/dim]")
+            self._log.write(f"[green]{agent_name}:[/green] {content}")
 
     # ── Command completion ────────────────────────────────────────────────────
 
