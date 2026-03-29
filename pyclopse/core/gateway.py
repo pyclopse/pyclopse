@@ -2830,8 +2830,19 @@ class Gateway:
                 )
                 if bot and chat_id:
                     try:
-                        for chunk in self._split_message(response_text):
-                            await bot.send_message(chat_id=chat_id, text=chunk)
+                        from pyclopse.agents.runner import (
+                            strip_thinking_tags,
+                            format_thinking_for_telegram,
+                        )
+                        tg_text = format_thinking_for_telegram(response_text)
+                        if tg_text:
+                            # Has thinking tags — send as HTML with expandable blockquote
+                            await bot.send_message(chat_id=chat_id, text=tg_text, parse_mode="HTML")
+                        else:
+                            # No thinking tags — strip any stray tags and send plain
+                            clean = strip_thinking_tags(response_text)
+                            for chunk in self._split_message(clean):
+                                await bot.send_message(chat_id=chat_id, text=chunk)
                         self._logger.info("fan-out: delivered to telegram chat_id=%s", chat_id)
                     except Exception as e:
                         self._logger.error(f"fan-out telegram error: {e}")
@@ -2842,9 +2853,10 @@ class Gateway:
             elif ch == "slack":
                 if self._slack_web_client:
                     try:
+                        from pyclopse.agents.runner import strip_thinking_tags
                         await self._slack_web_client.chat_postMessage(
                             channel=sender_id,
-                            text=response_text,
+                            text=strip_thinking_tags(response_text),
                         )
                     except Exception as e:
                         self._logger.error(f"fan-out slack error: {e}")
