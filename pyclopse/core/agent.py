@@ -714,14 +714,34 @@ class Agent:
         is available, the session runner is evicted, a new one is created with
         the next model, and a user-visible notice is prepended to the response.
 
+        **Streaming and thinking separation** — when ``on_chunk`` is provided
+        (or when the gateway creates its internal ``_bus_chunk``), the response
+        is streamed chunk-by-chunk from ``runner.run_stream()``.  Chunks are
+        split into two lists by the ``is_reasoning`` flag:
+
+        - ``_thinking_parts`` — ``is_reasoning=True`` chunks (raw thinking text,
+          no XML tags from the provider)
+        - ``_response_parts`` — ``is_reasoning=False`` chunks (actual reply)
+
+        When ``runner.show_thinking`` is True and thinking chunks were received,
+        the returned string wraps thinking in ``<thinking>…</thinking>`` so that
+        downstream consumers (``_fan_out_response`` → Telegram, TUI display) can
+        format it correctly using ``format_thinking_for_telegram()``.  This is
+        critical for cross-channel sync: without this reconstruction the raw
+        thinking text would arrive at Telegram as plain text.
+
         Args:
             prompt (str): The user message text.
             session (Session): The active session carrying model overrides and
                 fallback state in ``session.context``.
+            on_chunk (Optional[Callable]): Async callback ``(text, is_reasoning)``
+                fired for each streaming chunk.  The gateway always passes its
+                ``_bus_chunk`` closure here for non-job channels.
 
         Returns:
             str: The agent's text response, possibly prefixed with a fallback
-                notice.
+                notice.  Contains ``<thinking>`` tags when ``show_thinking`` is
+                True and the provider emitted reasoning content.
 
         Raises:
             Exception: Re-raises the last exception when all models in the

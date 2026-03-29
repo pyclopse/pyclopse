@@ -444,6 +444,7 @@ agents:
     contextWindow: 200000             # context window in tokens
     use_fastagent: true               # required — use FastAgent execution engine
     show_thinking: false              # show <thinking> blocks to users
+    channelSync: true                 # mirror messages/responses to all other channels
     max_iterations: 20                # max agentic loop iterations
     max_tokens: 16384                 # max tokens per response
 
@@ -1225,6 +1226,43 @@ Channel adapters are the boundary between external messaging platforms and the G
 - Optional pulse heartbeat to a monitoring channel
 
 **Third-party plugins** are discovered via `pyclopse.channels` entry point group or `plugins.channels` list in config.
+
+---
+
+### Cross-Channel Sync
+
+**Files:** `pyclopse/core/gateway.py` (`_publish`, `_fan_out_user_message`, `_fan_out_response`, `handle_message`)
+
+When `channelSync: true` (the default), every message and agent response is mirrored to all other channels that have interacted with the same agent session. Messages appear natively — no source prefix — as if typed locally in each channel.
+
+**Config:**
+
+```yaml
+agents:
+  via:
+    channelSync: true   # default — mirror all channels
+  private:
+    channelSync: false  # this agent stays siloed
+```
+
+**Two delivery paths run in parallel:**
+
+| Path | What it does |
+|------|-------------|
+| **Event bus** (`_publish`) | Asyncio queues consumed by the TUI every 0.3 s. Event types: `user_message`, `agent_response`, `stream_chunk` (live LLM chunks). |
+| **Direct API fan-out** | `_fan_out_user_message` (fire-and-forget task) and `_fan_out_response` send to Telegram/Slack via bot APIs. |
+
+**Endpoint tracking** — every inbound message updates two stores:
+- `_known_endpoints[agent_id][channel]` — in-memory gateway cache; updated on every message
+- `session.context["channel_endpoints"]` — persisted to disk; restored on session resume
+
+Each endpoint stores `sender_id`, `sender`, and (for Telegram) `bot_name` so the correct bot is used regardless of which channel originated the message.
+
+**Thinking formatting in fan-out** — when `show_thinking: true`, `agent.handle_message` reconstructs `<thinking>…</thinking>` tags from `is_reasoning=True` stream chunks so that `_fan_out_response` can format them correctly:
+- Telegram: `format_thinking_for_telegram()` → expandable blockquote spoiler
+- Slack: `strip_thinking_tags()` → plain text
+
+**The TUI is a first-class channel.** It calls `handle_message(channel="tui")` with no `on_chunk` callback. The gateway creates an internal `_bus_chunk` closure for all non-job channels that publishes `stream_chunk` events; the TUI's `_drain_events` timer picks these up and renders them safely on the Textual main thread. Switching agents in the TUI clears the log and reloads the last 40 messages from the session's `history.json`.
 
 ---
 

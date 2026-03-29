@@ -230,6 +230,24 @@ class Gateway:
     messages regardless of origin channel.  It returns the agent reply string.
     Job execution for agent-type jobs flows through ``_agent_executor()``
     which always strips thinking tags before delivering results.
+
+    **Cross-channel sync** — when ``agent.config.channel_sync`` is True (the
+    default), every inbound message and agent response is mirrored to all other
+    channels that have interacted with the same agent session.  Messages appear
+    natively in each channel's history with no source prefix.  The sync system
+    has two delivery paths:
+
+    - *Event bus* (``_publish``) — asyncio queues consumed by the TUI every
+      0.3 s via ``_drain_events``.  Three event types: ``user_message``,
+      ``agent_response``, and ``stream_chunk`` (incremental LLM output).
+    - *Direct API fan-out* — ``_fan_out_user_message`` (fire-and-forget) and
+      ``_fan_out_response`` send to Telegram/Slack via their bot APIs.
+      Thinking content is formatted as expandable blockquotes for Telegram and
+      stripped for Slack.
+
+    The TUI is a first-class channel: it calls ``handle_message(channel="tui")``
+    without an ``on_chunk`` callback and renders streaming output from
+    ``stream_chunk`` events on its Textual main thread.
     """
 
     def __init__(self, config_path: Optional[str] = None):
@@ -2730,7 +2748,43 @@ class Gateway:
             pass
 
     def _publish(self, agent_id: str, event: dict) -> None:
-        """Publish a message event to all subscribers for this agent (non-blocking)."""
+        """Publish an event to all TUI/subscriber queues for this agent (non-blocking).
+
+        The event bus is the backbone of cross-channel sync for the TUI.  Every
+        inbound message and outbound response is published here so the TUI chat
+        view can display activity from all channels in a single unified log.
+
+        Event types:
+
+        ``user_message``
+            A user sent a message on some channel.  The TUI shows these for
+            non-TUI channels so the operator can follow conversations happening
+            elsewhere (e.g. a Telegram message appearing in the TUI chat log).
+            Only published when ``agent.config.channel_sync`` is True, except
+            for TUI-originating messages which are always published so the
+            streaming state machine can track them.
+
+        ``agent_response``
+            The agent replied.  Published after the full response is assembled.
+            For TUI-originating messages this also signals the end of a streaming
+            session so ``_display_event`` can reset the live-streaming display.
+            Only published when ``agent.config.channel_sync`` is True, except
+            for TUI-originating responses.
+
+        ``stream_chunk``
+            One incremental text chunk from a streaming LLM response.  Published
+            by the ``_bus_chunk`` closure created in ``handle_message`` for every
+            non-job channel.  The TUI renders chunks from its own session
+            (``originating_channel == "tui"``) in real time via ``_drain_events``;
+            chunks from other channels are ignored by the TUI renderer.
+
+        Delivery is best-effort: if a subscriber's queue is full the event is
+        dropped rather than blocking the caller.
+
+        Args:
+            agent_id (str): Agent whose subscribers should receive the event.
+            event (dict): Arbitrary dict; must include a ``"type"`` key.
+        """
         for q in list(self._agent_listeners.get(agent_id, [])):
             try:
                 q.put_nowait(event)
@@ -2746,9 +2800,31 @@ class Gateway:
     ) -> None:
         """Forward an inbound user message to every other channel endpoint.
 
-        Mirrors what the event bus does for the TUI (show all channels' traffic
-        in one view), but for channels that receive messages via API calls rather
-        than an event queue — currently Telegram and Slack.
+        Part of the cross-channel sync system.  When a user sends a message on
+        any channel, this method delivers the raw content to all other channels
+        that have previously interacted with this agent so every party sees the
+        full conversation.  Messages are delivered natively — no source prefix or
+        channel label — so they appear as if typed locally in the target channel.
+
+        Called as a fire-and-forget ``asyncio.create_task`` from
+        ``handle_message`` so Telegram/Slack network I/O does not block the LLM
+        call.  Only invoked when ``agent.config.channel_sync`` is True.
+
+        The TUI and job channels are excluded: the TUI receives all activity via
+        the event bus (``_publish``), and job channels are ephemeral.
+
+        Endpoint lookup merges the gateway-level ``_known_endpoints`` cache
+        (updated on every inbound message) with ``session.context["channel_endpoints"]``
+        (persisted to disk so endpoints survive restarts).  The stored
+        ``bot_name`` field is used to select the exact Telegram bot the user is
+        conversing with rather than falling back to the first configured bot.
+
+        Args:
+            session: Active session for the agent.
+            originating_channel (str): Channel the message arrived on (excluded
+                from fan-out to avoid echo).
+            sender (str): Display name of the sender.
+            content (str): Raw message text to forward.
         """
         gw_eps = self._known_endpoints.get(session.agent_id, {})
         sess_eps = session.context.get("channel_endpoints", {})
@@ -2791,13 +2867,37 @@ class Gateway:
     ) -> None:
         """Deliver an agent response to every channel endpoint OTHER than the originator.
 
-        Channel endpoints are accumulated in ``session.context["channel_endpoints"]``
-        each time a message arrives.  The TUI receives responses via the event bus
-        (already published by the caller) so it is excluded from direct delivery here.
+        Part of the cross-channel sync system.  After the agent produces a
+        response, this method sends it to every other channel that has previously
+        interacted with this agent.  Responses appear natively — no source label —
+        as if the agent replied directly in each channel.  Only invoked when
+        ``agent.config.channel_sync`` is True.
 
-        The gateway-level ``_known_endpoints`` cache is also consulted so that
-        fan-out works even when the session has been reset or when a channel hasn't
-        sent a message yet in this session (e.g. first TUI message before Telegram).
+        **Thinking formatting** is handled per-channel:
+
+        - *Telegram*: ``format_thinking_for_telegram()`` is called first.  If the
+          response contains ``<thinking>`` blocks (either inline tags or blocks
+          reconstructed from ``is_reasoning=True`` stream chunks), they are
+          rendered as an expandable ``<blockquote>`` spoiler.  Falls back to
+          ``strip_thinking_tags()`` for plain delivery when no thinking is present.
+        - *Slack*: ``strip_thinking_tags()`` always applied — Slack does not
+          support the Telegram HTML thinking format.
+
+        The TUI and job channels are excluded: the TUI receives the agent response
+        via the ``agent_response`` event bus event published by the caller, and
+        job channels are ephemeral.
+
+        Endpoint lookup merges the gateway-level ``_known_endpoints`` cache with
+        ``session.context["channel_endpoints"]`` (session wins on conflict).  The
+        stored ``bot_name`` is used for Telegram so the response is sent via the
+        exact bot the user is conversing with.
+
+        Args:
+            session: Active session for the agent.
+            originating_channel (str): Channel the conversation started on
+                (excluded from fan-out to avoid echo).
+            response_text (str): Full agent response, potentially including
+                ``<thinking>`` blocks if ``show_thinking`` is enabled.
         """
         # Merge gateway-level cache with session-level endpoints; session wins
         gw_eps = self._known_endpoints.get(session.agent_id, {})
@@ -2872,7 +2972,65 @@ class Gateway:
         dispatch_response: bool = False,
         on_chunk: Optional[Callable[[str, bool], Awaitable[None]]] = None,
     ) -> Optional[str]:
-        """Handle an incoming message."""
+        """Handle an inbound message from any channel and return the agent reply.
+
+        This is the single entry point for all non-Telegram-streaming inbound
+        messages (TUI, Slack, HTTP API, job responses, subagents).  Telegram
+        messages that use streaming go through ``_stream_telegram_response``
+        instead; everything else routes here.
+
+        **Full pipeline:**
+
+        1. Deduplication (``message_id``-based, TTL 60 s)
+        2. Session lookup — ``_get_active_session`` for normal channels,
+           ``_get_or_create_session`` for job channel
+        3. Hook: ``message:received``
+        4. Allowlist / denylist / activation-mode checks
+        5. Command dispatch (``/slash`` commands short-circuit here)
+        6. Agent lookup + ``agent:bootstrap`` hook on first message
+        7. Endpoint registration — merges into ``_known_endpoints`` and
+           ``session.context["channel_endpoints"]`` preserving ``bot_name``
+        8. Event bus publish (``user_message``) — gated on ``channel_sync``
+        9. Cross-channel user-message fan-out — fire-and-forget task, gated
+           on ``channel_sync``
+        10. ``_bus_chunk`` closure — always created for non-job channels;
+            publishes ``stream_chunk`` events to the event bus so the TUI can
+            render streaming output on its 0.3 s drain timer.  Any
+            caller-supplied ``on_chunk`` is also called from within
+            ``_bus_chunk``.
+        11. ``agent.handle_message`` — runs the LLM, fires chunks via
+            ``_bus_chunk``
+        12. Token snapshot, send-policy check
+        13. Event bus publish (``agent_response``) — gated on ``channel_sync``
+            except for ``channel == "tui"`` (needed to reset streaming state)
+        14. Hook: ``agent:after_response``
+        15. Usage counters, audit log, ``message:sent`` hook
+        16. Optional ``dispatch_response`` direct delivery
+        17. Cross-channel response fan-out — ``_fan_out_response``, gated on
+            ``channel_sync``
+
+        Args:
+            channel (str): Originating channel identifier (``"tui"``,
+                ``"slack"``, ``"http"``, ``"job"``, etc.).
+            sender (str): Human-readable sender display name.
+            sender_id (str): Stable identifier for the sender (used as session
+                key and fan-out address).
+            content (str): Raw message text.
+            message_id (Optional[str]): Deduplication key; omit for channels
+                that don't provide message IDs.
+            agent_id (Optional[str]): Target agent; defaults to the first
+                configured agent.
+            dispatch_response (bool): If True, also deliver the reply via
+                ``_deliver_to_channel`` after returning.
+            on_chunk (Optional[Callable]): Async callback ``(text, is_reasoning)``
+                fired for each streaming chunk in addition to the event-bus
+                publish.  Pass ``None`` (the default) to rely solely on the
+                event bus — the TUI does this.
+
+        Returns:
+            Optional[str]: Agent reply text, or None if suppressed by
+                send-policy, activation-mode, or a slash command.
+        """
         # Create incoming message
         message = IncomingMessage(
             id=message_id or "",

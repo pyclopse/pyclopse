@@ -131,6 +131,20 @@ Skills live in `~/.pyclopse/skills/` (global) or `~/.pyclopse/agents/{name}/skil
 
 Channel plugins implement `ChannelPlugin` ABC from `pyclopse/channels/plugin.py`. Discovery: entry points group `pyclopse.channels` or explicit `plugins.channels` list in config. Each plugin gets a `GatewayHandle` for dispatching inbound messages and sending outbound replies.
 
+### Cross-Channel Sync
+
+`channelSync: true` (default, per-agent) mirrors every message and agent response to all other channels that have interacted with the same agent session. Messages appear natively with no source label.
+
+**Two delivery paths:**
+- **Event bus** (`_publish`) — `user_message`, `agent_response`, and `stream_chunk` events consumed by TUI subscribers via `subscribe_agent()` / `_drain_events()` (0.3 s timer).
+- **Direct API fan-out** — `_fan_out_user_message` (fire-and-forget `asyncio.create_task`) and `_fan_out_response` send to Telegram/Slack APIs.
+
+**TUI is a first-class channel.** `handle_message(channel="tui")` is called with no `on_chunk`. The gateway always creates a `_bus_chunk` closure for non-job channels that publishes `stream_chunk` events; TUI renders them on the Textual main thread via `_drain_events`. TUI agent switch clears the log and loads the last 40 messages from `session.history_path`.
+
+**Thinking in fan-out.** `agent.handle_message` tracks `_thinking_parts` (is_reasoning=True) and `_response_parts` separately. When `show_thinking=True` and thinking chunks are present, it reconstructs `<thinking>…</thinking>` tags so `format_thinking_for_telegram()` can render expandable blockquotes in fan-out responses — same as the native Telegram streaming path.
+
+**Endpoint tracking.** `_known_endpoints[agent_id][channel]` (in-memory) + `session.context["channel_endpoints"]` (persisted). Each endpoint stores `sender_id`, `sender`, `bot_name`. Restored into `_known_endpoints` on `_get_active_session`. All updates use merge (`setdefault` + field-level) not replace, preserving `bot_name` set by pre-route registration.
+
 ### Hook System
 
 Hooks fire on gateway events (`gateway:startup`, `message:received`, `command:reset`, etc.). Bundled hooks: `session-memory` (writes conversation history to memory on reset), `boot-md` (injects `BOOT.md` from `~/.pyclopse/BOOT.md` or `~/BOOT.md` into agent context at startup). Custom hooks are Python scripts registered in config.
