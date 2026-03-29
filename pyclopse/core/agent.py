@@ -761,11 +761,15 @@ class Agent:
             if on_chunk is not None:
                 # Streaming path: fire on_chunk for each chunk, accumulate for vault/return
                 from pyclopse.agents.runner import strip_thinking_tags as _strip
-                _buf: List[str] = []
+                _thinking_parts: List[str] = []
+                _response_parts: List[str] = []
                 _stream = runner.run_stream(enriched_prompt)
                 try:
                     async for chunk_text, is_reasoning in _stream:
-                        _buf.append(chunk_text)
+                        if is_reasoning:
+                            _thinking_parts.append(chunk_text)
+                        else:
+                            _response_parts.append(chunk_text)
                         await on_chunk(chunk_text, is_reasoning)
                 except BaseException:
                     # Abnormal exit (exception or CancelledError): close the generator
@@ -775,7 +779,18 @@ class Agent:
                     # (it would raise StopIteration → RuntimeError inside a coroutine).
                     await _stream.aclose()
                     raise
-                response = _strip("".join(_buf)) if not runner.show_thinking else "".join(_buf)
+                if runner.show_thinking:
+                    _thinking = "".join(_thinking_parts)
+                    _resp = _strip("".join(_response_parts))
+                    if _thinking:
+                        # Wrap thinking in tags so downstream (fan-out, Telegram) can
+                        # format it correctly via format_thinking_for_telegram().
+                        response = f"<thinking>{_thinking}</thinking>{_resp}"
+                    else:
+                        # No is_reasoning chunks — thinking may be inline as tags
+                        response = "".join(_response_parts)
+                else:
+                    response = _strip("".join(_thinking_parts + _response_parts))
             else:
                 response = await runner.run(enriched_prompt)
             # Fire background vault ingestion (non-blocking)
