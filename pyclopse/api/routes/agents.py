@@ -137,21 +137,23 @@ async def list_agents():
     """
     try:
         gateway = get_gateway()
-        
-        if not hasattr(gateway, 'agents'):
+
+        am = getattr(gateway, "_agent_manager", None)
+        if not am:
             return {"agents": []}
-        
+
         agents = []
-        for agent_id, agent in gateway.agents.items():
+        for agent_id, agent in am.agents.items():
+            cfg = getattr(agent, "config", None)
             agents.append({
                 "id": agent_id,
-                "name": agent.name if hasattr(agent, 'name') else agent_id,
-                "model": agent.model if hasattr(agent, 'model') else "unknown",
-                "status": "running" if hasattr(agent, 'is_running') and agent.is_running else "idle",
+                "name": cfg.name if cfg else agent_id,
+                "model": cfg.model if cfg else "unknown",
+                "status": "running",
             })
-        
+
         return {"agents": agents}
-    
+
     except Exception as e:
         logger.error(f"Error listing agents: {e}")
         raise HTTPException(status_code=500, detail=str(e))
@@ -174,10 +176,11 @@ async def get_agent(agent_id: str):
     try:
         gateway = get_gateway()
         
-        if not hasattr(gateway, 'agents') or agent_id not in gateway.agents:
+        am = getattr(gateway, "_agent_manager", None)
+        if not am or agent_id not in am.agents:
             raise HTTPException(status_code=404, detail=f"Agent '{agent_id}' not found")
-        
-        agent = gateway.agents[agent_id]
+
+        agent = am.agents[agent_id]
         
         return AgentResponse(
             id=agent_id,
@@ -215,10 +218,11 @@ async def update_agent(agent_id: str, config: AgentConfigUpdate):
     try:
         gateway = get_gateway()
         
-        if not hasattr(gateway, 'agents') or agent_id not in gateway.agents:
+        am = getattr(gateway, "_agent_manager", None)
+        if not am or agent_id not in am.agents:
             raise HTTPException(status_code=404, detail=f"Agent '{agent_id}' not found")
-        
-        agent = gateway.agents[agent_id]
+
+        agent = am.agents[agent_id]
         
         # Apply config updates
         if config.model and hasattr(agent, 'model'):
@@ -263,10 +267,11 @@ async def create_session(agent_id: str, channel: Optional[str] = None):
     try:
         gateway = get_gateway()
         
-        if not hasattr(gateway, 'agents') or agent_id not in gateway.agents:
+        am = getattr(gateway, "_agent_manager", None)
+        if not am or agent_id not in am.agents:
             raise HTTPException(status_code=404, detail=f"Agent '{agent_id}' not found")
-        
-        agent = gateway.agents[agent_id]
+
+        agent = am.agents[agent_id]
         
         # Create new session
         if hasattr(agent, 'create_session'):
@@ -309,10 +314,11 @@ async def list_sessions(agent_id: str):
     try:
         gateway = get_gateway()
         
-        if not hasattr(gateway, 'agents') or agent_id not in gateway.agents:
+        am = getattr(gateway, "_agent_manager", None)
+        if not am or agent_id not in am.agents:
             raise HTTPException(status_code=404, detail=f"Agent '{agent_id}' not found")
-        
-        agent = gateway.agents[agent_id]
+
+        agent = am.agents[agent_id]
         
         sessions = []
         if hasattr(agent, 'sessions'):
@@ -403,10 +409,11 @@ async def get_session_messages(agent_id: str, session_id: str):
     try:
         gateway = get_gateway()
         
-        if not hasattr(gateway, 'agents') or agent_id not in gateway.agents:
+        am = getattr(gateway, "_agent_manager", None)
+        if not am or agent_id not in am.agents:
             raise HTTPException(status_code=404, detail=f"Agent '{agent_id}' not found")
-        
-        agent = gateway.agents[agent_id]
+
+        agent = am.agents[agent_id]
         
         if not hasattr(agent, 'sessions') or session_id not in agent.sessions:
             raise HTTPException(status_code=404, detail=f"Session '{session_id}' not found")
