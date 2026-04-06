@@ -1,8 +1,10 @@
 """CLI entry point for pyclopse.
 
 Usage:
-    pyclopse                        # Run gateway + TUI dashboard
-    pyclopse --headless             # Run without TUI (stdout only)
+    pyclopse                        # Run gateway + embedded TUI dashboard
+    pyclopse --headless             # Run gateway as a service (no TUI)
+    pyclopse tui                    # Connect TUI to a running gateway
+    pyclopse tui --url host:8080    # Connect to a remote gateway
     pyclopse --config ~/my.yaml    # Use a specific config file
     pyclopse --host 0.0.0.0 --port 9000
     pyclopse onboard                # First-time setup wizard
@@ -197,6 +199,32 @@ def create_parser() -> argparse.ArgumentParser:
     secret_get_parser = secret_sub.add_parser("get", help="Retrieve a secret value by name")
     secret_get_parser.add_argument("name", help="Secret name as registered in secrets config (e.g. MINIMAX_API_KEY)")
 
+    # tui command — connect dashboard to a running gateway
+    tui_parser = subparsers.add_parser(
+        "tui",
+        help="Launch TUI dashboard (connects to a running gateway)",
+    )
+    tui_parser.add_argument(
+        "--url",
+        type=str,
+        default="http://localhost:8080",
+        help="Gateway URL to connect to (default: http://localhost:8080)",
+    )
+
+    # service command — manage pyclopse as a system service
+    service_parser = subparsers.add_parser(
+        "service",
+        help="Manage pyclopse as a background service (launchd/systemd)",
+    )
+    service_sub = service_parser.add_subparsers(dest="service_command", help="Service commands")
+    service_sub.add_parser("install", help="Install and enable the service")
+    service_sub.add_parser("uninstall", help="Disable and remove the service")
+    service_sub.add_parser("start", help="Start the service")
+    service_sub.add_parser("stop", help="Stop the service")
+    service_sub.add_parser("restart", help="Restart the service")
+    service_sub.add_parser("status", help="Check service status")
+    _logs_p = service_sub.add_parser("logs", help="Tail service logs")
+    _logs_p.add_argument("-n", "--lines", type=int, default=50, help="Number of lines (default: 50)")
 
     return parser
 
@@ -458,6 +486,57 @@ async def run_gateway_with_tui(
     _force_exit()
 
 
+async def run_tui_remote(url: str = "http://localhost:8080"):
+    """Launch the TUI dashboard connected to a remote gateway."""
+    from .tui.remote_client import RemoteGatewayClient
+    from .tui.dashboard import run_dashboard
+
+    client = RemoteGatewayClient(url)
+    try:
+        await client.connect()
+    except ConnectionError as e:
+        print(f"Error: {e}")
+        print(f"Is the gateway running? Start it with: pyclopse --headless")
+        return
+    print(f"Connected to gateway at {url}")
+    try:
+        await run_dashboard(client=client)
+    finally:
+        await client.close()
+
+
+def cmd_service(args):
+    """Handle service command."""
+    from .service.manager import get_manager
+
+    subcmd = getattr(args, "service_command", None)
+    if not subcmd:
+        print("Usage: pyclopse service {install|uninstall|start|stop|restart|status|logs}")
+        return
+
+    try:
+        mgr = get_manager()
+    except RuntimeError as e:
+        print(f"Error: {e}")
+        sys.exit(1)
+
+    if subcmd == "install":
+        print(mgr.install())
+    elif subcmd == "uninstall":
+        print(mgr.uninstall())
+    elif subcmd == "start":
+        print(mgr.start())
+    elif subcmd == "stop":
+        print(mgr.stop())
+    elif subcmd == "restart":
+        print(mgr.restart())
+    elif subcmd == "status":
+        print(mgr.status())
+    elif subcmd == "logs":
+        lines = getattr(args, "lines", 50)
+        print(mgr.logs(lines))
+
+
 def cmd_onboard(args):
     """Handle onboard command."""
     data_dir_str = args.data_dir or "~/.pyclopse"
@@ -624,6 +703,10 @@ def main():
         cmd_onboard(args)
         return
 
+    if args.command == "service":
+        cmd_service(args)
+        return
+
     if args.command == "init":
         cmd_init(args)
         return
@@ -647,6 +730,13 @@ def main():
     if args.command == "import-openclaw":
         from .tools.openclaw_import import cmd_import_openclaw
         cmd_import_openclaw(args)
+        return
+
+    if args.command == "tui":
+        try:
+            asyncio.run(run_tui_remote(args.url))
+        except KeyboardInterrupt:
+            print("\nTUI closed.")
         return
 
     # Default: run gateway (bare `pyclopse`)

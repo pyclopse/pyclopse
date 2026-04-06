@@ -2000,8 +2000,11 @@ class GatewayDashboard(App):
     _active_agent: reactive[str] = reactive("")
     _active_view: reactive[str] = reactive("chat")
 
-    def __init__(self, gateway: Any = None) -> None:
+    def __init__(self, gateway: Any = None, client: Any = None) -> None:
         super().__init__()
+        # The client abstraction layer — views should prefer self.client methods
+        # self.gateway is kept for backward compatibility with views not yet migrated
+        self.client = client
         self.gateway = gateway
         self._log_handler: Optional[_QueueLogHandler] = None
         self._suppressed_handlers: list[tuple[logging.Logger, logging.Handler]] = []
@@ -2497,7 +2500,16 @@ class GatewayDashboard(App):
 # ─────────────────────────────── Entry Point ─────────────────────────────────
 
 
-async def run_dashboard(gateway: Any = None) -> None:
-    """Run the gateway dashboard TUI."""
-    app = GatewayDashboard(gateway=gateway)
+async def run_dashboard(gateway: Any = None, client: Any = None) -> None:
+    """Run the gateway dashboard TUI.
+
+    Args:
+        gateway: Live Gateway instance for embedded mode.
+        client: A GatewayClient (Embedded or Remote) for decoupled mode.
+                If only gateway is passed, an EmbeddedGatewayClient is created.
+    """
+    if gateway and client is None:
+        from .embedded_client import EmbeddedGatewayClient
+        client = EmbeddedGatewayClient(gateway)
+    app = GatewayDashboard(gateway=gateway, client=client)
     await app.run_async()

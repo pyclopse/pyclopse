@@ -16,6 +16,9 @@ from .routes import hooks as hooks_routes
 from .routes import subagents as subagents_routes
 from .routes import reflect as reflect_routes
 from .routes import skills as skills_routes
+from .routes import events as events_routes
+from .routes import commands as commands_routes
+from .routes import tui as tui_routes
 
 logger = logging.getLogger("pyclopse.api")
 
@@ -127,6 +130,9 @@ def create_app(gateway: Optional[Any] = None) -> FastAPI:
     app.include_router(subagents_routes.router, prefix="/api/v1/subagents", tags=["subagents"])
     app.include_router(reflect_routes.router, prefix="/api/v1/reflect", tags=["reflect"])
     app.include_router(skills_routes.router, prefix="/api/v1/skills", tags=["skills"])
+    app.include_router(events_routes.router, prefix="/api/v1", tags=["events"])
+    app.include_router(commands_routes.router, prefix="/api/v1/commands", tags=["commands"])
+    app.include_router(tui_routes.router, prefix="/api/v1/tui", tags=["tui"])
 
     # Health check
     @app.get("/health")
