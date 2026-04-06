@@ -362,6 +362,26 @@ def _force_exit() -> None:
     _os._exit(0)
 
 
+def _is_service_installed() -> bool:
+    """Check if pyclopse is installed as a system service."""
+    import sys as _s
+    if _s.platform == "darwin":
+        return (Path.home() / "Library" / "LaunchAgents" / "com.pyclopse.gateway.plist").exists()
+    elif _s.platform.startswith("linux"):
+        return (Path.home() / ".config" / "systemd" / "user" / "pyclopse.service").exists()
+    return False
+
+
+def _print_service_hint() -> None:
+    """Print a hint about service install if not already installed."""
+    if not _is_service_installed():
+        print()
+        print("  TIP: Run pyclopse as a background service that starts on login:")
+        print("       pyclopse service install")
+        print("       Then connect the dashboard anytime with: pyclopse tui")
+        print()
+
+
 async def run_gateway(
     config_path: str = None, host: str = None, port: int = None, debug: bool = False
 ):
@@ -440,6 +460,7 @@ async def run_gateway_with_tui(
     mcp_port = config.gateway.mcp_port
 
     print(f"pyclopse v{__version__}")
+    _print_service_hint()
     print("Starting gateway + dashboard...")
 
     # MCP and API servers must be up BEFORE gateway.initialize() so that

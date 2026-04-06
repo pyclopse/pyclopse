@@ -1229,6 +1229,7 @@ class SummaryScreen(Screen):
         yield Static(id="summary-body", markup=True, classes="info-text")
         yield CaretListView(
             _caret_item("  ★  LAUNCH PYCLOPSE", "item-launch"),
+            _caret_item("  ★  INSTALL AS SERVICE + LAUNCH TUI", "item-service"),
             _caret_item("  EXIT",               "item-exit",   danger=True),
             id="summary-menu",
         )
@@ -1250,23 +1251,27 @@ class SummaryScreen(Screen):
         for aid, acfg in cfg.get("agents", {}).items():
             lines += f"    [bright_green]●[/bright_green]  {acfg.get('name', aid)}  [dim #007722]({aid})[/dim #007722]  ·  {acfg.get('model', '?')}\n"
 
-        default_dir = Path("~/.pyclopse").expanduser()
-        lines += f"\n  [bold bright_green]TO START[/bold bright_green]\n"
-        if dd.resolve() == default_dir.resolve():
-            lines += "    [cyan]$ pyclopse[/cyan]\n"
-        else:
-            lines += f"    [cyan]$ pyclopse --config {dd}/config/pyclopse.yaml[/cyan]\n"
+        lines += (
+            f"\n  [bold bright_green]LAUNCH OPTIONS[/bold bright_green]\n"
+            f"    [cyan]LAUNCH PYCLOPSE[/cyan]              Start gateway + TUI in this terminal\n"
+            f"    [cyan]INSTALL AS SERVICE[/cyan]           Run as background service (starts on login)\n"
+            f"                                 then connect dashboard with [cyan]pyclopse tui[/cyan]\n"
+        )
 
         self.query_one("#summary-body", Static).update(lines)
         self.query_one("#summary-menu").focus()
 
     @on(ListView.Selected, "#summary-menu")
     def on_selected(self, event: ListView.Selected) -> None:
+        app: WizardApp = self.app  # type: ignore[assignment]
         if event.item.id == "item-launch":
-            app: WizardApp = self.app  # type: ignore[assignment]
-            app.should_launch = True
+            app.launch_mode = "embedded"
+            app.exit()
+        elif event.item.id == "item-service":
+            app.launch_mode = "service"
             app.exit()
         else:
+            app.launch_mode = "none"
             self.app.exit()
 
     def action_noop(self) -> None:
@@ -1291,7 +1296,7 @@ class WizardApp(App):
         self.wiz_secrets  = secrets
         self.wiz_env      = env
         self.wiz_fresh    = fresh
-        self.should_launch = False
+        self.launch_mode = "none"  # "none", "embedded", or "service"
 
     def on_mount(self) -> None:
         if self.wiz_fresh:
@@ -1317,12 +1322,13 @@ def run_tui_wizard(
     env: dict,
     fresh: bool,
 ) -> tuple[dict, dict, dict, bool]:
-    """Run the TUI wizard and return (config, secrets, env, should_launch).
+    """Run the TUI wizard and return (config, secrets, env, launch_mode).
 
     Returns the accumulated wizard state after the user saves and exits.
+    launch_mode is one of: "none", "embedded", "service".
     If the user quits without saving, returns the original inputs unchanged
-    and should_launch=False.
+    and launch_mode="none".
     """
     app = WizardApp(data_dir, config, secrets, env, fresh)
     app.run()
-    return app.wiz_config, app.wiz_secrets, app.wiz_env, app.should_launch
+    return app.wiz_config, app.wiz_secrets, app.wiz_env, app.launch_mode

@@ -28,7 +28,7 @@ def run_onboard(data_dir: Path, section: str | None = None) -> None:
         sys.exit(1)
 
     from .tui import run_tui_wizard
-    config, secrets, env, should_launch = run_tui_wizard(
+    config, secrets, env, launch_mode = run_tui_wizard(
         data_dir=data_dir,
         config=config,
         secrets=secrets,
@@ -37,11 +37,42 @@ def run_onboard(data_dir: Path, section: str | None = None) -> None:
     )
 
     # Only write if the user completed the wizard (reached SummaryScreen).
-    # If they quit without saving, wiz_config won't have gateway/version keys.
     if config.get("providers") and config.get("agents"):
         write_all(data_dir, config, secrets, env)
 
-    if should_launch:
+    cfg_path = str(config_path(data_dir))
+
+    if launch_mode == "service":
+        _install_and_launch_service()
+    elif launch_mode == "embedded":
         import asyncio
         from pyclopse.__main__ import run_gateway_with_tui
-        asyncio.run(run_gateway_with_tui(config_path=str(config_path(data_dir))))
+        asyncio.run(run_gateway_with_tui(config_path=cfg_path))
+
+
+def _install_and_launch_service() -> None:
+    """Install the service, start it, then launch the TUI to connect."""
+    import asyncio
+
+    try:
+        from pyclopse.service.manager import get_manager
+        mgr = get_manager()
+        print(mgr.install())
+        print(mgr.start())
+        print()
+        print("Service installed and running.")
+        print("Connecting TUI dashboard...")
+        print()
+
+        from pyclopse.__main__ import run_tui_remote
+        asyncio.run(run_tui_remote())
+
+    except RuntimeError as e:
+        print(f"Error: {e}")
+        print("Service management is not available on this platform.")
+        print("You can start pyclopse manually with: pyclopse --headless")
+        sys.exit(1)
+    except Exception as e:
+        print(f"Service install failed: {e}")
+        print("You can start pyclopse manually with: pyclopse --headless")
+        sys.exit(1)
