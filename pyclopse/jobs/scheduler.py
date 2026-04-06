@@ -477,7 +477,14 @@ class JobScheduler:
             else:
                 job.next_run = self._cron_next(s.expr, _now, tz, s.stagger_seconds)
         elif isinstance(s, IntervalSchedule):
-            job.next_run = _now + timedelta(seconds=s.seconds)
+            # Anchor to last_run + interval so the cadence doesn't drift with
+            # execution time or restart timing.  If the computed next time is
+            # already in the past (long downtime, first run) fire immediately.
+            if job.last_run is not None:
+                candidate = job.last_run + timedelta(seconds=s.seconds)
+                job.next_run = candidate if candidate > _now else _now
+            else:
+                job.next_run = _now + timedelta(seconds=s.seconds)
         elif isinstance(s, AtSchedule):
             job.next_run = s.at if s.at > _now else None
         else:
