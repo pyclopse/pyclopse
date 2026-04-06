@@ -118,8 +118,9 @@ class SessionsView(Vertical):
     }
     """
 
-    def __init__(self, gateway: Any, **kwargs: Any) -> None:
+    def __init__(self, client: Any = None, gateway: Any = None, **kwargs: Any) -> None:
         super().__init__(**kwargs)
+        self.client = client
         self.gateway = gateway
         self._agent_id: str = ""
 
@@ -135,49 +136,62 @@ class SessionsView(Vertical):
         self._agent_id = agent_id
         self._load()
 
-    @work(thread=True)
-    def _load(self) -> None:
+    @work(exclusive=False)
+    async def _load(self) -> None:
         sessions: List[Any] = []
         context_window: Optional[int] = None
         try:
-            sm = getattr(self.gateway, "_session_manager", None)
-            if sm and self._agent_id:
-                sessions = sm.list_sessions_sync(agent_id=self._agent_id)
-            am = getattr(self.gateway, "_agent_manager", None)
-            if am:
-                agent = am.agents.get(self._agent_id)
-                if agent:
-                    context_window = getattr(agent.config, "context_window", None)
+            if self.client and self._agent_id:
+                raw = await self.client.list_sessions(self._agent_id)
+                sessions = raw
+                if raw and raw[0].get("context_window"):
+                    context_window = raw[0]["context_window"]
+            elif self.gateway:
+                sm = getattr(self.gateway, "_session_manager", None)
+                if sm and self._agent_id:
+                    sessions = sm.list_sessions_sync(agent_id=self._agent_id)
+                am = getattr(self.gateway, "_agent_manager", None)
+                if am:
+                    agent = am.agents.get(self._agent_id)
+                    if agent:
+                        context_window = getattr(agent.config, "context_window", None)
         except Exception as e:
             logger.debug(f"SessionsView load error: {e}")
-        self.app.call_from_thread(self._populate, sessions, context_window)
+        self._populate(sessions, context_window)
 
     def _populate(self, sessions: List[Any], context_window: Optional[int]) -> None:
         t = self.query_one("#sessions-table", DataTable)
         hint = self.query_one("#sessions-hint", Static)
         t.clear()
         for s in sessions:
-            updated = s.updated_at.strftime("%m-%d %H:%M") if s.updated_at else ""
-            active = "yes" if getattr(s, "is_active", False) else "no"
-            ctx = getattr(s, "context", {}) or {}
-            ctx_tokens = ctx.get("_ctx_tokens", 0) or 0
-            if context_window and context_window > 0 and ctx_tokens:
-                pct = ctx_tokens / context_window * 100
-                tok_str = f"{ctx_tokens:,}/{context_window:,} ({pct:.0f}%)"
+            # Handle both session objects and dicts (from client)
+            if isinstance(s, dict):
+                sid = s.get("id", "")
+                updated = s.get("updated_at", "")[:11]
+                active = "yes" if s.get("is_active") else "no"
+                ctx_tokens = s.get("ctx_tokens", 0) or 0
+                cw = s.get("context_window") or context_window
+                channel = s.get("channel", "")
+                user_id = str(s.get("user_id", ""))
+                msg_count = str(s.get("message_count", 0))
+            else:
+                sid = s.id
+                updated = s.updated_at.strftime("%m-%d %H:%M") if s.updated_at else ""
+                active = "yes" if getattr(s, "is_active", False) else "no"
+                ctx = getattr(s, "context", {}) or {}
+                ctx_tokens = ctx.get("_ctx_tokens", 0) or 0
+                cw = context_window
+                channel = s.channel or ""
+                user_id = str(s.user_id or "")
+                msg_count = str(s.message_count)
+            if cw and cw > 0 and ctx_tokens:
+                pct = ctx_tokens / cw * 100
+                tok_str = f"{ctx_tokens:,}/{cw:,} ({pct:.0f}%)"
             elif ctx_tokens:
                 tok_str = f"{ctx_tokens:,}"
             else:
                 tok_str = "—"
-            t.add_row(
-                s.id,
-                s.channel or "",
-                str(s.user_id or ""),
-                str(s.message_count),
-                tok_str,
-                updated,
-                active,
-                key=s.id,
-            )
+            t.add_row(sid, channel, user_id, msg_count, tok_str, updated, active, key=sid)
         count = len(sessions)
         hint.update(
             f"{count} session{'s' if count != 1 else ''} — agent: {self._agent_id}"
@@ -216,8 +230,9 @@ class HistoryView(Vertical):
     }
     """
 
-    def __init__(self, gateway: Any, **kwargs: Any) -> None:
+    def __init__(self, client: Any = None, gateway: Any = None, **kwargs: Any) -> None:
         super().__init__(**kwargs)
+        self.client = client
         self.gateway = gateway
         self._agent_id: str = ""
         self._session_id: str = ""
@@ -241,26 +256,31 @@ class HistoryView(Vertical):
         bar.update(f"Loading history for {session_id} …")
         self._do_load()
 
-    @work(thread=True)
-    def _do_load(self) -> None:
+    @work(exclusive=False)
+    async def _do_load(self) -> None:
         content = ""
         error = ""
         try:
-            sm = getattr(self.gateway, "_session_manager", None)
-            if sm:
-                sessions = sm.list_sessions_sync(agent_id=self._agent_id)
-                session = next(
-                    (s for s in sessions if s.id == self._session_id), None
-                )
-                if session and session.history_path and session.history_path.exists():
-                    raw = session.history_path.read_text()
-                    data = json.loads(raw)
-                    content = json.dumps(data, indent=2)
-                else:
-                    error = f"No history.json found for session: {self._session_id}"
+            if self.client:
+                content = await self.client.get_session_history(self._agent_id, self._session_id)
+                if not content:
+                    error = f"No history found for session: {self._session_id}"
+            elif self.gateway:
+                sm = getattr(self.gateway, "_session_manager", None)
+                if sm:
+                    sessions = sm.list_sessions_sync(agent_id=self._agent_id)
+                    session = next(
+                        (s for s in sessions if s.id == self._session_id), None
+                    )
+                    if session and session.history_path and session.history_path.exists():
+                        raw = session.history_path.read_text()
+                        data = json.loads(raw)
+                        content = json.dumps(data, indent=2)
+                    else:
+                        error = f"No history.json found for session: {self._session_id}"
         except Exception as e:
             error = f"Error: {e}\n{traceback.format_exc()}"
-        self.app.call_from_thread(self._display, content, error)
+        self._display(content, error)
 
     def _display(self, content: str, error: str) -> None:
         log = self.query_one("#history-log", RichLog)
@@ -299,8 +319,9 @@ class JobsView(Vertical):
     }
     """
 
-    def __init__(self, gateway: Any, **kwargs: Any) -> None:
+    def __init__(self, client: Any = None, gateway: Any = None, **kwargs: Any) -> None:
         super().__init__(**kwargs)
+        self.client = client
         self.gateway = gateway
         self._agent_id: str = ""
 
@@ -317,64 +338,73 @@ class JobsView(Vertical):
         self._load()
 
     def _load(self) -> None:
+        self._do_load_jobs()
+
+    @work(exclusive=False)
+    async def _do_load_jobs(self) -> None:
         t = self.query_one("#jobs-table", DataTable)
         bar = self.query_one("#jobs-bar", Static)
         t.clear()
 
-        js = getattr(self.gateway, "_job_scheduler", None)
-        if not js:
-            bar.update("Job scheduler not available")
-            return
+        jobs: list = []
+        if self.client:
+            try:
+                jobs = await self.client.list_jobs(self._agent_id)
+            except Exception as e:
+                logger.debug(f"JobsView load error: {e}")
+        elif self.gateway:
+            js = getattr(self.gateway, "_job_scheduler", None)
+            if js:
+                job_agent_map: dict = getattr(js, "_job_agents", {})
+                for job_id, job in js.jobs.items():
+                    if job_agent_map.get(job_id) != self._agent_id:
+                        continue
+                    sched = getattr(job, "schedule", None)
+                    if sched is not None:
+                        kind = getattr(sched, "kind", "")
+                        if kind == "cron":
+                            schedule_str = f"cron: {getattr(sched, 'expr', '')}"
+                        elif kind == "interval":
+                            schedule_str = f"every {getattr(sched, 'seconds', 0)}s"
+                        else:
+                            schedule_str = str(sched)
+                    else:
+                        schedule_str = "—"
+                    running = getattr(js, "_running_jobs", set())
+                    jobs.append({
+                        "id": job.id, "name": job.name or job.id,
+                        "schedule": schedule_str,
+                        "enabled": getattr(job, "enabled", True),
+                        "status": "running" if job.id in running else "idle",
+                        "next_run": job.next_run.strftime("%m-%d %H:%M") if getattr(job, "next_run", None) else "",
+                        "last_run": job.last_run.strftime("%m-%d %H:%M") if getattr(job, "last_run", None) else "",
+                        "run_count": getattr(job, "run_count", 0),
+                    })
 
-        job_agent_map: dict = getattr(js, "_job_agents", {})
-        agent_jobs = [
-            job
-            for job_id, job in js.jobs.items()
-            if job_agent_map.get(job_id) == self._agent_id
-        ]
-
-        for job in agent_jobs:
-            sched = getattr(job, "schedule", None)
-            if sched is not None:
-                kind = getattr(sched, "kind", "")
-                if kind == "cron":
-                    schedule_str = f"cron: {getattr(sched, 'expr', '')}"
-                elif kind == "interval":
-                    secs = getattr(sched, "seconds", 0)
-                    schedule_str = f"every {secs}s"
-                else:
-                    schedule_str = str(sched)
-            else:
-                schedule_str = "—"
-
-            enabled = "yes" if getattr(job, "enabled", True) else "no"
-            running = getattr(js, "_running_jobs", set())
-            status = "running" if job.id in running else "idle"
-
-            next_run = ""
-            if getattr(job, "next_run", None):
-                next_run = job.next_run.strftime("%m-%d %H:%M")
-
-            last_run = ""
-            if getattr(job, "last_run", None):
-                last_run = job.last_run.strftime("%m-%d %H:%M")
-
-            run_count = getattr(job, "run_count", 0)
-
+        for j in jobs:
+            nr = j.get("next_run", "")
+            lr = j.get("last_run", "")
+            # Truncate ISO timestamps to short format
+            if nr and len(nr) > 11:
+                try:
+                    from datetime import datetime as _dt
+                    nr = _dt.fromisoformat(nr).strftime("%m-%d %H:%M")
+                except Exception:
+                    pass
+            if lr and len(lr) > 11:
+                try:
+                    from datetime import datetime as _dt
+                    lr = _dt.fromisoformat(lr).strftime("%m-%d %H:%M")
+                except Exception:
+                    pass
             t.add_row(
-                job.name or job.id,
-                schedule_str,
-                enabled,
-                status,
-                next_run,
-                last_run,
-                str(run_count),
-                key=job.id,
+                j.get("name", ""), j.get("schedule", ""),
+                "yes" if j.get("enabled") else "no",
+                j.get("status", ""), nr, lr, str(j.get("run_count", 0)),
+                key=j.get("id", ""),
             )
-
-        count = len(agent_jobs)
         bar.update(
-            f"{count} job{'s' if count != 1 else ''} — agent: {self._agent_id}"
+            f"{len(jobs)} job{'s' if len(jobs) != 1 else ''} — agent: {self._agent_id}"
             "  \\[r = run now  v = view run history]"
         )
 
@@ -412,8 +442,9 @@ class SystemPromptView(Vertical):
     }
     """
 
-    def __init__(self, gateway: Any, **kwargs: Any) -> None:
+    def __init__(self, client: Any = None, gateway: Any = None, **kwargs: Any) -> None:
         super().__init__(**kwargs)
+        self.client = client
         self.gateway = gateway
         self._agent_id: str = ""
 
@@ -426,16 +457,19 @@ class SystemPromptView(Vertical):
         self.query_one("#sysprompt-bar", Static).update(f"Loading system prompt for {agent_id} …")
         self._load()
 
-    @work(thread=True)
-    def _load(self) -> None:
+    @work(exclusive=False)
+    async def _load(self) -> None:
         text = ""
         error = ""
         try:
-            from pyclopse.core.prompt_builder import build_system_prompt
-            text = build_system_prompt(agent_name=self._agent_id, config_dir="~/.pyclopse")
+            if self.client:
+                text = await self.client.get_system_prompt(self._agent_id)
+            else:
+                from pyclopse.core.prompt_builder import build_system_prompt
+                text = build_system_prompt(agent_name=self._agent_id, config_dir="~/.pyclopse")
         except Exception as e:
             error = f"Error building system prompt: {e}"
-        self.app.call_from_thread(self._display, text, error)
+        self._display(text, error)
 
     def _display(self, text: str, error: str) -> None:
         bar = self.query_one("#sysprompt-bar", Static)
@@ -471,8 +505,9 @@ class AgentConfigView(Vertical):
     }
     """
 
-    def __init__(self, gateway: Any, **kwargs: Any) -> None:
+    def __init__(self, client: Any = None, gateway: Any = None, **kwargs: Any) -> None:
         super().__init__(**kwargs)
+        self.client = client
         self.gateway = gateway
         self._agent_id: str = ""
 
@@ -489,66 +524,45 @@ class AgentConfigView(Vertical):
         self._load()
 
     def _load(self) -> None:
+        self._do_load_config()
+
+    @work(exclusive=False)
+    async def _do_load_config(self) -> None:
         t = self.query_one("#cfg-table", DataTable)
         bar = self.query_one("#cfg-bar", Static)
         t.clear()
 
-        am = getattr(self.gateway, "_agent_manager", None)
-        if not am:
-            bar.update("Agent manager not available")
+        rows: dict = {}
+        if self.client:
+            try:
+                rows = await self.client.get_agent_config(self._agent_id)
+            except Exception as e:
+                bar.update(f"Error loading config: {e}")
+                return
+        elif self.gateway:
+            am = getattr(self.gateway, "_agent_manager", None)
+            if not am:
+                bar.update("Agent manager not available")
+                return
+            agent = am.agents.get(self._agent_id)
+            if not agent:
+                bar.update(f"Agent not found: {self._agent_id}")
+                return
+            cfg = agent.config
+            rows = {
+                "name": cfg.name, "model": cfg.model,
+                "max_tokens": cfg.max_tokens, "temperature": cfg.temperature,
+                "context_window": f"{cfg.context_window:,}" if cfg.context_window else "—",
+                "show_thinking": cfg.show_thinking, "use_fastagent": cfg.use_fastagent,
+            }
+
+        if not rows:
+            bar.update(f"No config for: {self._agent_id}")
             return
 
-        agent = am.agents.get(self._agent_id)
-        if not agent:
-            bar.update(f"Agent not found: {self._agent_id}")
-            return
-
-        cfg = agent.config
-
-        rows: List[Tuple[str, str]] = [
-            ("name", cfg.name),
-            ("model", cfg.model),
-            ("max_tokens", str(cfg.max_tokens)),
-            ("temperature", str(cfg.temperature)),
-            ("top_p", str(cfg.top_p) if cfg.top_p is not None else "—"),
-            ("context_window", f"{cfg.context_window:,}" if cfg.context_window else "—"),
-            ("max_iterations", str(cfg.max_iterations) if cfg.max_iterations is not None else "—"),
-            ("parallel_tool_calls", str(cfg.parallel_tool_calls) if cfg.parallel_tool_calls is not None else "—"),
-            ("streaming_timeout", str(cfg.streaming_timeout) if cfg.streaming_timeout is not None else "—"),
-            ("reasoning_effort", cfg.reasoning_effort or "—"),
-            ("text_verbosity", cfg.text_verbosity or "—"),
-            ("service_tier", cfg.service_tier or "—"),
-            ("show_thinking", str(cfg.show_thinking)),
-            ("typing_mode", cfg.typing_mode),
-            ("use_fastagent", str(cfg.use_fastagent)),
-            ("workflow", cfg.workflow or "—"),
-        ]
-
-        # Queue config
-        q_cfg = getattr(cfg, "queue", None)
-        if q_cfg:
-            rows.append(("queue.mode", str(getattr(q_cfg, "mode", "—"))))
-            rows.append(("queue.debounce_ms", str(getattr(q_cfg, "debounce_ms", "—"))))
-            rows.append(("queue.cap", str(getattr(q_cfg, "cap", "—"))))
-
-        # Fallbacks
-        fallbacks = getattr(cfg, "fallbacks", [])
-        rows.append(("fallbacks", ", ".join(fallbacks) if fallbacks else "—"))
-
-        # Tools profile
-        tools_cfg = getattr(cfg, "tools", None)
-        if tools_cfg:
-            rows.append(("tools.profile", str(getattr(tools_cfg, "profile", "—"))))
-
-        # Extra request_params
-        rp = getattr(cfg, "request_params", None)
-        if rp:
-            for k, v in rp.items():
-                rows.append((f"request_params.{k}", str(v)))
-
-        for field_name, value in rows:
-            t.add_row(field_name, value, key=field_name)
-
+        for field_name, value in rows.items():
+            display = str(value) if value is not None else "—"
+            t.add_row(field_name, display, key=field_name)
         bar.update(f"Agent config — {self._agent_id}  ({len(rows)} fields)")
 
 
@@ -589,8 +603,9 @@ class FileBrowserView(Vertical):
     }
     """
 
-    def __init__(self, gateway: Any, **kwargs: Any) -> None:
+    def __init__(self, client: Any = None, gateway: Any = None, **kwargs: Any) -> None:
         super().__init__(**kwargs)
+        self.client = client
         self.gateway = gateway
         self._agent_id: str = ""
         self._current_file: Optional[Path] = None
@@ -777,8 +792,9 @@ class SkillsView(Vertical):
     }
     """
 
-    def __init__(self, gateway: Any, **kwargs: Any) -> None:
+    def __init__(self, client: Any = None, gateway: Any = None, **kwargs: Any) -> None:
         super().__init__(**kwargs)
+        self.client = client
         self.gateway = gateway
         self._agent_id: str = ""
 
@@ -909,8 +925,9 @@ class RunHistoryView(Vertical):
     }
     """
 
-    def __init__(self, gateway: Any, **kwargs: Any) -> None:
+    def __init__(self, client: Any = None, gateway: Any = None, **kwargs: Any) -> None:
         super().__init__(**kwargs)
+        self.client = client
         self.gateway = gateway
         self._agent_id: str = ""
         self._job_id: str = ""
@@ -1037,8 +1054,9 @@ class AgentLogView(Vertical):
 
     TAIL_LINES = 500
 
-    def __init__(self, gateway: Any, **kwargs: Any) -> None:
+    def __init__(self, client: Any = None, gateway: Any = None, **kwargs: Any) -> None:
         super().__init__(**kwargs)
+        self.client = client
         self.gateway = gateway
         self._agent_id: str = ""
         self._log_path: Optional[Path] = None
@@ -1283,8 +1301,9 @@ class ChatView(Vertical):
     }
     """
 
-    def __init__(self, gateway: Any, **kwargs: Any) -> None:
+    def __init__(self, client: Any = None, gateway: Any = None, **kwargs: Any) -> None:
         super().__init__(**kwargs)
+        self.client = client
         self.gateway = gateway
         self._current_agent_id: str = ""
         self._is_processing: bool = False
@@ -1314,19 +1333,24 @@ class ChatView(Vertical):
     def refresh_for_agent(self, agent_id: str) -> None:
         self._current_agent_id = agent_id
         name = agent_id
-        am = getattr(self.gateway, "_agent_manager", None)
-        if am and hasattr(am, "agents"):
-            a = am.agents.get(agent_id)
-            if a and hasattr(a, "name"):
-                name = a.name
+        # Try client first for agent name
+        if self.client:
+            self._resolve_agent_name(agent_id)
+        elif self.gateway:
+            am = getattr(self.gateway, "_agent_manager", None)
+            if am and hasattr(am, "agents"):
+                a = am.agents.get(agent_id)
+                if a and hasattr(a, "name"):
+                    name = a.name
         self._hint.update(
             f"Chatting with [bold]{name}[/bold]  — Enter to send  |  /command for slash commands"
         )
         # Subscribe to this agent's event bus (resubscribe if agent changed)
-        if self.gateway and agent_id != self._subscribed_agent_id:
+        client_or_gw = self.client or self.gateway
+        if client_or_gw and agent_id != self._subscribed_agent_id:
             if self._event_queue and self._subscribed_agent_id:
-                self.gateway.unsubscribe_agent(self._subscribed_agent_id, self._event_queue)
-            self._event_queue = self.gateway.subscribe_agent(agent_id)
+                client_or_gw.unsubscribe_events(self._subscribed_agent_id, self._event_queue)
+            self._event_queue = client_or_gw.subscribe_events(agent_id)
             self._subscribed_agent_id = agent_id
         # Clear log and reload history for the new agent
         self._log.clear()
@@ -1338,18 +1362,41 @@ class ChatView(Vertical):
         self._input.focus()
 
     @work(exclusive=False)
+    async def _resolve_agent_name(self, agent_id: str) -> None:
+        """Resolve agent display name via client and update hint."""
+        try:
+            agents = await self.client.list_agents()
+            for a in agents:
+                if a["id"] == agent_id:
+                    name = a.get("name", agent_id)
+                    self._hint.update(
+                        f"Chatting with [bold]{name}[/bold]  — Enter to send  |  /command for slash commands"
+                    )
+                    break
+        except Exception:
+            pass
+
+    @work(exclusive=False)
     async def _load_agent_history(self, agent_id: str, agent_name: str) -> None:
         """Load and display the active session's message history for agent_id."""
         import json
         try:
-            sm = getattr(self.gateway, "session_manager", None)
-            if not sm:
+            data = None
+            if self.client:
+                session_data = await self.client.get_active_session(agent_id)
+                if session_data and session_data.get("history"):
+                    data = json.loads(session_data["history"])
+            elif self.gateway:
+                sm = getattr(self.gateway, "session_manager", None)
+                if not sm:
+                    return
+                session = await sm.get_active_session(agent_id)
+                if not session or not session.history_path or not session.history_path.exists():
+                    return
+                with open(session.history_path, encoding="utf-8") as fh:
+                    data = json.load(fh)
+            if not data:
                 return
-            session = await sm.get_active_session(agent_id)
-            if not session or not session.history_path or not session.history_path.exists():
-                return
-            with open(session.history_path, encoding="utf-8") as fh:
-                data = json.load(fh)
             messages = data.get("messages", [])
             if not messages:
                 return
@@ -1404,13 +1451,16 @@ class ChatView(Vertical):
         etype = event.get("type", "")
         originating = event.get("originating_channel", "")
 
-        _agent = (
-            self.gateway.agent_manager.get_agent(self._current_agent_id)
-            if self.gateway and self._current_agent_id else None
-        )
-        show_thinking = bool(
-            getattr(getattr(_agent, "fast_agent_runner", None), "show_thinking", False)
-        )
+        show_thinking = False
+        if self.gateway and self._current_agent_id:
+            _agent = (
+                self.gateway.agent_manager.get_agent(self._current_agent_id)
+                if hasattr(self.gateway, "agent_manager") else None
+            )
+            show_thinking = bool(
+                getattr(getattr(_agent, "fast_agent_runner", None), "show_thinking", False)
+            )
+        # For remote client, show_thinking defaults to False (event contains the flag)
 
         # ── Streaming chunks from our own TUI conversation ────────────────────
         if etype == "stream_chunk":
@@ -1476,6 +1526,12 @@ class ChatView(Vertical):
 
     def _all_commands(self) -> List[Tuple[str, str]]:
         """Return sorted (name, description) for all registered slash commands."""
+        if self.client and not self.gateway:
+            # Remote mode — cache commands to avoid async in sync context
+            if not hasattr(self, "_cached_commands"):
+                self._cached_commands: List[Tuple[str, str]] = []
+                self._fetch_commands()
+            return self._cached_commands
         registry = getattr(self.gateway, "_command_registry", None) if self.gateway else None
         if not registry:
             return []
@@ -1483,6 +1539,14 @@ class ChatView(Vertical):
             (cmd.name, cmd.description)
             for cmd in sorted(registry._commands.values(), key=lambda c: c.name)
         ]
+
+    @work(exclusive=False)
+    async def _fetch_commands(self) -> None:
+        try:
+            cmds = await self.client.list_commands()
+            self._cached_commands = [(c["name"], c["description"]) for c in cmds]
+        except Exception:
+            pass
 
     def on_input_changed(self, event: Input.Changed) -> None:
         if event.input.id != "chat-msg-input":
@@ -1554,12 +1618,13 @@ class ChatView(Vertical):
         if not message.strip() or self._is_processing:
             return
         self._input.value = ""
-        if message.startswith("/") and self.gateway:
+        client_or_gw = self.client or self.gateway
+        if message.startswith("/") and client_or_gw:
             self._dispatch_command(message)
             return
         self._log.write("")
         self._log.write(f"[blue]You:[/blue] {message}")
-        if self.gateway and self._current_agent_id:
+        if client_or_gw and self._current_agent_id:
             self._process_message(message)
         else:
             self._log.write("")
@@ -1570,24 +1635,27 @@ class ChatView(Vertical):
         self._log.write("")
         self._log.write(f"[blue]You:[/blue] {message}")
         try:
-            from pyclopse.core.commands import CommandContext
-            session = None
-            if self.gateway.session_manager and self._current_agent_id:
-                try:
-                    session = await self.gateway.session_manager.get_or_create_session(
-                        agent_id=self._current_agent_id,
-                        channel="tui",
-                        user_id="tui_user",
-                    )
-                except Exception:
-                    pass
-            ctx = CommandContext(
-                gateway=self.gateway,
-                session=session,
-                sender_id="tui_user",
-                channel="tui",
-            )
-            result = await self.gateway._command_registry.dispatch(message, ctx)
+            if self.client:
+                result = await self.client.dispatch_command(self._current_agent_id, message)
+            else:
+                from pyclopse.core.commands import CommandContext
+                session = None
+                if self.gateway.session_manager and self._current_agent_id:
+                    try:
+                        session = await self.gateway.session_manager.get_or_create_session(
+                            agent_id=self._current_agent_id,
+                            channel="tui",
+                            user_id="tui_user",
+                        )
+                    except Exception:
+                        pass
+                ctx = CommandContext(
+                    gateway=self.gateway,
+                    session=session,
+                    sender_id="tui_user",
+                    channel="tui",
+                )
+                result = await self.gateway._command_registry.dispatch(message, ctx)
             self._log.write("")
             if result is not None:
                 self._log.write(f"[cyan]Command:[/cyan] {result}")
@@ -1611,16 +1679,16 @@ class ChatView(Vertical):
     async def _process_message(self, message: str) -> None:
         self._is_processing = True
         try:
-            # Gateway streams chunks via the event bus (_bus_chunk) so the TUI's
-            # _drain_events / _display_event handles live rendering safely on the
-            # Textual main thread.  No on_chunk callback needed here.
-            await self.gateway.handle_message(
-                channel="tui",
-                sender="tui_user",
-                sender_id="tui_user",
-                content=message,
-                agent_id=self._current_agent_id,
-            )
+            if self.client:
+                await self.client.send_message(self._current_agent_id, message)
+            else:
+                await self.gateway.handle_message(
+                    channel="tui",
+                    sender="tui_user",
+                    sender_id="tui_user",
+                    content=message,
+                    agent_id=self._current_agent_id,
+                )
         except Exception as e:
             self._log.write("")
             self._log.write(f"[red]Error:[/red] {str(e)}")
@@ -1658,8 +1726,9 @@ class AgentCardView(Vertical):
     }
     """
 
-    def __init__(self, gateway: Any, **kwargs: Any) -> None:
+    def __init__(self, client: Any = None, gateway: Any = None, **kwargs: Any) -> None:
         super().__init__(**kwargs)
+        self.client = client
         self.gateway = gateway
         self._agent_id: str = ""
         self._card: dict = {}
@@ -1813,8 +1882,9 @@ class TracesView(Vertical):
     }
     """
 
-    def __init__(self, gateway: Any, **kwargs: Any) -> None:
+    def __init__(self, client: Any = None, gateway: Any = None, **kwargs: Any) -> None:
         super().__init__(**kwargs)
+        self.client = client
         self.gateway = gateway
         self._spans: List[dict] = []
 
@@ -2033,18 +2103,18 @@ class GatewayDashboard(App):
 
         with Vertical(id="split-area"):
             with ContentSwitcher(id="detail-pane", initial="view-chat"):
-                yield ChatView(self.gateway, id="view-chat")
-                yield AgentCardView(self.gateway, id="view-agentcard")
-                yield SessionsView(self.gateway, id="view-sessions")
-                yield HistoryView(self.gateway, id="view-history")
-                yield JobsView(self.gateway, id="view-jobs")
-                yield SystemPromptView(self.gateway, id="view-sysprompt")
-                yield AgentConfigView(self.gateway, id="view-config")
-                yield FileBrowserView(self.gateway, id="view-files")
-                yield SkillsView(self.gateway, id="view-skills")
-                yield RunHistoryView(self.gateway, id="view-runhistory")
-                yield AgentLogView(self.gateway, id="view-agentlog")
-                yield TracesView(self.gateway, id="view-traces")
+                yield ChatView(client=self.client, gateway=self.gateway, id="view-chat")
+                yield AgentCardView(client=self.client, gateway=self.gateway, id="view-agentcard")
+                yield SessionsView(client=self.client, gateway=self.gateway, id="view-sessions")
+                yield HistoryView(client=self.client, gateway=self.gateway, id="view-history")
+                yield JobsView(client=self.client, gateway=self.gateway, id="view-jobs")
+                yield SystemPromptView(client=self.client, gateway=self.gateway, id="view-sysprompt")
+                yield AgentConfigView(client=self.client, gateway=self.gateway, id="view-config")
+                yield FileBrowserView(client=self.client, gateway=self.gateway, id="view-files")
+                yield SkillsView(client=self.client, gateway=self.gateway, id="view-skills")
+                yield RunHistoryView(client=self.client, gateway=self.gateway, id="view-runhistory")
+                yield AgentLogView(client=self.client, gateway=self.gateway, id="view-agentlog")
+                yield TracesView(client=self.client, gateway=self.gateway, id="view-traces")
 
             with Vertical(id="log-pane"):
                 yield Static(
@@ -2109,19 +2179,29 @@ class GatewayDashboard(App):
     # ── Agent tab strip ───────────────────────────────────────────────────────
 
     def _populate_agent_tabs(self) -> None:
-        agent_tabs = self.query_one("#agent-tabs", Tabs)
+        self._do_populate_agents()
+
+    @work(exclusive=False)
+    async def _do_populate_agents(self) -> None:
         agents: List[str] = []
-        am = getattr(self.gateway, "_agent_manager", None)
-        if am:
-            agents = list(am.agents.keys())
+        if self.client:
+            try:
+                agent_list = await self.client.list_agents()
+                agents = [a["id"] for a in agent_list]
+            except Exception as e:
+                logger.debug(f"list_agents error: {e}")
+        if not agents and self.gateway:
+            am = getattr(self.gateway, "_agent_manager", None)
+            if am:
+                agents = list(am.agents.keys())
+        agent_tabs = self.query_one("#agent-tabs", Tabs)
         if not agents:
             agent_tabs.add_tab(Tab("(no agents)", id="agent-none"))
             return
         for agent_id in agents:
             agent_tabs.add_tab(Tab(agent_id, id=f"agent-{agent_id}"))
-        if agents:
-            self._active_agent = agents[0]
-            self.query_one(ChatView).refresh_for_agent(agents[0])
+        self._active_agent = agents[0]
+        self.query_one(ChatView).refresh_for_agent(agents[0])
 
     @on(Tabs.TabActivated, "#agent-tabs")
     def on_agent_tab_activated(self, event: Tabs.TabActivated) -> None:
@@ -2207,6 +2287,10 @@ class GatewayDashboard(App):
         bar = self.query_one("#status-bar", Static)
         parts: List[str] = []
 
+        if self.client and not self.gateway:
+            self._update_status_bar_remote(bar)
+            return
+
         usage = getattr(self.gateway, "_usage", {}) or {}
 
         started_at = usage.get("started_at")
@@ -2244,6 +2328,9 @@ class GatewayDashboard(App):
                 parts.append(f"Jobs: {total_jobs} scheduled")
 
         bar.update("  |  ".join(parts) if parts else "Gateway active")
+
+    def _update_status_bar_remote(self, bar: Static) -> None:
+        bar.update(f"Connected to gateway  |  Agent: {self._active_agent or 'none'}")
 
     # ── Actions ───────────────────────────────────────────────────────────────
 
@@ -2311,16 +2398,17 @@ class GatewayDashboard(App):
         if not job_id:
             log.write("[dashboard] No job selected")
             return
-        js = getattr(self.gateway, "_job_scheduler", None)
-        if not js:
-            log.write("[dashboard] Job scheduler not available")
-            return
-        job = js.jobs.get(job_id)
-        name = (job.name or job_id) if job else job_id
-        log.write(f"[dashboard] Triggering job: {name}")
+        log.write(f"[dashboard] Triggering job: {job_id}")
         try:
-            await js.run_job_now(job_id)
-            log.write(f"[dashboard] Job triggered: {name}")
+            if self.client:
+                await self.client.run_job(job_id)
+            else:
+                js = getattr(self.gateway, "_job_scheduler", None)
+                if not js:
+                    log.write("[dashboard] Job scheduler not available")
+                    return
+                await js.run_job_now(job_id)
+            log.write(f"[dashboard] Job triggered: {job_id}")
         except Exception as e:
             log.write(f"[dashboard] Error triggering job: {e}")
 
@@ -2330,13 +2418,8 @@ class GatewayDashboard(App):
         if not job_id:
             log.write("[dashboard] Select a job in Jobs view first (press 3)")
             return
-        js = getattr(self.gateway, "_job_scheduler", None)
-        job_name = ""
-        if js:
-            job = js.jobs.get(job_id)
-            job_name = (job.name or job_id) if job else job_id
         self.action_view_runhistory()
-        self.query_one(RunHistoryView).load_job(self._active_agent, job_id, job_name)
+        self.query_one(RunHistoryView).load_job(self._active_agent, job_id, job_id)
 
     def action_edit_file(self) -> None:
         if self._active_view != "files":
