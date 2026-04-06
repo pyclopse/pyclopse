@@ -100,8 +100,12 @@ class _Launchd:
     <string>{log_path}</string>
     <key>StandardErrorPath</key>
     <string>{log_path}</string>
+    <key>WorkingDirectory</key>
+    <string>{Path.home()}</string>
     <key>EnvironmentVariables</key>
     <dict>
+      <key>HOME</key>
+      <string>{Path.home()}</string>
       <key>PATH</key>
       <string>/usr/local/bin:/usr/bin:/bin:{Path.home()}/.local/bin:/opt/homebrew/bin</string>
     </dict>
@@ -209,6 +213,8 @@ Type=simple
 ExecStart={exec_start}
 Restart=on-failure
 RestartSec=5
+WorkingDirectory={Path.home()}
+Environment=HOME={Path.home()}
 Environment=PATH=/usr/local/bin:/usr/bin:/bin:{Path.home()}/.local/bin
 StandardOutput=append:{log_path}
 StandardError=append:{log_path}
