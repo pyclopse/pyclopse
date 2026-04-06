@@ -45,48 +45,21 @@ Pyclopse is inspired by [OpenClaw](https://github.com/openclaw/openclaw) but is 
 - [uv](https://docs.astral.sh/uv/) — `curl -LsSf https://astral.sh/uv/install.sh | sh`
 - At least one LLM provider API key (Anthropic, OpenAI, MiniMax, etc.)
 
-### Install
+### 1. Install
 
 ```bash
 uv tool install pyclopse
 ```
 
-### Update
+### 2. Set Up
 
-```bash
-uv tool upgrade pyclopse
-```
-
-### Uninstall
-
-```bash
-uv tool uninstall pyclopse
-```
-
-### Development install
-
-```bash
-git clone https://github.com/pyclopse/pyclopse.git
-cd pyclopse
-uv sync
-uv run python -m pyclopse
-```
-
-### First Run
-
-Just run pyclopse. If no configuration is found it will offer to launch the setup wizard automatically:
+Run pyclopse. If no configuration is found, the setup wizard launches automatically:
 
 ```
 $ pyclopse
 
 No configuration found.
   Run setup wizard now? [Y/n]:
-```
-
-Or run the wizard explicitly at any time:
-
-```bash
-pyclopse onboard
 ```
 
 The wizard walks you through:
@@ -102,6 +75,11 @@ When done, the wizard writes:
 - `~/.pyclopse/secrets/secrets.yaml` — secrets registry
 - `~/.pyclopse/.env` — API keys (chmod 600)
 
+At the end, you're given three launch options:
+- **Launch Pyclopse** — start the gateway + TUI dashboard in one process (quickest way to try it)
+- **Install as Service + Launch TUI** — install as a background service that starts on login, then open the dashboard
+- **Exit** — just save the config, start later
+
 You can re-run the wizard at any time to add or change providers, agents, or channels:
 
 ```bash
@@ -111,20 +89,88 @@ pyclopse onboard --agents     # jump straight to agents
 pyclopse onboard --channels   # jump straight to channels
 ```
 
-### Run
+### 3. Run
+
+Pyclopse has two operating modes: **embedded** (gateway + TUI in one process) and **service** (gateway as a background daemon, TUI connects separately).
+
+#### Embedded mode (simple)
 
 ```bash
-# With TUI dashboard (default)
-pyclopse
+pyclopse                    # gateway + TUI dashboard in one process
+```
 
-# Headless (no TUI — stdout only)
-pyclopse --headless
+This is the quickest way to get started. When you close the TUI, the gateway stops too.
 
-# With a specific config file
-pyclopse --config /path/to/pyclopse.yaml
+#### Service mode (recommended)
 
-# Validate config only
-pyclopse validate
+The gateway runs as a background service that starts automatically on login. You connect and disconnect the TUI dashboard whenever you need it — the gateway keeps running.
+
+```bash
+# Install and start the service
+pyclopse service install    # creates launchd (macOS) or systemd (Linux) config
+pyclopse service start      # start the gateway
+
+# Open the dashboard
+pyclopse tui                # connect to the running gateway
+
+# Close the TUI whenever — the gateway keeps running
+# Agents continue responding on Telegram, Slack, HTTP, etc.
+
+# Reconnect anytime
+pyclopse tui
+
+# Connect to a remote gateway
+pyclopse tui --url http://other-host:8080
+```
+
+Service management:
+
+```bash
+pyclopse service status     # check if the gateway is running
+pyclopse service restart    # restart the gateway
+pyclopse service stop       # stop the gateway
+pyclopse service logs       # tail service logs
+pyclopse service logs -n 200  # last 200 lines
+pyclopse service uninstall  # remove the service entirely
+```
+
+#### Other commands
+
+```bash
+pyclopse --headless         # run gateway in foreground without TUI (for Docker, scripts)
+pyclopse --config /path/to/pyclopse.yaml  # use a specific config file
+pyclopse --host 0.0.0.0 --port 9000      # override bind host/port
+pyclopse validate           # validate config file without starting
+pyclopse --version          # show version
+```
+
+### Update
+
+```bash
+uv tool upgrade pyclopse
+pyclopse service restart    # restart the service to pick up the new version
+```
+
+### Uninstall
+
+```bash
+pyclopse service uninstall  # remove the background service (if installed)
+uv tool uninstall pyclopse  # remove the binary
+```
+
+To also remove all config and data:
+
+```bash
+rm -rf ~/.pyclopse
+```
+
+### Development install
+
+```bash
+git clone https://github.com/pyclopse/pyclopse.git
+cd pyclopse
+uv sync
+uv run python -m pyclopse
 ```
 
 ### Data Directory
