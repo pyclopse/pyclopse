@@ -701,6 +701,8 @@ def register_builtin_commands(registry: CommandRegistry, gateway: Any) -> None:
     async def cmd_reload(args: str, ctx: CommandContext) -> str:
         """Reload config from disk and apply non-destructive changes."""
         try:
+            from pyclopse.skills.registry import invalidate_skills_cache
+            invalidate_skills_cache()
             changed = await ctx.gateway.reload_config()
             if changed:
                 keys = ", ".join(changed.keys())
@@ -1870,6 +1872,97 @@ def register_builtin_commands(registry: CommandRegistry, gateway: Any) -> None:
 
         return "\n".join(lines)
 
+    # ------------------------------------------------------------------ /btw
+    _BTW_SYSTEM_PROMPT = "\n".join([
+        "You are answering an ephemeral /btw side question about the current conversation.",
+        "Use the conversation only as background context.",
+        "Answer only the side question in the last user message.",
+        "Do not continue, resume, or complete any unfinished task from the conversation.",
+        "Do not emit tool calls, pseudo-tool calls, shell commands, file writes, patches, or "
+        "code unless the side question explicitly asks for them.",
+        "Do not say you will continue the main task after answering.",
+        "If the question can be answered briefly, answer briefly.",
+    ])
+
+    async def cmd_btw(args: str, ctx: CommandContext) -> str:
+        """Ask an ephemeral side question without affecting the main conversation.
+
+        Snapshots the current session's message history (tool calls/results
+        stripped), runs a one-shot LLM call with a BTW-specific system prompt,
+        and returns the answer.  The main session's history is never touched.
+
+        Usage: /btw <question>
+        """
+        question = args.strip()
+        if not question:
+            return "Usage: /btw <question>"
+
+        from pyclopse.agents.runner import AgentRunner, _strip_tool_machinery
+
+        # Determine model + config from the active runner (or agent config fallback)
+        main_runner = _get_runner(ctx)
+        history_snapshot: list = []
+        model = "sonnet"
+        pyclopse_config = None
+
+        if main_runner is not None:
+            model = main_runner.model
+            pyclopse_config = getattr(main_runner, "pyclopse_config", None)
+            if getattr(main_runner, "_app", None) is not None:
+                try:
+                    fa_agent = main_runner._app._agent(None)
+                    raw = list(getattr(fa_agent, "message_history", []))
+                    history_snapshot = _strip_tool_machinery(raw)
+                except Exception as _e:
+                    logger.debug(f"/btw: could not snapshot history: {_e}")
+        elif ctx.session and getattr(ctx.gateway, "_agent_manager", None):
+            _ag = ctx.gateway._agent_manager.get_agent(ctx.session.agent_id)
+            if _ag:
+                model = getattr(_ag.config, "model", model) or model
+                pyclopse_config = getattr(_ag, "pyclopse_config", None)
+
+        btw_prompt = "\n".join([
+            "Answer this side question only.",
+            "Ignore any unfinished task in the conversation while answering it.",
+            "",
+            "<btw_side_question>",
+            question,
+            "</btw_side_question>",
+        ])
+
+        # Ephemeral runner: BTW system prompt, same model, no MCP tools, no history file
+        ephemeral = AgentRunner(
+            agent_name="btw",
+            instruction=_BTW_SYSTEM_PROMPT,
+            model=model,
+            servers=[],          # no tools — BTW is a pure LLM call
+            history_path=None,   # never saved to disk
+            max_iterations=1,
+            pyclopse_config=pyclopse_config,
+        )
+        try:
+            await ephemeral.initialize()
+
+            # Inject the cleaned history snapshot directly into the FA agent
+            # so the LLM has context without tool-call noise.
+            if history_snapshot:
+                try:
+                    fa_btw = ephemeral._app._agent(None)
+                    fa_btw.message_history[:] = history_snapshot
+                except Exception as _e:
+                    logger.debug(f"/btw: could not inject history: {_e}")
+
+            response = await ephemeral.run(btw_prompt)
+            return response
+        except Exception as e:
+            logger.warning(f"/btw failed: {e}", exc_info=True)
+            return f"[/btw error: {e}]"
+        finally:
+            try:
+                await ephemeral.cleanup()
+            except Exception:
+                pass
+
     # ---------------------------------------------------------------- register
     registry.register("start",   cmd_start,   "Start / show welcome message",               usage="/start")
     registry.register("help",    cmd_help,    "Show available commands",                     usage="/help")
@@ -1877,6 +1970,7 @@ def register_builtin_commands(registry: CommandRegistry, gateway: Any) -> None:
     registry.register("reset",   cmd_reset,   "Clear session history",                       usage="/reset")
     registry.register("stop",    cmd_stop,    "Cancel the current running request",          usage="/stop")
     registry.register("compact", cmd_compact, "Compress session context",                    usage="/compact [instructions]")
+    registry.register("btw",     cmd_btw,     "Ask an ephemeral side question (no history impact)", usage="/btw <question>")
     registry.register("status",  cmd_status,  "Show gateway status",                         usage="/status")
     registry.register("whoami",  cmd_whoami,  "Show your sender ID and session info",        usage="/whoami")
     registry.register("model",   cmd_model,   "Show or set the model for this session",      usage="/model [model-name]")

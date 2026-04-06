@@ -203,8 +203,12 @@ class BulkIngestor:
     ) -> None:
         import json
 
+        # Use asyncio.to_thread for all file reads so synchronous I/O never
+        # blocks the event loop.  history.json files can be hundreds of KB;
+        # reading them on the event loop thread stalls all coroutines.
         try:
-            raw = json.loads(history_file.read_text(encoding="utf-8"))
+            text = await asyncio.to_thread(history_file.read_text, encoding="utf-8")
+            raw = json.loads(text)
         except Exception as e:
             stats.errors.append(f"session {session_id}: failed to read history: {e}")
             return
@@ -214,7 +218,8 @@ class BulkIngestor:
         if session_json.exists():
             try:
                 import json as _json
-                sess_data = _json.loads(session_json.read_text(encoding="utf-8"))
+                sess_text = await asyncio.to_thread(session_json.read_text, encoding="utf-8")
+                sess_data = _json.loads(sess_text)
                 if sess_data.get("channel", "") in _SKIP_CHANNELS:
                     stats.sessions_skipped += 1
                     return

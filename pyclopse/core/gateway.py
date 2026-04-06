@@ -348,6 +348,13 @@ class Gateway:
             sc = self._config.sessions if self._config is not None else None
 
             async def _on_session_expire(session: Any) -> None:
+                # Evict the in-memory AgentRunner so its FastAgent MCP connection
+                # is closed and memory is freed.  Without this, runners accumulate
+                # in agent._session_runners indefinitely as sessions expire via TTL,
+                # slowly exhausting MCP server connections over time.
+                if self._agent_manager:
+                    for agent in self._agent_manager.agents.values():
+                        await agent.evict_session_runner(session.id)
                 await self._fire(HookEvent.SESSION_EXPIRED, {
                     "session_id": session.id,
                     "agent_id": session.agent_id,

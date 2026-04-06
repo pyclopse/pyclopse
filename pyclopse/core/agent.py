@@ -581,7 +581,9 @@ class Agent:
             if lifecycle_cycle >= LIFECYCLE_EVERY and self._vault_lifecycle is not None:
                 lifecycle_cycle = 0
                 try:
-                    lc_stats = self._vault_lifecycle.run_all()
+                    # run_all() is synchronous (SQLite + file ops) — offload to a
+                    # thread so it does not block the asyncio event loop.
+                    lc_stats = await asyncio.to_thread(self._vault_lifecycle.run_all)
                     if any(v > 0 for v in vars(lc_stats).values() if isinstance(v, int)):
                         logger.info(
                             "Vault lifecycle: crystallized=%d forgotten=%d "
@@ -597,7 +599,7 @@ class Agent:
                 except Exception:
                     logger.exception("Vault lifecycle error — will retry next cycle")
 
-            await asyncio.sleep(60)
+            await asyncio.sleep(300)
 
     async def stop(self) -> None:
         """Stop the agent, cleaning up all session runners and the base runner.

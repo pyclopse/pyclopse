@@ -16,6 +16,7 @@ from __future__ import annotations
 from pyclopse.reflect import reflect_system
 
 import logging
+import time
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Optional
@@ -24,6 +25,33 @@ logger = logging.getLogger(__name__)
 
 # Token substituted with the absolute skill directory path at read-time
 _SKILL_DIR_TOKEN = "{skill_dir}"
+
+# ---------------------------------------------------------------------------
+# In-process cache for discover_skills() results.
+# discover_skills() does a full filesystem scan on every call — called on
+# every handle_message() to build system prompts. Caching with a short TTL
+# avoids hundreds of redundant scans per hour while still picking up changes
+# within 30 seconds (e.g. after /reload or skill edits).
+# ---------------------------------------------------------------------------
+_SKILLS_CACHE: dict[tuple, tuple[float, list]] = {}  # key → (expires_at, skills)
+_SKILLS_CACHE_TTL = 3600.0  # 1 hour — skills are static; use /reload to invalidate immediately
+
+
+@reflect_system("skills:cache_invalidator")
+def invalidate_skills_cache() -> None:
+    """Invalidate the in-process skills discovery cache.
+
+    Clears all cached ``discover_skills()`` results so the next call performs a
+    fresh filesystem scan.  Call this after creating, editing, or deleting a
+    skill directory — or after ``/reload`` — to pick up changes without waiting
+    for the 1-hour TTL to expire.
+
+    Exposed via:
+      - MCP tool ``skills_reload()`` (pyclopse MCP server)
+      - REST endpoint ``POST /api/v1/skills/reload``
+      - Slash command ``/reload`` (called automatically)
+    """
+    _SKILLS_CACHE.clear()
 
 
 @dataclass
@@ -195,6 +223,12 @@ def discover_skills(
         list[SkillInfo]: All discovered skills in their final deduplicated
             form (last writer wins on name collision).
     """
+    cache_key = (agent_name, config_dir, tuple(extra_dirs) if extra_dirs else ())
+    now = time.monotonic()
+    cached = _SKILLS_CACHE.get(cache_key)
+    if cached is not None and now < cached[0]:
+        return cached[1]
+
     dirs = get_skill_dirs(agent_name, config_dir, extra_dirs)
     seen: dict[str, SkillInfo] = {}
     for skill_dir in dirs:
@@ -207,6 +241,7 @@ def discover_skills(
                 seen[skill.name.lower()] = skill
     skills = list(seen.values())
     logger.debug(f"Discovered {len(skills)} skills for agent={agent_name!r}")
+    _SKILLS_CACHE[cache_key] = (now + _SKILLS_CACHE_TTL, skills)
     return skills
 
 

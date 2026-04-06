@@ -2011,6 +2011,27 @@ def skill_read(name: str) -> str:
         return f"[ERROR] skill_read failed: {e}"
 
 
+@mcp.tool()
+def skills_reload() -> str:
+    """
+    Invalidate the in-process skills discovery cache and force a fresh scan
+    on the next call to skills_list() or skill_read().
+
+    Skills are cached for up to 1 hour to avoid repeated filesystem scans on
+    every message. Call this tool after creating, editing, or deleting a skill
+    directory so the agent picks up the change immediately without waiting for
+    the cache to expire.
+
+    Returns a confirmation string on success.
+    """
+    try:
+        from pyclopse.skills.registry import invalidate_skills_cache
+        invalidate_skills_cache()
+        return "Skills cache cleared. The next call to skills_list() or skill_read() will perform a fresh scan."
+    except Exception as e:
+        return f"[ERROR] skills_reload failed: {e}"
+
+
 # ---------------------------------------------------------------------------
 # Config — CRUD on pyclopse.yaml, validate, reload
 # ---------------------------------------------------------------------------
