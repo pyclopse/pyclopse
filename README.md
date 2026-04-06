@@ -42,13 +42,29 @@ Pyclopse is inspired by [OpenClaw](https://github.com/openclaw/openclaw) but is 
 
 ### Prerequisites
 
-- [uv](https://docs.astral.sh/uv/) — `curl -LsSf https://astral.sh/uv/install.sh | sh`
+- Python 3.13+
 - At least one LLM provider API key (Anthropic, OpenAI, MiniMax, etc.)
 
 ### 1. Install
 
+**Recommended: [uv](https://docs.astral.sh/uv/)**
+
 ```bash
+curl -LsSf https://astral.sh/uv/install.sh | sh   # install uv (if you don't have it)
 uv tool install pyclopse
+```
+
+`uv tool` installs pyclopse in its own isolated environment — dependencies never conflict with your other Python tools, installs are fast, and upgrades are clean. This is the recommended method.
+
+**Alternatives:**
+
+```bash
+# pipx — same isolation benefits as uv tool, just slower
+pipx install pyclopse
+
+# pip — installs into your active Python environment (global or venv)
+# Dependencies may conflict with other packages in the same environment
+pip install pyclopse
 ```
 
 ### 2. Set Up
@@ -147,15 +163,31 @@ pyclopse --version          # show version
 ### Update
 
 ```bash
+# uv (recommended)
 uv tool upgrade pyclopse
-pyclopse service restart    # restart the service to pick up the new version
+
+# pipx
+pipx upgrade pyclopse
+
+# pip
+pip install --upgrade pyclopse
+```
+
+If running as a service, restart to pick up the new version:
+
+```bash
+pyclopse service restart
 ```
 
 ### Uninstall
 
 ```bash
 pyclopse service uninstall  # remove the background service (if installed)
-uv tool uninstall pyclopse  # remove the binary
+
+# Then remove the binary (whichever you used to install):
+uv tool uninstall pyclopse   # uv
+pipx uninstall pyclopse      # pipx
+pip uninstall pyclopse        # pip
 ```
 
 To also remove all config and data:
