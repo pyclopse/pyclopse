@@ -1352,6 +1352,7 @@ class ChatView(Vertical):
                 client_or_gw.unsubscribe_events(self._subscribed_agent_id, self._event_queue)
             self._event_queue = client_or_gw.subscribe_events(agent_id)
             self._subscribed_agent_id = agent_id
+            self._fetch_show_thinking(agent_id)
         # Clear log and reload history for the new agent
         self._log.clear()
         self._streaming_buffer = ""
@@ -1360,6 +1361,21 @@ class ChatView(Vertical):
         self._streaming_agent_name = ""
         self._load_agent_history(agent_id, name)
         self._input.focus()
+
+    @work(exclusive=False)
+    async def _fetch_show_thinking(self, agent_id: str) -> None:
+        """Fetch show_thinking setting for the agent."""
+        try:
+            if self.client:
+                self._show_thinking = await self.client.get_show_thinking(agent_id)
+            elif self.gateway:
+                am = getattr(self.gateway, "_agent_manager", None)
+                if am:
+                    _agent = am.agents.get(agent_id)
+                    runner = getattr(_agent, "fast_agent_runner", None)
+                    self._show_thinking = bool(getattr(runner, "show_thinking", False))
+        except Exception:
+            self._show_thinking = False
 
     @work(exclusive=False)
     async def _resolve_agent_name(self, agent_id: str) -> None:
@@ -1451,16 +1467,7 @@ class ChatView(Vertical):
         etype = event.get("type", "")
         originating = event.get("originating_channel", "")
 
-        show_thinking = False
-        if self.gateway and self._current_agent_id:
-            _agent = (
-                self.gateway.agent_manager.get_agent(self._current_agent_id)
-                if hasattr(self.gateway, "agent_manager") else None
-            )
-            show_thinking = bool(
-                getattr(getattr(_agent, "fast_agent_runner", None), "show_thinking", False)
-            )
-        # For remote client, show_thinking defaults to False (event contains the flag)
+        show_thinking = getattr(self, "_show_thinking", False)
 
         # ── Streaming chunks from our own TUI conversation ────────────────────
         if etype == "stream_chunk":
