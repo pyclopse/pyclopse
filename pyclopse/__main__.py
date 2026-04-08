@@ -386,6 +386,13 @@ async def run_gateway(
     config_path: str = None, host: str = None, port: int = None, debug: bool = False
 ):
     """Run the gateway + HTTP API server + pyclopse MCP server."""
+    from .core.singleton import acquire_gateway_lock, GatewayAlreadyRunning
+    try:
+        acquire_gateway_lock()
+    except GatewayAlreadyRunning as e:
+        print(f"Error: {e}")
+        sys.exit(1)
+
     from .config import ConfigLoader
     from .core.gateway import Gateway
 
@@ -448,6 +455,13 @@ async def run_gateway_with_tui(
     config_path: str = None, host: str = None, port: int = None, debug: bool = False
 ):
     """Run the gateway with the dashboard TUI."""
+    from .core.singleton import acquire_gateway_lock, GatewayAlreadyRunning
+    try:
+        acquire_gateway_lock()
+    except GatewayAlreadyRunning as e:
+        print(f"Error: {e}")
+        sys.exit(1)
+
     from .config import ConfigLoader
     from .core.gateway import Gateway
 
