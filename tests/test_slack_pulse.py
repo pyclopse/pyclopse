@@ -15,8 +15,9 @@ from unittest.mock import AsyncMock, MagicMock, patch
 def _make_minimal_gateway(slack_enabled=True, bot_token="xoxb-test"):
     """Build a bare-minimum Gateway stub for testing _init_channels Slack logic."""
     from pyclopse.core.gateway import Gateway
+    from pyclopse.channels.slack_plugin import SlackChannelConfig
     from pyclopse.config.schema import (
-        Config, ChannelsConfig, SlackConfig, AgentsConfig, SecurityConfig, PluginsConfig,
+        Config, ChannelsConfig, AgentsConfig, SecurityConfig, PluginsConfig,
     )
 
     gw = Gateway.__new__(Gateway)
@@ -28,7 +29,7 @@ def _make_minimal_gateway(slack_enabled=True, bot_token="xoxb-test"):
     gw._telegram_bot = None
     gw._telegram_chat_id = None
 
-    slack_cfg = SlackConfig(
+    slack_cfg = SlackChannelConfig(
         enabled=slack_enabled,
         bot_token=bot_token,
     )

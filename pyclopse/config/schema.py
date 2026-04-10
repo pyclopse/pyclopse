@@ -579,32 +579,16 @@ class TodosConfig(BaseModel):
     )
 
 
-class SlackConfig(BaseModel):
-    """Slack channel configuration (legacy — will become a plugin)."""
-    model_config = ConfigDict(extra="allow")
-    enabled: bool = False
-    bot_token: Optional[str] = Field(default=None, validation_alias="botToken")
-    signing_secret: Optional[str] = Field(default=None, validation_alias="signingSecret")
-    allowed_users: List[str] = Field(default_factory=list, validation_alias="allowedUsers")
-    denied_users: List[str] = Field(default_factory=list, validation_alias="deniedUsers")
-    threading: bool = True
-
-
 class ChannelsConfig(BaseModel):
     """Channels configuration.
 
     Channel plugins declare their own config schemas via
     ``ChannelPlugin.config_schema``.  This model stores raw dicts for each
     channel name and passes them through to plugins for validation at startup.
-
-    The ``slack`` field is kept as a typed model because Slack is still
-    integrated via legacy gateway code.  It will be removed once Slack is
-    migrated to the plugin system.
+    All channel configs (Telegram, Discord, Slack, WhatsApp, etc.) are now
+    plugin-declared — no per-channel classes live in this file.
     """
     model_config = ConfigDict(extra="allow")
-
-    # Legacy Slack — will become a plugin
-    slack: Optional[SlackConfig] = None
 
 
 class PluginType(str, Enum):

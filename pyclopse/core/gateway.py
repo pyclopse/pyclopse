@@ -420,7 +420,7 @@ class Gateway:
         self._tg_bots: Dict[str, Any] = {}
         self._tg_chat_ids: Dict[str, Optional[str]] = {}
         self._tg_polling_tasks: Dict[str, asyncio.Task] = {}
-        self._slack_web_client: Optional[Any] = None  # AsyncWebClient for outbound Slack messages
+        self._slack_web_client: Optional[Any] = None  # Deprecated — kept for backward compat checks
         # Active processing tasks keyed by session ID (used by /stop)
         self._active_tasks: Dict[str, asyncio.Task] = {}
 
@@ -897,18 +897,6 @@ class Gateway:
         # Load and start external channel plugins
         await self._init_channel_plugins()
 
-        # Initialize Slack outbound client if configured (legacy — will become plugin)
-        slack_config = self.config.channels.slack if self.config.channels else None
-        if slack_config and slack_config.enabled and slack_config.bot_token:
-            try:
-                from slack_sdk.web.async_client import AsyncWebClient
-                self._slack_web_client = AsyncWebClient(token=slack_config.bot_token)
-                self._logger.info("Slack outbound client initialized")
-            except ImportError:
-                self._logger.warning("slack-sdk not installed, Slack outbound disabled")
-            except Exception as e:
-                self._logger.error(f"Failed to initialize Slack client: {e}")
-
     @staticmethod
     def _builtin_plugin_classes() -> List[tuple]:
         """Return (channel_name, plugin_class) for each built-in channel.
@@ -930,6 +918,11 @@ class Gateway:
         try:
             from pyclopse.channels.whatsapp_plugin import WhatsAppPlugin
             result.append(("whatsapp", WhatsAppPlugin))
+        except ImportError:
+            pass
+        try:
+            from pyclopse.channels.slack_plugin import SlackPlugin
+            result.append(("slack", SlackPlugin))
         except ImportError:
             pass
         return result
@@ -1199,43 +1192,12 @@ class Gateway:
             job_agent_id = getattr(getattr(job, "run", None), "agent", None)
             if not job_agent_id and self._job_scheduler:
                 job_agent_id = self._job_scheduler._job_agents.get(job.id)
-            notify_session = None
-            if job_agent_id and self._session_manager:
-                try:
-                    notify_session = await self._get_active_session(
-                        agent_id=job_agent_id, channel="telegram", user_id="",
-                    )
-                except Exception:
-                    pass
 
-            if notify_session:
-                try:
-                    await self._deliver_to_channel(notify_session, text)
-                except Exception as e:
-                    self._logger.error(f"Job notify send failed: {e}")
-            else:
-                # No session — try direct plugin send using known endpoint or
-                # deliver.chat_id.  Resolve the correct bot for this agent so
-                # the notification appears from the right bot, not the default.
-                ep = self._known_endpoints.get(job_agent_id or "", {}).get("telegram", {})
-                chat_id = ep.get("sender_id") or (
-                    getattr(deliver, "chat_id", None) if deliver else None
-                )
-                bot_name = ep.get("bot_name")
-                # If no bot_name from endpoint, ask the plugin which bot serves this agent
-                if not bot_name and job_agent_id and "telegram" in self._channels:
-                    tg_plugin = self._channels["telegram"]
-                    if hasattr(tg_plugin, "bot_for_agent"):
-                        _, bot_name = tg_plugin.bot_for_agent(job_agent_id)
-                if chat_id and "telegram" in self._channels:
-                    try:
-                        from pyclopse.channels.base import MessageTarget
-                        target = MessageTarget(channel="telegram", user_id=chat_id)
-                        await self._channels["telegram"].send_message(
-                            target, text, bot_name=bot_name,
-                        )
-                    except Exception as e:
-                        self._logger.error(f"Job notify send failed: {e}")
+            # Fan out the notification to ALL known endpoints for this agent,
+            # just like cross-channel sync does for regular agent responses.
+            # This ensures job notifications appear on every channel the user
+            # has interacted with — not just one.
+            await self._notify_agent_endpoints(job_agent_id, text, deliver)
 
             # On timeout, notify report_to_agent so it can tell the user
             if is_timeout and run.status != JobStatus.RUNNING:
@@ -1368,159 +1330,10 @@ class Gateway:
         self._seen_message_ids[key] = now
         return False
 
-    # Legacy Telegram methods (_telegram_poll_bot, _telegram_poll,
-    # _handle_telegram_message, _stream_telegram_response) removed.
-    # Now handled by TelegramPlugin (pyclopse/channels/telegram_plugin.py).
+    # Legacy Telegram and Slack methods removed.
 
-    async def _handle_slack_message(
-        self,
-        event: Dict[str, Any],
-        slack_client: Any,
-    ) -> None:
-        """Handle an incoming Slack event dict and send the agent's reply.
-
-        Parameters
-        ----------
-        event:
-            Slack event payload containing at minimum:
-              - ``user``       — Slack user ID
-              - ``channel``    — Slack channel ID
-              - ``text``       — message text
-              - ``ts``         — message timestamp (Slack message ID)
-              - ``thread_ts``  — (optional) parent thread timestamp
-        slack_client:
-            An async Slack SDK WebClient (or compatible mock) used to post
-            the reply.
-
-        Threading behaviour (controlled by ``config.channels.slack.threading``):
-        - When ``threading=True`` and the message has a ``thread_ts`` (i.e. it
-          is already inside a thread), the reply is posted to that thread.
-        - When ``threading=True`` and the message is a top-level message (no
-          ``thread_ts``), the reply starts a new thread using ``ts`` as the
-          ``thread_ts``.
-        - When ``threading=False``, replies are posted to the channel without
-          a thread timestamp.
-
-        Session keying:
-        - With threading enabled the session is keyed on
-          ``thread_ts or ts`` (so all replies in the same Slack thread share
-          a session).
-        - Without threading the session is keyed on the user ID.
-        """
-        user_id: str = str(event.get("user", ""))
-        channel_id: str = str(event.get("channel", ""))
-        text: str = event.get("text", "")
-        ts: str = str(event.get("ts", ""))
-        thread_ts: Optional[str] = event.get("thread_ts") or None
-
-        if not text.strip():
-            return
-
-        # Check Slack allowlist / denylist
-        slack_cfg = (
-            self.config.channels.slack
-            if self.config.channels and self.config.channels.slack
-            else None
-        )
-        global_denied: List[str] = [
-            str(u) for u in (self.config.security.denied_users or [])
-        ]
-        if user_id in global_denied:
-            self._logger.info(f"Slack: globally denied user {user_id}")
-            return
-        if slack_cfg:
-            denied = [str(u) for u in (slack_cfg.denied_users or [])]
-            if user_id in denied:
-                self._logger.info(f"Slack: channel denied user {user_id}")
-                return
-            allowed = [str(u) for u in (slack_cfg.allowed_users or [])]
-            if allowed and user_id not in allowed:
-                self._logger.info(f"Slack: user {user_id} not in allowlist")
-                return
-
-        # Determine session key and thread reply target
-        threading_enabled: bool = slack_cfg.threading if slack_cfg else False
-        if threading_enabled:
-            # Use the thread root as the session identifier
-            session_key = thread_ts or ts
-        else:
-            session_key = user_id
-
-        # Get agent + session (one active session per agent; all channels share it)
-        slack_thread_id = thread_ts or ts if threading_enabled else None
-        agent_id = (
-            next(iter(self._agent_manager.agents))
-            if self._agent_manager and self._agent_manager.agents
-            else "default"
-        )
-        # Check for a /focus thread binding — it overrides default agent selection
-        if slack_thread_id:
-            bound_agent = getattr(self, "_thread_bindings", {}).get(f"slack:{slack_thread_id}")
-            if bound_agent:
-                agent_id = bound_agent
-
-        session = await self._get_active_session(
-            agent_id=agent_id,
-            channel="slack",
-            user_id=user_id,
-            thread_ts=thread_ts or ts if threading_enabled else None,
-        )
-
-        # Intercept slash commands
-        if text.strip().startswith("/"):
-            # Fire command hook before dispatch
-            cmd_name = text.strip().split()[0][1:].lower()
-            await self._fire(f"command:{cmd_name}", {
-                "command": cmd_name,
-                "args": text.strip().split()[1:],
-                "session_id": session.id if session else None,
-                "channel": "slack",
-                "sender_id": user_id,
-            })
-            from pyclopse.core.commands import CommandContext
-            ctx = CommandContext(
-                gateway=self,
-                session=session,
-                sender_id=user_id,
-                channel="slack",
-                thread_id=slack_thread_id,
-            )
-            reply = await self._command_registry.dispatch(text.strip(), ctx)
-            if reply is not None:
-                post_kwargs: Dict[str, Any] = {"channel": channel_id, "text": reply}
-                if threading_enabled:
-                    post_kwargs["thread_ts"] = thread_ts or ts
-                try:
-                    await slack_client.chat_postMessage(**post_kwargs)
-                except Exception as e:
-                    self._logger.error(f"Slack command reply failed: {e}")
-            return
-
-        # Handle message via agent
-        slack_queue_key = (
-            f"slack:{thread_ts or ts}"
-            if threading_enabled and (thread_ts or ts)
-            else f"slack:{user_id}"
-        )
-        response = await self.enqueue_message(
-            session_key=slack_queue_key,
-            content=text,
-            channel="slack",
-            sender=user_id,
-            sender_id=user_id,
-            message_id=ts,
-            agent_id=agent_id,
-        )
-
-        if response:
-            post_kwargs = {"channel": channel_id, "text": response}
-            if threading_enabled:
-                # Reply to thread (use existing thread or start one from ts)
-                post_kwargs["thread_ts"] = thread_ts or ts
-            try:
-                await slack_client.chat_postMessage(**post_kwargs)
-            except Exception as e:
-                self._logger.error(f"Slack reply failed: {e}")
+    # Legacy Telegram and Slack handler methods removed.
+    # Now handled by TelegramPlugin and SlackPlugin.
 
     async def _handle_job_command(self, text: str) -> str:
         """Parse and execute a /job command sent via Telegram.
@@ -2005,24 +1818,20 @@ class Gateway:
             from pyclopse.channels.base import MessageTarget
             plugin = self._channels[channel]
             target = MessageTarget(channel=channel, user_id=user_id)
-            # Look up bot_name from endpoint so the correct bot delivers
+            # Look up bot_name from gateway cache, falling back to session-persisted endpoint
             ep = self._known_endpoints.get(session.agent_id, {}).get(channel, {})
             bot_name = ep.get("bot_name")
+            if not bot_name:
+                sess_ep = session.context.get("channel_endpoints", {}).get(channel, {})
+                bot_name = sess_ep.get("bot_name")
+            if not bot_name and hasattr(plugin, "bot_for_agent"):
+                _, bot_name = plugin.bot_for_agent(session.agent_id)
             try:
                 limit = getattr(getattr(plugin, "capabilities", None), "max_message_length", 4096)
                 for chunk in self._split_message(text, limit):
                     await plugin.send_message(target, chunk, bot_name=bot_name)
             except Exception as e:
                 self._logger.error(f"_deliver_to_channel {channel} plugin failed: {e}")
-        elif channel == "slack":
-            if self._slack_web_client:
-                try:
-                    kwargs: dict = {"channel": user_id, "text": text}
-                    if thread_ts:
-                        kwargs["thread_ts"] = thread_ts
-                    await self._slack_web_client.chat_postMessage(**kwargs)
-                except Exception as e:
-                    self._logger.error(f"_deliver_to_channel slack failed: {e}")
 
     async def _deliver_result(
         self,
@@ -2310,15 +2119,78 @@ class Gateway:
                     await plugin.send_message(target, content, bot_name=ep.get("bot_name"))
                 except Exception as e:
                     self._logger.error(f"fan-out user message {ch} plugin error: {e}")
-            elif ch == "slack":
-                if self._slack_web_client:
-                    try:
-                        await self._slack_web_client.chat_postMessage(
-                            channel=sender_id,
-                            text=content,
-                        )
-                    except Exception as e:
-                        self._logger.error(f"fan-out user message slack error: {e}")
+
+    async def _notify_agent_endpoints(
+        self,
+        agent_id: Optional[str],
+        text: str,
+        deliver: Any = None,
+    ) -> None:
+        """Send a notification to ALL known endpoints for an agent.
+
+        Merges gateway-level ``_known_endpoints``, session-persisted endpoints,
+        and ``deliver.chat_id`` (from job config) to build the full set of
+        destinations.  Each channel plugin receives the notification with the
+        correct ``bot_name`` so it goes through the right bot.
+
+        Used for job start/finish notifications, which should appear on every
+        channel the user has interacted with — not just one.
+        """
+        if not agent_id:
+            return
+
+        from pyclopse.channels.base import MessageTarget
+
+        # Merge gateway cache + session-persisted endpoints
+        gw_eps = dict(self._known_endpoints.get(agent_id, {}))
+        if self._session_manager:
+            try:
+                session = await self._session_manager.get_active_session(agent_id)
+                if session:
+                    sess_eps = session.context.get("channel_endpoints", {})
+                    for ch, ep in sess_eps.items():
+                        gw_eps.setdefault(ch, {}).update(ep)
+            except Exception:
+                pass
+
+        sent_any = False
+        for ch, ep in gw_eps.items():
+            if ch in ("tui", "job"):
+                continue
+            sender_id = ep.get("sender_id", "")
+            if not sender_id:
+                continue
+            plugin = self._channels.get(ch)
+            if not plugin:
+                continue
+            bot_name = ep.get("bot_name")
+            if not bot_name and hasattr(plugin, "bot_for_agent"):
+                _, bot_name = plugin.bot_for_agent(agent_id)
+            try:
+                target = MessageTarget(channel=ch, user_id=sender_id)
+                limit = getattr(getattr(plugin, "capabilities", None), "max_message_length", 4096)
+                for chunk in self._split_message(text, limit):
+                    await plugin.send_message(target, chunk, bot_name=bot_name)
+                sent_any = True
+                self._logger.info(f"job notify: delivered to {ch} (agent={agent_id}, bot={bot_name})")
+            except Exception as e:
+                self._logger.error(f"job notify {ch} failed: {e}")
+
+        # Fallback: if no endpoints at all, try deliver.chat_id from job config
+        if not sent_any and deliver:
+            chat_id = getattr(deliver, "chat_id", None)
+            channel = getattr(deliver, "channel", "telegram")
+            if chat_id and channel in self._channels:
+                plugin = self._channels[channel]
+                bot_name = None
+                if hasattr(plugin, "bot_for_agent"):
+                    _, bot_name = plugin.bot_for_agent(agent_id)
+                try:
+                    target = MessageTarget(channel=channel, user_id=str(chat_id))
+                    await plugin.send_message(target, text, bot_name=bot_name)
+                    self._logger.info(f"job notify: fallback to deliver.chat_id={chat_id} (agent={agent_id})")
+                except Exception as e:
+                    self._logger.error(f"job notify fallback failed: {e}")
 
     async def _fan_out_response(
         self,
@@ -2405,16 +2277,7 @@ class Gateway:
                     self._logger.info("fan-out: delivered to %s via plugin sender_id=%s", ch, sender_id)
                 except Exception as e:
                     self._logger.error(f"fan-out {ch} plugin error: {e}")
-            elif ch == "slack":
-                if self._slack_web_client:
-                    try:
-                        from pyclopse.agents.runner import strip_thinking_tags
-                        await self._slack_web_client.chat_postMessage(
-                            channel=sender_id,
-                            text=strip_thinking_tags(response_text),
-                        )
-                    except Exception as e:
-                        self._logger.error(f"fan-out slack error: {e}")
+            # All channels (including Slack) now handled by plugin path above
 
     async def handle_message(
         self,
@@ -2593,6 +2456,12 @@ class Gateway:
             _sess_ep = session.context.setdefault("channel_endpoints", {}).setdefault(channel, {})
             _sess_ep["sender_id"] = sender_id
             _sess_ep["sender"] = sender
+            # Preserve bot_name: copy from gateway cache → session so it survives restarts.
+            # The plugin pre-registers bot_name via register_endpoint() before dispatch,
+            # but handle_message only writes sender_id/sender here.  Without this,
+            # bot_name is lost from the session on the next save → wrong bot after restart.
+            if "bot_name" in _gw_ep and "bot_name" not in _sess_ep:
+                _sess_ep["bot_name"] = _gw_ep["bot_name"]
             self._logger.info(
                 "endpoint registered: agent=%s channel=%s sender_id=%s known=%s",
                 agent_id, channel, sender_id, list(self._known_endpoints.get(agent_id, {}).keys()),

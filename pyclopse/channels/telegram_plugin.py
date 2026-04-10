@@ -635,16 +635,16 @@ class TelegramPlugin(ChannelPlugin):
         return self._gw.resolve_agent_id()
 
     def bot_for_agent(self, agent_id: str) -> Tuple[Optional[Any], Optional[str]]:
-        """Return (bot, chat_id) for the bot configured for *agent_id*."""
+        """Return (bot_instance, bot_name) for the bot configured for *agent_id*."""
         cfg = self._telegram_config
         if cfg and cfg.bots:
             for bot_name, _bot_cfg in cfg.bots.items():
                 effective = cfg.effective_config_for_bot(bot_name)
                 if effective.agent == agent_id and bot_name in self._bots:
-                    return self._bots[bot_name], self._chat_ids.get(bot_name)
+                    return self._bots[bot_name], bot_name
         if self._bots:
             bot_name = next(iter(self._bots))
-            return self._bots[bot_name], self._chat_ids.get(bot_name)
+            return self._bots[bot_name], bot_name
         return None, None
 
     def _show_thinking_for_agent(self, agent_id: str) -> bool:

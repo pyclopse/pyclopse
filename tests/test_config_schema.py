@@ -4,14 +4,6 @@ Verifies defaults, parsing, and backward-compatibility.
 """
 
 import pytest
-from pyclopse.channels.telegram_plugin import TelegramChannelConfig
-from pyclopse.config.schema import (
-    Config,
-    AgentConfig,
-    SessionsConfig,
-    SlackConfig,
-    SecurityConfig,
-)
 
 
 # ---------------------------------------------------------------------------
@@ -21,18 +13,21 @@ from pyclopse.config.schema import (
 class TestSessionsConfig:
 
     def test_defaults(self):
+        from pyclopse.config.schema import SessionsConfig
         cfg = SessionsConfig()
         assert cfg.persist_dir == "~/.pyclopse/sessions"
         assert cfg.ttl_hours == 24
         assert cfg.reaper_interval_minutes == 60
 
     def test_custom_values(self):
+        from pyclopse.config.schema import SessionsConfig
         cfg = SessionsConfig(persist_dir="/tmp/sess", ttl_hours=48, reaper_interval_minutes=30)
         assert cfg.persist_dir == "/tmp/sess"
         assert cfg.ttl_hours == 48
         assert cfg.reaper_interval_minutes == 30
 
     def test_camel_case_aliases(self):
+        from pyclopse.config.schema import SessionsConfig
         cfg = SessionsConfig.model_validate({
             "persistDir": "/tmp/x",
             "ttlHours": 12,
@@ -43,6 +38,7 @@ class TestSessionsConfig:
         assert cfg.reaper_interval_minutes == 15
 
     def test_root_config_has_sessions(self):
+        from pyclopse.config.schema import Config, SessionsConfig
         cfg = Config()
         assert isinstance(cfg.sessions, SessionsConfig)
         assert cfg.sessions.ttl_hours == 24
@@ -55,30 +51,37 @@ class TestSessionsConfig:
 class TestAgentConfigNewFields:
 
     def test_show_thinking_defaults_false(self):
+        from pyclopse.config.schema import AgentConfig
         cfg = AgentConfig()
         assert cfg.show_thinking is False
 
     def test_show_thinking_can_be_set(self):
+        from pyclopse.config.schema import AgentConfig
         cfg = AgentConfig(show_thinking=True)
         assert cfg.show_thinking is True
 
     def test_show_thinking_camel_alias(self):
+        from pyclopse.config.schema import AgentConfig
         cfg = AgentConfig.model_validate({"showThinking": True})
         assert cfg.show_thinking is True
 
     def test_typing_mode_defaults_none(self):
+        from pyclopse.config.schema import AgentConfig
         cfg = AgentConfig()
         assert cfg.typing_mode == "none"
 
     def test_typing_mode_can_be_set(self):
+        from pyclopse.config.schema import AgentConfig
         cfg = AgentConfig(typing_mode="typing")
         assert cfg.typing_mode == "typing"
 
     def test_typing_mode_camel_alias(self):
+        from pyclopse.config.schema import AgentConfig
         cfg = AgentConfig.model_validate({"typingMode": "typing"})
         assert cfg.typing_mode == "typing"
 
     def test_existing_fields_unaffected(self):
+        from pyclopse.config.schema import AgentConfig
         cfg = AgentConfig(name="TestBot", model="gpt-4", temperature=0.5)
         assert cfg.name == "TestBot"
         assert cfg.model == "gpt-4"
@@ -92,61 +95,73 @@ class TestAgentConfigNewFields:
 class TestTelegramChannelConfigNewFields:
 
     def test_denied_users_defaults_empty(self):
+        from pyclopse.channels.telegram_plugin import TelegramChannelConfig
         cfg = TelegramChannelConfig()
         assert cfg.denied_users == []
 
     def test_topics_defaults_empty(self):
+        from pyclopse.channels.telegram_plugin import TelegramChannelConfig
         cfg = TelegramChannelConfig()
         assert cfg.topics == {}
 
     def test_typing_indicator_defaults_true(self):
+        from pyclopse.channels.telegram_plugin import TelegramChannelConfig
         cfg = TelegramChannelConfig()
         assert cfg.typing_indicator is True
 
     def test_typing_indicator_can_disable(self):
+        from pyclopse.channels.telegram_plugin import TelegramChannelConfig
         cfg = TelegramChannelConfig.model_validate({"typingIndicator": False})
         assert cfg.typing_indicator is False
 
     def test_topics_can_be_set(self):
+        from pyclopse.channels.telegram_plugin import TelegramChannelConfig
         cfg = TelegramChannelConfig.model_validate({
             "topics": {"general": 0, "alerts": 42}
         })
         assert cfg.topics["alerts"] == 42
 
     def test_denied_users_camel_alias(self):
+        from pyclopse.channels.telegram_plugin import TelegramChannelConfig
         cfg = TelegramChannelConfig.model_validate({"deniedUsers": [111, 222]})
         assert 111 in cfg.denied_users
 
     def test_existing_fields_unaffected(self):
+        from pyclopse.channels.telegram_plugin import TelegramChannelConfig
         cfg = TelegramChannelConfig.model_validate({"enabled": True, "allowedUsers": [12345]})
         assert cfg.enabled is True
         assert 12345 in cfg.allowed_users
 
 
 # ---------------------------------------------------------------------------
-# SlackConfig new fields
+# SlackChannelConfig new fields
 # ---------------------------------------------------------------------------
 
-class TestSlackConfigNewFields:
+class TestSlackChannelConfigNewFields:
 
     def test_threading_defaults_true(self):
-        cfg = SlackConfig()
+        from pyclopse.channels.slack_plugin import SlackChannelConfig
+        cfg = SlackChannelConfig()
         assert cfg.threading is True
 
     def test_threading_can_disable(self):
-        cfg = SlackConfig(threading=False)
+        from pyclopse.channels.slack_plugin import SlackChannelConfig
+        cfg = SlackChannelConfig(threading=False)
         assert cfg.threading is False
 
     def test_allowed_users_defaults_empty(self):
-        cfg = SlackConfig()
+        from pyclopse.channels.slack_plugin import SlackChannelConfig
+        cfg = SlackChannelConfig()
         assert cfg.allowed_users == []
 
     def test_denied_users_defaults_empty(self):
-        cfg = SlackConfig()
+        from pyclopse.channels.slack_plugin import SlackChannelConfig
+        cfg = SlackChannelConfig()
         assert cfg.denied_users == []
 
     def test_camel_case_aliases(self):
-        cfg = SlackConfig.model_validate({
+        from pyclopse.channels.slack_plugin import SlackChannelConfig
+        cfg = SlackChannelConfig.model_validate({
             "allowedUsers": ["U123"],
             "deniedUsers": ["U456"],
         })
@@ -178,14 +193,17 @@ class TestWhatsAppViaChannelConfig:
 class TestSecurityConfigNewFields:
 
     def test_denied_users_defaults_empty(self):
+        from pyclopse.config.schema import SecurityConfig
         cfg = SecurityConfig()
         assert cfg.denied_users == []
 
     def test_denied_users_can_be_set(self):
+        from pyclopse.config.schema import SecurityConfig
         cfg = SecurityConfig.model_validate({"deniedUsers": [999]})
         assert 999 in cfg.denied_users
 
     def test_existing_fields_unaffected(self):
+        from pyclopse.config.schema import SecurityConfig
         cfg = SecurityConfig()
         assert cfg.audit.enabled is True
         assert cfg.sandbox.type == "none"
@@ -199,10 +217,12 @@ class TestBackwardCompatibility:
 
     def test_minimal_config_loads(self):
         """Config with only version field should not crash."""
+        from pyclopse.config.schema import Config
         cfg = Config.model_validate({"version": "1.0"})
         assert cfg.sessions.ttl_hours == 24
 
     def test_config_without_sessions_section(self):
+        from pyclopse.config.schema import Config, SessionsConfig
         cfg = Config.model_validate({
             "version": "1.0",
             "agents": {},
@@ -210,10 +230,12 @@ class TestBackwardCompatibility:
         assert isinstance(cfg.sessions, SessionsConfig)
 
     def test_telegram_without_new_fields(self):
+        from pyclopse.channels.telegram_plugin import TelegramChannelConfig
         cfg = TelegramChannelConfig.model_validate({"botToken": "abc123"})
         assert cfg.topics == {}
         assert cfg.typing_indicator is True
 
     def test_slack_without_new_fields(self):
-        cfg = SlackConfig.model_validate({})
+        from pyclopse.channels.slack_plugin import SlackChannelConfig
+        cfg = SlackChannelConfig.model_validate({})
         assert cfg.threading is True

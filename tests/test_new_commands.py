@@ -30,15 +30,16 @@ def _make_runner(initialized=True, session_id="sess-abc"):
 def _make_gateway(agent_id="main", session_id="sess-abc", runner=None, channel="telegram"):
     from pyclopse.core.gateway import Gateway
     from pyclopse.channels.telegram_plugin import TelegramChannelConfig
+    from pyclopse.channels.slack_plugin import SlackChannelConfig
     from pyclopse.config.schema import (
-        Config, AgentsConfig, ChannelsConfig, SlackConfig,
+        Config, AgentsConfig, ChannelsConfig,
     )
 
     gw = Gateway.__new__(Gateway)
     gw._logger = MagicMock()
 
     tg = TelegramChannelConfig(allowed_users=[], denied_users=[])
-    sl = SlackConfig(allowed_users=[], denied_users=[])
+    sl = SlackChannelConfig(allowed_users=[], denied_users=[])
     channels = ChannelsConfig(telegram=tg, slack=sl)
     gw._config = Config(agents=AgentsConfig(), channels=channels)
 
