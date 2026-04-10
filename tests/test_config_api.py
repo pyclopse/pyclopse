@@ -85,7 +85,7 @@ class TestGetConfig:
 
     @pytest.mark.asyncio
     async def test_sensitive_fields_redacted(self):
-        from pyclopse.config.schema import Config, TelegramConfig, ChannelsConfig
+        from pyclopse.config.schema import Config, ChannelsConfig
         gw = MagicMock()
         gw.config = Config.model_validate({
             "version": "1.0",

@@ -1,13 +1,13 @@
 """
-Tests for Gateway._split_message() and its use in _handle_telegram_message.
+Tests for Gateway._split_message() and its use in TelegramPlugin._handle_message.
 """
 
 import pytest
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import AsyncMock, MagicMock, PropertyMock
 
 
 # ---------------------------------------------------------------------------
-# _split_message unit tests
+# _split_message unit tests (stays on Gateway)
 # ---------------------------------------------------------------------------
 
 def _split(text, limit=4000):
@@ -75,7 +75,7 @@ class TestSplitMessage:
 
     def test_empty_text_returns_empty_list_or_single(self):
         chunks = _split("", limit=4000)
-        # Either empty or [""] — just no crash and reasonable result
+        # Either empty or [""] -- just no crash and reasonable result
         assert isinstance(chunks, list)
 
     def test_long_response_splits_correctly_with_small_limit(self):
@@ -86,50 +86,55 @@ class TestSplitMessage:
 
 
 # ---------------------------------------------------------------------------
-# Integration: _handle_telegram_message sends multiple chunks
+# Integration: TelegramPlugin._handle_message sends multiple chunks
 # ---------------------------------------------------------------------------
 
-def _make_gateway(response_text):
+def _make_plugin(response_text):
+    """Build a TelegramPlugin stub that returns *response_text* from dispatch."""
+    from pyclopse.channels.telegram_plugin import TelegramPlugin, TelegramChannelConfig
     from pyclopse.core.gateway import Gateway
     from pyclopse.config.schema import (
-        Config, ChannelsConfig, TelegramConfig, AgentsConfig, SecurityConfig,
+        Config, ChannelsConfig, AgentsConfig, SecurityConfig,
     )
 
-    gw = Gateway.__new__(Gateway)
-    gw._is_running = True
-    gw._initialized = True
-    gw._logger = MagicMock()
-    gw._audit_logger = None
-    gw._telegram_bot = AsyncMock()
-    gw._telegram_chat_id = None
-    gw._telegram_polling_task = None
-    gw._active_tasks = {}
-    gw._channels = {}
-    gw._seen_message_ids = {}
-    gw._dedup_ttl_seconds = 60
-    gw._command_registry = MagicMock()
-    gw._command_registry.dispatch = AsyncMock(return_value=None)
+    plugin = TelegramPlugin()
 
-    telegram_cfg = TelegramConfig.model_validate({
+    bot = AsyncMock()
+    bot.send_message = AsyncMock(return_value=MagicMock(message_id=99))
+    bot.send_chat_action = AsyncMock()
+    plugin._bots = {"_default": bot}
+    plugin._chat_ids = {"_default": None}
+
+    telegram_cfg = TelegramChannelConfig.model_validate({
         "enabled": True,
         "botToken": "fake",
         "allowedUsers": [111],
         "typingIndicator": False,  # disable to simplify test
     })
-    channels_cfg = ChannelsConfig(telegram=telegram_cfg)
-    gw._config = Config(channels=channels_cfg, agents=AgentsConfig(), security=SecurityConfig())
 
-    gw.handle_message = AsyncMock(return_value=response_text)
-    # enqueue_message is the new queue-aware wrapper around handle_message;
-    # mock it here so the stub doesn't need a real QueueManager.
-    gw.enqueue_message = AsyncMock(return_value=response_text)
-    mock_sm = MagicMock()
-    mock_sm.get_or_create_session = AsyncMock(return_value=MagicMock())
-    gw._session_manager = mock_sm
-    gw._agent_manager = MagicMock()
-    gw._agent_manager.agents = {}
+    config = Config(
+        channels=ChannelsConfig(telegram=telegram_cfg),
+        agents=AgentsConfig(),
+        security=SecurityConfig(),
+    )
 
-    return gw
+    handle = MagicMock()
+    handle.dispatch = AsyncMock(return_value=response_text)
+    handle.dispatch_command = AsyncMock(return_value=None)
+    handle.is_duplicate = MagicMock(return_value=False)
+    handle.check_access = MagicMock(return_value=True)
+    handle.resolve_agent_id = MagicMock(return_value="test_agent")
+    handle.register_endpoint = MagicMock()
+    # Use the real _split_message for integration tests
+    handle.split_message = MagicMock(
+        side_effect=lambda text, limit=4096: Gateway._split_message(text, limit)
+    )
+    type(handle).config = PropertyMock(return_value=config)
+
+    plugin._gw = handle
+    plugin._telegram_config = telegram_cfg
+
+    return plugin, bot
 
 
 def _make_message(user_id=111, message_id=1, text="hi"):
@@ -139,6 +144,7 @@ def _make_message(user_id=111, message_id=1, text="hi"):
     msg.chat.id = 42
     msg.message_id = message_id
     msg.text = text
+    msg.message_thread_id = None
     return msg
 
 
@@ -146,24 +152,24 @@ class TestMessageSendSplitting:
 
     @pytest.mark.asyncio
     async def test_short_response_sends_once(self):
-        gw = _make_gateway("short response")
-        await gw._handle_telegram_message(_make_message())
-        assert gw._telegram_bot.send_message.call_count == 1
+        plugin, bot = _make_plugin("short response")
+        await plugin._handle_message(_make_message(), "_default", bot)
+        assert bot.send_message.call_count == 1
 
     @pytest.mark.asyncio
     async def test_long_response_sends_multiple(self):
         # 9000 chars forces at least 3 sends at the 4000-char default limit
         long_text = "sentence " * 1000  # ~9000 chars with spaces
-        gw = _make_gateway(long_text)
-        await gw._handle_telegram_message(_make_message())
-        assert gw._telegram_bot.send_message.call_count >= 2
+        plugin, bot = _make_plugin(long_text)
+        await plugin._handle_message(_make_message(), "_default", bot)
+        assert bot.send_message.call_count >= 2
 
     @pytest.mark.asyncio
     async def test_each_chunk_within_telegram_limit(self):
-        """Each send_message call must have text ≤ 4096 chars."""
+        """Each send_message call must have text within the split limit."""
         long_text = "paragraph\n\n" * 500  # ~5500 chars
-        gw = _make_gateway(long_text)
-        await gw._handle_telegram_message(_make_message())
-        for call in gw._telegram_bot.send_message.call_args_list:
+        plugin, bot = _make_plugin(long_text)
+        await plugin._handle_message(_make_message(), "_default", bot)
+        for call in bot.send_message.call_args_list:
             text = call.kwargs.get("text", call.args[-1] if call.args else "")
-            assert len(text) <= 4000, f"Chunk too long: {len(text)}"
+            assert len(text) <= 4096, f"Chunk too long: {len(text)}"

@@ -427,14 +427,9 @@ async def run_gateway(
 
     gateway._is_running = True
 
-    # Start Telegram polling — one task per configured bot
-    for _bot_name, _bot in gateway._tg_bots.items():
-        gateway._tg_polling_tasks[_bot_name] = asyncio.create_task(
-            gateway._telegram_poll_bot(_bot_name, _bot),
-            name=f"telegram-poll-{_bot_name}",
-        )
-    if gateway._tg_bots:
-        print(f"Telegram polling: {list(gateway._tg_bots)}")
+    # Telegram polling is now started by TelegramPlugin.start() during gateway.initialize()
+    if "telegram" in gateway._channels:
+        print("Telegram channel plugin active")
 
     print(f"HTTP API docs: http://{gw_host}:{gw_port}/docs")
     print(f"MCP endpoint:  http://{gw_host}:{mcp_port}/mcp")
@@ -497,14 +492,9 @@ async def run_gateway_with_tui(
 
     gateway._is_running = True
 
-    # Start Telegram polling — one task per configured bot
-    for _bot_name, _bot in gateway._tg_bots.items():
-        gateway._tg_polling_tasks[_bot_name] = asyncio.create_task(
-            gateway._telegram_poll_bot(_bot_name, _bot),
-            name=f"telegram-poll-{_bot_name}",
-        )
-    if gateway._tg_bots:
-        print(f"Telegram polling: {list(gateway._tg_bots)}")
+    # Telegram polling is now started by TelegramPlugin.start() during gateway.initialize()
+    if "telegram" in gateway._channels:
+        print("Telegram channel plugin active")
 
     # Run the dashboard TUI (replaces the old multi-screen TUI)
     try:

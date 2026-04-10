@@ -209,6 +209,125 @@ def _snapshot_ctx_tokens(agent: Any, session: Any) -> None:
         pass  # Never break message handling over a metrics snapshot
 
 
+class _GatewayHandleImpl:
+    """Concrete :class:`GatewayHandle` backed by a live :class:`Gateway`.
+
+    Exposes a narrow, safe interface to channel plugins while keeping all
+    gateway internals private.  Instantiated once via
+    :meth:`Gateway._build_gateway_handle` and shared across all plugins.
+    """
+
+    def __init__(self, gateway: "Gateway") -> None:
+        self._gw = gateway
+
+    # -- Core dispatch --------------------------------------------------------
+
+    async def dispatch(
+        self,
+        channel: str,
+        user_id: str,
+        user_name: str,
+        text: str,
+        message_id: Optional[str] = None,
+        agent_id: Optional[str] = None,
+        on_chunk=None,
+    ) -> Optional[str]:
+        return await self._gw.handle_message(
+            channel=channel,
+            sender=user_name,
+            sender_id=user_id,
+            content=text,
+            message_id=message_id,
+            agent_id=agent_id,
+            on_chunk=on_chunk,
+        )
+
+    async def dispatch_command(
+        self,
+        channel: str,
+        user_id: str,
+        text: str,
+        thread_id: Optional[str] = None,
+        agent_id: Optional[str] = None,
+    ) -> Optional[str]:
+        if not text.strip().startswith("/"):
+            return None
+        resolved = self.resolve_agent_id(agent_id)
+        session = await self._gw._get_active_session(
+            agent_id=resolved, channel=channel, user_id=user_id,
+        )
+        cmd_name = text.strip().split()[0][1:].lower()
+        await self._gw._fire(f"command:{cmd_name}", {
+            "command": cmd_name,
+            "args": text.strip().split()[1:],
+            "session_id": session.id if session else None,
+            "channel": channel,
+            "sender_id": user_id,
+        })
+        from pyclopse.core.commands import CommandContext
+        ctx = CommandContext(
+            gateway=self._gw,
+            session=session,
+            sender_id=user_id,
+            channel=channel,
+            thread_id=thread_id,
+        )
+        return await self._gw._command_registry.dispatch(text.strip(), ctx)
+
+    # -- Helpers --------------------------------------------------------------
+
+    def is_duplicate(self, channel: str, message_id: str) -> bool:
+        return self._gw._is_duplicate_message(channel, message_id)
+
+    def resolve_agent_id(self, hint: Optional[str] = None) -> str:
+        if hint and self._gw._agent_manager and hint in self._gw._agent_manager.agents:
+            return hint
+        if self._gw._agent_manager and self._gw._agent_manager.agents:
+            return next(iter(self._gw._agent_manager.agents))
+        return "default"
+
+    def check_access(
+        self,
+        user_id: int,
+        allowed_users: List[int],
+        denied_users: List[int],
+    ) -> bool:
+        global_denied = getattr(self._gw.config.security, "denied_users", []) or []
+        if user_id in global_denied:
+            return False
+        if denied_users and user_id in denied_users:
+            return False
+        global_allowed = getattr(self._gw.config.security, "allowed_users", []) or []
+        effective_allowed = allowed_users if allowed_users else global_allowed
+        if effective_allowed and user_id not in effective_allowed:
+            return False
+        return True
+
+    def register_endpoint(
+        self,
+        agent_id: str,
+        channel: str,
+        endpoint: Dict[str, Any],
+    ) -> None:
+        ep = self._gw._known_endpoints.setdefault(agent_id, {}).setdefault(channel, {})
+        ep.update(endpoint)
+
+    def get_agent_config(self, agent_id: str) -> Optional[Any]:
+        """Return the live AgentConfig for *agent_id*, or None."""
+        if self._gw._agent_manager:
+            agent = self._gw._agent_manager.get_agent(agent_id)
+            if agent:
+                return getattr(agent, "config", None)
+        return None
+
+    def split_message(self, text: str, limit: int = 4096) -> List[str]:
+        return self._gw._split_message(text, limit)
+
+    @property
+    def config(self) -> Any:
+        return self._gw.config
+
+
 @reflect_system("gateway")
 class Gateway:
     """Main orchestrator that wires all pyclopse subsystems together.
@@ -295,7 +414,9 @@ class Gateway:
         self._command_registry = CommandRegistry()
         register_builtin_commands(self._command_registry, self)
 
-        # Multi-bot Telegram: keyed by bot_name ("_default" for legacy single-bot)
+        # Legacy Telegram state — kept for backward compat with code that
+        # references these dicts (fan-out legacy branches).  Will be removed
+        # once all channels are migrated to plugins.
         self._tg_bots: Dict[str, Any] = {}
         self._tg_chat_ids: Dict[str, Optional[str]] = {}
         self._tg_polling_tasks: Dict[str, asyncio.Task] = {}
@@ -733,34 +854,21 @@ class Gateway:
         await self.agent_manager.start_all()
         self._logger.info(f"Started {len(self.agent_manager.agents)} agents")
 
+    # -- Gateway handle for channel plugins ------------------------------------
+
+    def _build_gateway_handle(self) -> "GatewayHandle":
+        """Create (or return cached) :class:`_GatewayHandleImpl` for plugins."""
+        if not hasattr(self, "_gw_handle") or self._gw_handle is None:
+            self._gw_handle = _GatewayHandleImpl(self)
+        return self._gw_handle
+
     async def _init_channel_plugins(self) -> None:
         """Load, start, and register all channel plugins."""
         from pyclopse.channels.loader import load_all
-        from pyclopse.channels.plugin import GatewayHandle
 
         specs = list(self.config.plugins.channels)
+        handle = self._build_gateway_handle()
 
-        # Build a GatewayHandle backed by this gateway instance
-        gw = self
-
-        class _Handle(GatewayHandle):
-            async def dispatch(
-                self,
-                channel: str,
-                user_id: str,
-                user_name: str,
-                text: str,
-                message_id: Optional[str] = None,
-            ) -> Optional[str]:
-                return await gw.handle_message(
-                    channel=channel,
-                    sender=user_name,
-                    sender_id=user_id,
-                    content=text,
-                    message_id=message_id,
-                )
-
-        handle = _Handle()
         plugins = load_all(specs)
         for plugin in plugins:
             name = getattr(plugin, "name", type(plugin).__name__)
@@ -781,13 +889,15 @@ class Gateway:
 
     async def _init_channels(self) -> None:
         """Initialize channel adapters."""
-        # Load and start external channel plugins first
+        handle = self._build_gateway_handle()
+
+        # Register built-in channels based on config
+        await self._init_builtin_channels(handle)
+
+        # Load and start external channel plugins
         await self._init_channel_plugins()
 
-        # Initialize Telegram bot(s)
-        await self._init_telegram()
-
-        # Initialize Slack outbound client if configured
+        # Initialize Slack outbound client if configured (legacy — will become plugin)
         slack_config = self.config.channels.slack if self.config.channels else None
         if slack_config and slack_config.enabled and slack_config.bot_token:
             try:
@@ -799,130 +909,69 @@ class Gateway:
             except Exception as e:
                 self._logger.error(f"Failed to initialize Slack client: {e}")
 
-    async def _init_telegram(self) -> None:
-        """Initialize Telegram bot(s).
+    @staticmethod
+    def _builtin_plugin_classes() -> List[tuple]:
+        """Return (channel_name, plugin_class) for each built-in channel.
 
-        Supports two modes:
-        - **Multi-bot** (``channels.telegram.bots`` dict populated): one Bot
-          instance per named entry, each routed to its configured agent.
-        - **Legacy single-bot** (``bot_token`` set directly on TelegramConfig):
-          a single Bot stored under the synthetic key ``"_default"``.
+        Uses lazy imports so missing optional dependencies (e.g. discord.py)
+        don't prevent other channels from loading.
         """
-        telegram_config = self.config.channels.telegram
-        token_summary = "set" if telegram_config and telegram_config.bot_token else "empty"
-        self._logger.info(
-            f"Telegram config: enabled={telegram_config.enabled if telegram_config else None}, "
-            f"bot_token={token_summary}, "
-            f"bots={list(telegram_config.bots) if telegram_config else []}"
-        )
-        if not telegram_config or not telegram_config.enabled:
-            self._logger.info("Telegram disabled or not configured")
-            return
-
+        result = []
         try:
-            from telegram import Bot
+            from pyclopse.channels.telegram_plugin import TelegramPlugin
+            result.append(("telegram", TelegramPlugin))
         except ImportError:
-            self._logger.warning("python-telegram-bot not installed, Telegram disabled")
-            return
-
-        # Build a list of (bot_name, token, effective_config) to initialize
-        bots_to_init: List[tuple] = []  # (name, token, effective_cfg)
-
-        if telegram_config.bots:
-            # Multi-bot mode
-            for bot_name, bot_cfg in telegram_config.bots.items():
-                effective = telegram_config.effective_config_for_bot(bot_name)
-                if effective.bot_token:
-                    bots_to_init.append((bot_name, effective.bot_token, effective))
-                else:
-                    self._logger.warning(f"Telegram bot '{bot_name}' has no botToken, skipping")
-        elif telegram_config.bot_token:
-            # Legacy single-bot mode — use synthetic name "_default"
-            bots_to_init.append(("_default", telegram_config.bot_token, telegram_config))
-
-        for bot_name, token, effective_cfg in bots_to_init:
-            try:
-                bot = Bot(token=token)
-                me = await bot.get_me()
-                # Clear any stale webhook / long-poll session that would cause 409 Conflict
-                try:
-                    await bot.delete_webhook(drop_pending_updates=False)
-                    self._logger.debug(f"Cleared webhook for bot '{bot_name}'")
-                except Exception as wh_err:
-                    self._logger.warning(f"Could not clear webhook for bot '{bot_name}': {wh_err}")
-                self._tg_bots[bot_name] = bot
-                # Use first allowed_users entry as default pulse target
-                allowed = getattr(effective_cfg, "allowed_users", None) or []
-                self._tg_chat_ids[bot_name] = str(allowed[0]) if allowed else None
-                self._logger.info(
-                    f"Telegram bot '{bot_name}' initialized: @{me.username} "
-                    f"(agent={getattr(effective_cfg, 'agent', None) or 'first'})"
-                )
-                await self._register_telegram_commands_for_bot(bot)
-            except Exception as e:
-                self._logger.error(f"Failed to initialize Telegram bot '{bot_name}': {e}")
-
-        if self._tg_bots:
-            self._logger.info(
-                f"Telegram ready: {len(self._tg_bots)} bot(s) — {list(self._tg_bots)}"
-            )
-
-    def _agent_id_for_bot(self, bot_name: str) -> str:
-        """Resolve which agent_id a given bot should route messages to."""
-        telegram_config = self.config.channels.telegram
-        if telegram_config and telegram_config.bots and bot_name in telegram_config.bots:
-            effective = telegram_config.effective_config_for_bot(bot_name)
-            agent_id = effective.agent
-            if agent_id:
-                if self._agent_manager and agent_id in self._agent_manager.agents:
-                    return agent_id
-                self._logger.warning(
-                    f"Telegram bot '{bot_name}' configured for agent '{agent_id}' "
-                    f"but that agent is not registered — falling back to first agent"
-                )
-        # Fall back: first available agent
-        if self._agent_manager and self._agent_manager.agents:
-            return next(iter(self._agent_manager.agents))
-        return "default"
-
-    def _bot_and_chat_for_agent(self, agent_id: str) -> tuple:
-        """Return (bot, chat_id) for the Telegram bot configured for ``agent_id``.
-
-        Searches the bots dict for a bot whose ``agent`` field matches, then
-        falls back to the first bot.  Returns ``(None, None)`` if no bot exists.
-        """
-        self._ensure_tg_dicts()
-        telegram_config = self.config.channels.telegram if hasattr(self, "_config") and self._config else None
-        if telegram_config and telegram_config.bots:
-            for bot_name, bot_cfg in telegram_config.bots.items():
-                effective = telegram_config.effective_config_for_bot(bot_name)
-                if effective.agent == agent_id and bot_name in self._tg_bots:
-                    return self._tg_bots[bot_name], self._tg_chat_ids.get(bot_name)
-        # Fall back to first bot
-        if self._tg_bots:
-            bot_name = next(iter(self._tg_bots))
-            return self._tg_bots[bot_name], self._tg_chat_ids.get(bot_name)
-        return None, None
-
-    async def _register_telegram_commands_for_bot(self, bot: Any) -> None:
-        """Register slash commands for a specific Bot instance."""
+            pass
         try:
-            from telegram import BotCommand
-            commands = [
-                BotCommand(cmd, desc)
-                for cmd, desc in self._command_registry.commands_for_telegram()
-            ]
-            await bot.set_my_commands(commands)
-            self._logger.info(f"Registered {len(commands)} Telegram commands")
-        except Exception as e:
-            self._logger.warning(f"Failed to register Telegram commands: {e}")
+            from pyclopse.channels.discord_plugin import DiscordPlugin
+            result.append(("discord", DiscordPlugin))
+        except ImportError:
+            pass
+        try:
+            from pyclopse.channels.whatsapp_plugin import WhatsAppPlugin
+            result.append(("whatsapp", WhatsAppPlugin))
+        except ImportError:
+            pass
+        return result
 
-    async def _register_telegram_commands(self) -> None:
-        """Register slash commands with Telegram so they appear in the UI command picker."""
-        bot = self._telegram_bot
-        if not bot:
+    async def _init_builtin_channels(self, handle: Any) -> None:
+        """Register built-in channel plugins based on config.
+
+        For each built-in plugin, checks whether the channel is configured
+        (i.e. ``channels.{name}`` exists in YAML), validates the config
+        against the plugin's declared schema, and starts the plugin if enabled.
+        """
+        channels_cfg = self.config.channels
+        if not channels_cfg:
             return
-        await self._register_telegram_commands_for_bot(bot)
+
+        for channel_name, plugin_cls in self._builtin_plugin_classes():
+            # Read raw config for this channel (could be a dict via extra="allow")
+            raw = getattr(channels_cfg, channel_name, None)
+            if raw is None:
+                continue
+            # Validate against the plugin's declared schema
+            try:
+                cfg = plugin_cls.config_schema.model_validate(
+                    raw if isinstance(raw, dict) else (
+                        raw.model_dump(by_alias=True) if hasattr(raw, "model_dump") else dict(raw)
+                    )
+                )
+            except Exception as e:
+                self._logger.error(f"Invalid config for '{channel_name}': {e}")
+                continue
+            if not cfg.enabled:
+                self._logger.debug(f"Channel '{channel_name}' disabled in config")
+                continue
+            try:
+                plugin = plugin_cls()
+                await plugin.start(handle)
+                self._channels[channel_name] = plugin
+                self._logger.info(f"{channel_name} channel plugin started")
+            except Exception as e:
+                self._logger.error(f"{channel_name} plugin failed to start: {e}")
+
+    # Legacy Telegram methods removed — now handled by TelegramPlugin
 
     async def _init_jobs(self) -> None:
         """Initialize job scheduler."""
@@ -1086,51 +1135,25 @@ class Gateway:
                     spawning_session = None
                 if not spawning_session:
                     return
-                s_channel = spawning_session.last_channel or spawning_session.channel
-                s_user_id = spawning_session.last_user_id or spawning_session.user_id
-                s_agent_id = spawning_session.agent_id
-                if s_channel == "telegram":
-                    bot, chat_id = self._bot_and_chat_for_agent(s_agent_id)
-                    chat_id = chat_id or s_user_id
-                    if bot and chat_id:
-                        label = getattr(job, "name", job.id)
-                        if run.status == JobStatus.RUNNING:
-                            text = f"▶️ Subagent *{label}* started."
-                        else:
-                            ok = run.status == JobStatus.COMPLETED
-                            icon = "✅" if ok else "❌"
-                            duration = f" ({run.duration_ms():.0f}ms)" if run.duration_ms() else ""
-                            text = f"{icon} Subagent *{label}* finished{duration}."
-                            if run.error:
-                                text += f"\nError: {run.error}"
-                        try:
-                            await bot.send_message(chat_id=chat_id, text=text, parse_mode="Markdown")
-                        except Exception as e:
-                            self._logger.error(f"Subagent notify send failed: {e}")
+                label = getattr(job, "name", job.id)
+                if run.status == JobStatus.RUNNING:
+                    text = f"▶️ Subagent *{label}* started."
+                else:
+                    ok = run.status == JobStatus.COMPLETED
+                    icon = "✅" if ok else "❌"
+                    duration = f" ({run.duration_ms():.0f}ms)" if run.duration_ms() else ""
+                    text = f"{icon} Subagent *{label}* finished{duration}."
+                    if run.error:
+                        text += f"\nError: {run.error}"
+                try:
+                    await self._deliver_to_channel(spawning_session, text)
+                except Exception as e:
+                    self._logger.error(f"Subagent notify send failed: {e}")
                 return
 
             # Determine delivery target
             deliver = getattr(job, "deliver", None)
             if deliver and getattr(deliver, "mode", None) == "none":
-                return
-
-            # For announce mode, pick channel + chat_id
-            chat_id = None
-            if deliver and getattr(deliver, "mode", None) == "announce":
-                chat_id = getattr(deliver, "chat_id", None)
-
-            # If the job runs an agent, use that agent's bot + chat_id
-            job_agent_id = getattr(getattr(job, "run", None), "agent", None)
-            if job_agent_id:
-                agent_bot, agent_chat_id = self._bot_and_chat_for_agent(job_agent_id)
-            else:
-                agent_bot, agent_chat_id = self._telegram_bot, self._telegram_chat_id
-
-            bot = agent_bot or self._telegram_bot
-            # Fall back to the default Telegram chat (whoever last messaged)
-            chat_id = chat_id or agent_chat_id or self._telegram_chat_id
-
-            if not bot or not chat_id:
                 return
 
             # Webhook delivery (completion only)
@@ -1171,14 +1194,48 @@ class Gateway:
                 if run.error:
                     text += f"\nError: {run.error}"
 
-            try:
-                await bot.send_message(
-                    chat_id=chat_id,
-                    text=text,
-                    parse_mode="Markdown",
+            # Resolve the owning agent: agent-type jobs have job.run.agent,
+            # command-type jobs are tracked in the scheduler's _job_agents dict.
+            job_agent_id = getattr(getattr(job, "run", None), "agent", None)
+            if not job_agent_id and self._job_scheduler:
+                job_agent_id = self._job_scheduler._job_agents.get(job.id)
+            notify_session = None
+            if job_agent_id and self._session_manager:
+                try:
+                    notify_session = await self._get_active_session(
+                        agent_id=job_agent_id, channel="telegram", user_id="",
+                    )
+                except Exception:
+                    pass
+
+            if notify_session:
+                try:
+                    await self._deliver_to_channel(notify_session, text)
+                except Exception as e:
+                    self._logger.error(f"Job notify send failed: {e}")
+            else:
+                # No session — try direct plugin send using known endpoint or
+                # deliver.chat_id.  Resolve the correct bot for this agent so
+                # the notification appears from the right bot, not the default.
+                ep = self._known_endpoints.get(job_agent_id or "", {}).get("telegram", {})
+                chat_id = ep.get("sender_id") or (
+                    getattr(deliver, "chat_id", None) if deliver else None
                 )
-            except Exception as e:
-                self._logger.error(f"Job notify send failed: {e}")
+                bot_name = ep.get("bot_name")
+                # If no bot_name from endpoint, ask the plugin which bot serves this agent
+                if not bot_name and job_agent_id and "telegram" in self._channels:
+                    tg_plugin = self._channels["telegram"]
+                    if hasattr(tg_plugin, "bot_for_agent"):
+                        _, bot_name = tg_plugin.bot_for_agent(job_agent_id)
+                if chat_id and "telegram" in self._channels:
+                    try:
+                        from pyclopse.channels.base import MessageTarget
+                        target = MessageTarget(channel="telegram", user_id=chat_id)
+                        await self._channels["telegram"].send_message(
+                            target, text, bot_name=bot_name,
+                        )
+                    except Exception as e:
+                        self._logger.error(f"Job notify send failed: {e}")
 
             # On timeout, notify report_to_agent so it can tell the user
             if is_timeout and run.status != JobStatus.RUNNING:
@@ -1291,35 +1348,6 @@ class Gateway:
         self._file_watcher = watcher
         self._logger.info(f"File watcher started — watching {watched} file(s)")
 
-    async def _telegram_poll_bot(self, bot_name: str, bot: Any) -> None:
-        """Long-poll one Telegram bot for incoming messages and dispatch them."""
-        offset: Optional[int] = None
-        self._logger.info(f"Telegram polling loop running (bot={bot_name})")
-        while self._is_running:
-            try:
-                updates = await bot.get_updates(
-                    offset=offset,
-                    timeout=30,
-                    allowed_updates=["message"],
-                )
-                for update in updates:
-                    offset = update.update_id + 1
-                    if update.message and update.message.text:
-                        asyncio.create_task(
-                            self._handle_telegram_message(update.message, bot_name=bot_name, bot=bot)
-                        )
-            except asyncio.CancelledError:
-                break
-            except Exception as e:
-                self._logger.error(f"Telegram poll error (bot={bot_name}): {e}")
-                await asyncio.sleep(5)
-        self._logger.info(f"Telegram polling loop stopped (bot={bot_name})")
-
-    async def _telegram_poll(self) -> None:
-        """Compat shim: poll the first bot (single-bot mode)."""
-        if self._tg_bots:
-            bot_name, bot = next(iter(self._tg_bots.items()))
-            await self._telegram_poll_bot(bot_name, bot)
 
     def _is_duplicate_message(self, channel: str, message_id: str) -> bool:
         """Return True if this message was already processed (dedup check).
@@ -1340,562 +1368,9 @@ class Gateway:
         self._seen_message_ids[key] = now
         return False
 
-    async def _handle_telegram_message(
-        self,
-        message: Any,
-        bot_name: str = "_default",
-        bot: Optional[Any] = None,
-    ) -> None:
-        """Route one incoming Telegram message to the agent and reply.
-
-        Parameters
-        ----------
-        message:
-            Telegram Message object from python-telegram-bot.
-        bot_name:
-            Name of the bot that received this message (used for per-bot
-            access-control resolution, agent routing, and dedup keying).
-        bot:
-            The Bot instance to use for replies.  Falls back to the first
-            registered bot when omitted (single-bot / compat mode).
-        """
-        bot = bot or self._telegram_bot
-        user_id = str(message.from_user.id)
-        chat_id = str(message.chat.id)
-        text = message.text or ""
-        # Telegram group topics expose a thread ID
-        tg_thread_id = str(message.message_thread_id) if getattr(message, "message_thread_id", None) else None
-
-        self._logger.info(
-            f"Telegram message received: bot={bot_name} user={user_id} chat={chat_id} "
-            f"msg_id={message.message_id} text={text[:60]!r}"
-        )
-
-        # Dedup: include bot_name so the same message_id on different bots
-        # is not incorrectly treated as a duplicate.
-        if self._is_duplicate_message(f"telegram/{bot_name}", str(message.message_id)):
-            self._logger.debug(f"Dropping duplicate Telegram message_id={message.message_id} (bot={bot_name})")
-            return
-
-        # Resolve effective per-bot access-control lists
-        telegram_config = self.config.channels.telegram
-        uid_int = int(user_id)
-
-        # Global denylist always wins
-        global_denied = self.config.security.denied_users
-        if global_denied and uid_int in global_denied:
-            self._logger.debug(f"Blocked globally denied user {user_id}")
-            return
-
-        # Resolve per-bot config (falls back to parent TelegramConfig for single-bot mode)
-        if telegram_config and telegram_config.bots and bot_name in telegram_config.bots:
-            effective_tg = telegram_config.effective_config_for_bot(bot_name)
-        else:
-            effective_tg = telegram_config
-
-        channel_denied = effective_tg.denied_users if effective_tg else []
-        if channel_denied and uid_int in channel_denied:
-            self._logger.debug(f"Blocked channel-denied user {user_id} (bot={bot_name})")
-            return
-
-        channel_allowed = effective_tg.allowed_users if effective_tg else []
-        global_allowed = self.config.security.allowed_users if hasattr(self.config.security, "allowed_users") else []
-        effective_allowed = channel_allowed if channel_allowed else global_allowed
-        if effective_allowed and uid_int not in effective_allowed:
-            self._logger.debug(f"Ignored Telegram message from unauthorized user {user_id} (bot={bot_name})")
-            return
-
-        sender_name = getattr(message.from_user, "first_name", None) or user_id
-        self._logger.info(
-            f"Telegram incoming from {sender_name} ({user_id}) via bot={bot_name}: {text[:60]}"
-        )
-
-        # Resolve which agent handles this bot's messages
-        agent_id = self._agent_id_for_bot(bot_name)
-
-        # Check for a /focus thread binding — it overrides the bot-level agent
-        if tg_thread_id:
-            bound_agent = getattr(self, "_thread_bindings", {}).get(f"telegram:{tg_thread_id}")
-            if bound_agent:
-                agent_id = bound_agent
-
-        # Intercept slash commands before routing to the agent
-        if text.strip().startswith("/"):
-            session = await self._get_active_session(
-                agent_id=agent_id,
-                channel="telegram",
-                user_id=user_id,
-            )
-            # Fire command hook before dispatch
-            cmd_name = text.strip().split()[0][1:].lower()
-            await self._fire(f"command:{cmd_name}", {
-                "command": cmd_name,
-                "args": text.strip().split()[1:],
-                "session_id": session.id if session else None,
-                "channel": "telegram",
-                "sender_id": user_id,
-            })
-            from pyclopse.core.commands import CommandContext
-            ctx = CommandContext(
-                gateway=self,
-                session=session,
-                sender_id=user_id,
-                channel="telegram",
-                thread_id=tg_thread_id,
-            )
-            reply = await self._command_registry.dispatch(text.strip(), ctx)
-            if reply is not None:
-                try:
-                    await bot.send_message(chat_id=chat_id, text=reply)
-                except Exception as e:
-                    self._logger.error(f"Failed to send command reply: {e}")
-                return
-
-        # Register the Telegram endpoint now — before the streaming/non-streaming split —
-        # so fan-out always knows the correct bot and chat_id regardless of path.
-        # chat_id (not user_id) is what Telegram requires for send_message, and
-        # bot_name is stored so fan-out can pick the exact bot, not just the first one.
-        _tg_ep_full = {"sender_id": chat_id, "sender": sender_name, "bot_name": bot_name}
-        self._known_endpoints.setdefault(agent_id, {})["telegram"] = _tg_ep_full
-        self._logger.info(
-            "endpoint registered (pre-route): agent=%s channel=telegram chat_id=%s bot=%s known=%s",
-            agent_id, chat_id, bot_name, list(self._known_endpoints.get(agent_id, {}).keys()),
-        )
-
-        # Resolve per-bot streaming flag
-        streaming = getattr(effective_tg, "streaming", False) if effective_tg else False
-
-        # If streaming is enabled, hand off to the streaming path immediately
-        if streaming:
-            await self._stream_telegram_response(
-                chat_id=chat_id,
-                user_id=user_id,
-                sender_name=sender_name,
-                text=text,
-                message_id=str(message.message_id),
-                bot_name=bot_name,
-                bot=bot,
-            )
-            return
-
-        # Resolve per-bot typing indicator flag
-        typing_indicator = getattr(effective_tg, "typing_indicator", True) if effective_tg else True
-
-        typing_task: Optional[asyncio.Task] = None
-        if typing_indicator:
-            # Fire immediately so the user sees the indicator before the agent begins
-            try:
-                await bot.send_chat_action(chat_id=chat_id, action="typing")
-            except Exception:
-                pass
-
-            async def _keep_typing():
-                """Continue refreshing the typing indicator every 4 s."""
-                while True:
-                    await asyncio.sleep(4)  # Telegram typing lasts ~5s; refresh before it expires
-                    try:
-                        await bot.send_chat_action(chat_id=chat_id, action="typing")
-                    except Exception:
-                        pass
-
-            typing_task = asyncio.create_task(_keep_typing())
-
-        try:
-            session_key = f"telegram:{user_id}"
-            response = await self.enqueue_message(
-                session_key=session_key,
-                content=text,
-                channel="telegram",
-                sender=sender_name,
-                sender_id=user_id,
-                message_id=str(message.message_id),
-                agent_id=agent_id,
-            )
-            if response:
-                _agent = self._agent_manager.get_agent(agent_id) if self._agent_manager else None
-                _show_thinking = getattr(getattr(_agent, "config", None), "show_thinking", False)
-                if _show_thinking:
-                    from pyclopse.agents.runner import format_thinking_for_telegram
-                    combined = format_thinking_for_telegram(response)
-                    if combined:
-                        # Thinking found — send as single HTML message (spoiler + response)
-                        for chunk in self._split_message(combined):
-                            await bot.send_message(
-                                chat_id=chat_id,
-                                text=chunk,
-                                parse_mode="HTML",
-                            )
-                    else:
-                        # No thinking blocks — send response as plain text
-                        for chunk in self._split_message(response):
-                            await bot.send_message(chat_id=chat_id, text=chunk)
-                else:
-                    for chunk in self._split_message(response):
-                        await bot.send_message(chat_id=chat_id, text=chunk)
-        except asyncio.CancelledError:
-            self._logger.info(f"Telegram message cancelled for {user_id}")
-        except Exception as e:
-            self._logger.error(
-                f"Error handling Telegram message from {user_id} (bot={bot_name}): {e}"
-            )
-            try:
-                await bot.send_message(chat_id=chat_id, text=f"Sorry, I hit an error: {e}")
-            except Exception:
-                pass
-        finally:
-            if typing_task and not typing_task.done():
-                typing_task.cancel()
-                try:
-                    await typing_task
-                except asyncio.CancelledError:
-                    pass
-
-    async def _stream_telegram_response(
-        self,
-        chat_id: str,
-        user_id: str,
-        sender_name: str,
-        text: str,
-        message_id: str,
-        bot_name: str = "_default",
-        bot: Optional[Any] = None,
-    ) -> None:
-        """Stream an agent response to Telegram by editing a single message in place.
-
-        Sends the first message as soon as any content arrives, then edits it
-        every ~1 s as new chunks arrive.  On completion the message is replaced
-        with the final formatted text (thinking blockquote if enabled).
-        """
-        import time
-        import html as _html
-
-        bot = bot or self._telegram_bot
-        THROTTLE_S = 0.5   # minimum seconds between edits
-
-        # ── session / agent setup ─────────────────────────────────────────
-        agent_id = self._agent_id_for_bot(bot_name)
-        # Use the same active-session pointer path as slash commands so both
-        # paths always land on the same session and share the same history.
-        session = await self._get_active_session(
-            agent_id=agent_id, channel="telegram", user_id=user_id
-        )
-        if session is None:
-            await bot.send_message(chat_id=chat_id, text="Could not create session.")
-            return
-
-        agent = self._agent_manager.get_agent(agent_id)
-        if agent is None:
-            await bot.send_message(chat_id=chat_id, text="No agent available.")
-            return
-
-        show_thinking = getattr(getattr(agent, "config", None), "show_thinking", False)
-        model_override = session.context.get("model_override")
-        runner = agent._get_session_runner(
-            session.id,
-            model_override=model_override,
-            history_path=session.history_path,
-        )
-
-        # Prepend vault memory context if vault is active for this agent
-        object.__setattr__(agent, "_last_recall_facts", None)
-        text = await agent._prepend_vault_context(text, "telegram", session_id=session.id)
-
-        # Update session-level Telegram endpoint (merge so bot_name set by handler is kept).
-        # Use chat_id (not user_id) as sender_id — that is the correct target for send_message.
-        _sess_tg = session.context.setdefault("channel_endpoints", {}).setdefault("telegram", {})
-        _sess_tg["sender_id"] = chat_id
-        _sess_tg["sender"] = sender_name
-        _sess_tg.setdefault("bot_name", bot_name)
-        _gw_tg = self._known_endpoints.setdefault(agent_id, {}).setdefault("telegram", {})
-        _gw_tg["sender_id"] = chat_id
-        _gw_tg["sender"] = sender_name
-        _gw_tg.setdefault("bot_name", bot_name)
-        self._logger.info(
-            "endpoint registered (stream): agent=%s channel=telegram chat_id=%s bot=%s known=%s",
-            agent_id, chat_id, bot_name, list(self._known_endpoints.get(agent_id, {}).keys()),
-        )
-        # Publish inbound message to the event bus so other channels (e.g. TUI) see it
-        if getattr(getattr(agent, "config", None), "channel_sync", True):
-            self._publish(agent_id, {
-                "type": "user_message",
-                "channel": "telegram",
-                "sender": sender_name,
-                "content": text,
-            })
-
-        # Send typing indicator immediately so the user sees activity
-        try:
-            await bot.send_chat_action(chat_id=chat_id, action="typing")
-        except Exception:
-            pass
-
-        # Keep the typing indicator alive during long thinking phases.
-        # Telegram's "typing" action expires after ~5 s; refresh it every 4 s
-        # until we have sent the first real message chunk.
-        typing_active = True
-
-        async def _keep_typing_stream():
-            while typing_active:
-                await asyncio.sleep(4)
-                if not typing_active:
-                    break
-                try:
-                    await bot.send_chat_action(chat_id=chat_id, action="typing")
-                except Exception:
-                    pass
-
-        typing_task = asyncio.create_task(_keep_typing_stream())
-
-        # ── mutable stream state ──────────────────────────────────────────
-        stream_msg_id: Optional[int] = None
-        last_edit_time: float = 0.0
-        # Separate buffers: thinking_buffer has is_reasoning=True chunks (no tags),
-        # response_buffer has is_reasoning=False chunks (may have stray <think> tags
-        # from providers that leak thinking into delta.content).
-        thinking_buffer: str = ""
-        response_buffer: str = ""
-
-        from pyclopse.agents.runner import strip_thinking_tags
-        import re as _re
-        _OPEN_THINK = _re.compile(r"<(thinking|think)>", _re.IGNORECASE)
-
-        def _live_display(buf: str) -> str:
-            """Return text safe to show mid-stream.
-
-            Strips complete <think>…</think> blocks, then hides everything
-            from any still-open <think> tag to the end of the buffer (so
-            partial thinking blocks never flash onscreen).
-            """
-            stripped = strip_thinking_tags(buf)
-            # If an opening tag remains, the block isn't closed yet — hide it
-            m = _OPEN_THINK.search(stripped)
-            if m:
-                return stripped[: m.start()].strip()
-            return stripped
-
-        # ── stream loop ───────────────────────────────────────────────────
-        session_key = f"telegram:{user_id}"
-
-        async def _run_stream() -> None:
-            nonlocal stream_msg_id, last_edit_time, thinking_buffer, response_buffer, typing_active
-
-            _rstream = runner.run_stream(text)
-            try:
-                async for chunk_text, is_reasoning in _rstream:
-                    if is_reasoning:
-                        thinking_buffer += chunk_text
-                    else:
-                        response_buffer += chunk_text
-
-                    # Build a single unified HTML display — blockquote for thinking,
-                    # plain text after it for the response.  Every edit sends a
-                    # complete, valid HTML string so there's no phase transition.
-                    if show_thinking and thinking_buffer:
-                        tail = thinking_buffer[-600:] if len(thinking_buffer) > 600 else thinking_buffer
-                        safe_t = _html.escape(tail, quote=False)
-                        display = f"<blockquote expandable><i>💭 {safe_t}</i></blockquote>"
-                        response_part = _live_display(response_buffer)
-                        if response_part:
-                            display += f"\n\n{_html.escape(response_part, quote=False)}"
-                        mid_parse_mode: Optional[str] = "HTML"
-                    else:
-                        display = _live_display(response_buffer)
-                        if not display:
-                            continue
-                        mid_parse_mode = None
-
-                    now = time.monotonic()
-                    if stream_msg_id is None:
-                        try:
-                            msg = await bot.send_message(
-                                chat_id=chat_id, text=display,
-                                **({"parse_mode": mid_parse_mode} if mid_parse_mode else {}),
-                            )
-                            stream_msg_id = msg.message_id
-                            last_edit_time = now
-                        except Exception as _se:
-                            self._logger.warning(f"Stream: initial send failed: {_se}")
-                    elif now - last_edit_time >= THROTTLE_S:
-                        try:
-                            await bot.edit_message_text(
-                                chat_id=chat_id,
-                                message_id=stream_msg_id,
-                                text=display,
-                                **({"parse_mode": mid_parse_mode} if mid_parse_mode else {}),
-                            )
-                            last_edit_time = now
-                        except Exception:
-                            pass  # "message is not modified" etc. are harmless
-            except BaseException:
-                # Abnormal exit: close generator immediately so _run_lock is not
-                # deferred to GC. On normal exhaustion the generator releases the
-                # lock itself; calling aclose() there would raise RuntimeError.
-                await _rstream.aclose()
-                raise
-
-            # ── final edit ────────────────────────────────────────────────
-            clean_response = strip_thinking_tags(response_buffer)
-            if show_thinking and thinking_buffer:
-                # Proper thinking came via is_reasoning=True — format as spoiler
-                safe_thinking = _html.escape(thinking_buffer.strip(), quote=False)
-                safe_response = _html.escape(clean_response, quote=False)
-                final_text = f"<blockquote expandable><i>💭 {safe_thinking}</i></blockquote>\n\n{safe_response}"
-                parse_mode = "HTML"
-            elif show_thinking:
-                # No separated thinking — try to extract <think> tags from response_buffer
-                from pyclopse.agents.runner import format_thinking_for_telegram
-                combined = format_thinking_for_telegram(response_buffer)
-                if combined:
-                    final_text = combined
-                    parse_mode = "HTML"
-                else:
-                    final_text = clean_response
-                    parse_mode = None
-            else:
-                final_text = clean_response
-                parse_mode = None
-
-            if not final_text:
-                return
-
-            # Append show_recall block if enabled (not part of session history)
-            _before_recall = len(final_text)
-            final_text = agent._append_recall_block(final_text)
-            self._logger.info(
-                "show_recall: agent=%s last_recall_facts=%s text_len_before=%d text_len_after=%d",
-                agent.id,
-                len(agent._last_recall_facts) if agent._last_recall_facts else None,
-                _before_recall,
-                len(final_text),
-            )
-
-            send_kwargs: Dict[str, Any] = {"text": final_text}
-            if parse_mode:
-                send_kwargs["parse_mode"] = parse_mode
-
-            try:
-                if stream_msg_id is not None:
-                    await bot.edit_message_text(
-                        chat_id=chat_id, message_id=stream_msg_id, **send_kwargs
-                    )
-                else:
-                    await bot.send_message(chat_id=chat_id, **send_kwargs)
-            except Exception as fe:
-                fe_str = str(fe).lower()
-                if "message is not modified" in fe_str:
-                    pass  # content already matches — not an error
-                else:
-                    self._logger.error(f"Stream: final edit failed: {fe}")
-                    # Only fall back to a fresh message for genuine failures
-                    try:
-                        await bot.send_message(chat_id=chat_id, **send_kwargs)
-                    except Exception:
-                        pass
-
-            # Debug: send raw buffers so we can see exactly what came from the model
-            if getattr(getattr(self, "config", None), "gateway", None) and self.config.gateway.debug:
-                try:
-                    debug_text = f"🔍 thinking_buffer:\n{thinking_buffer[:1000]}\n\n📝 response_buffer:\n{response_buffer[:1000]}"
-                    await bot.send_message(chat_id=chat_id, text=debug_text[:2000])
-                except Exception:
-                    pass
-
-            # Fire background vault ingestion for this turn
-            agent._schedule_vault_ingest(session, "telegram", text, clean_response)
-
-            # Update session activity
-            session.touch(count_delta=2)
-
-            # Publish agent response to event bus and fan out to other channels
-            if clean_response:
-                # Extract thinking for TUI display (native reasoning or <think> tags)
-                _tui_thinking = ""
-                if show_thinking:
-                    if thinking_buffer:
-                        _tui_thinking = thinking_buffer.strip()
-                    else:
-                        import re as _re2
-                        _think_matches = _re2.findall(
-                            r'<(?:thinking|think)>(.*?)</(?:thinking|think)>',
-                            response_buffer, _re2.DOTALL | _re2.IGNORECASE,
-                        )
-                        if _think_matches:
-                            _tui_thinking = "\n".join(t.strip() for t in _think_matches)
-                if getattr(getattr(agent, "config", None), "channel_sync", True):
-                    self._publish(agent_id, {
-                        "type": "agent_response",
-                        "agent_name": agent.name,
-                        "content": clean_response,
-                        "thinking": _tui_thinking,
-                        "originating_channel": "telegram",
-                    })
-                    await self._fan_out_response(session, originating_channel="telegram", response_text=clean_response)
-
-            # Usage counters
-            self._usage["messages_total"] += 1
-            self._usage["messages_by_channel"]["telegram"] = (
-                self._usage["messages_by_channel"].get("telegram", 0) + 1
-            )
-
-        task = asyncio.create_task(_run_stream())
-        self._active_tasks[session_key] = task
-        try:
-            await task
-        except asyncio.CancelledError:
-            self._logger.info(f"Telegram stream cancelled for {user_id}")
-        except Exception as e:
-            import traceback
-            self._logger.error(f"Telegram stream error for {user_id} (bot={bot_name}): {e}\n{traceback.format_exc()}")
-            # Evict the broken session runner so the next attempt gets a fresh one
-            _agent = self._agent_manager.get_agent(agent_id) if self._agent_manager else None
-            try:
-                if _agent and session:
-                    await _agent.evict_session_runner(session.id)
-            except Exception:
-                pass
-            # If the task group expired (FastAgent lifecycle race on startup), retry once
-            # silently with a fresh runner rather than surfacing the error to the user.
-            if "task group" in str(e).lower() and _agent and session:
-                self._logger.info(
-                    f"Task group expired for {agent_id}/{session.id[:8]} — retrying with fresh runner"
-                )
-                try:
-                    fresh_runner = _agent._get_session_runner(
-                        session.id,
-                        model_override=model_override,
-                        history_path=session.history_path,
-                    )
-                    # Reset stream state for retry
-                    thinking_buffer = ""
-                    response_buffer = ""
-                    stream_msg_id = None
-                    # Re-run the stream with the fresh runner — reuse _run_stream closure
-                    # by pointing runner at the new instance and re-executing
-                    # (simplest: call the non-streaming path as fallback)
-                    retry_result = await fresh_runner.run(text)
-                    if retry_result:
-                        from pyclopse.agents.runner import strip_thinking_tags
-                        await bot.send_message(chat_id=chat_id, text=strip_thinking_tags(retry_result))
-                except Exception as retry_err:
-                    self._logger.error(f"Retry also failed for {user_id}: {retry_err}")
-                    try:
-                        await bot.send_message(chat_id=chat_id, text=f"Sorry, I hit an error: {retry_err}")
-                    except Exception:
-                        pass
-            else:
-                try:
-                    await bot.send_message(chat_id=chat_id, text=f"Sorry, I hit an error: {e}")
-                except Exception:
-                    pass
-        finally:
-            typing_active = False
-            if not typing_task.done():
-                typing_task.cancel()
-                try:
-                    await typing_task
-                except asyncio.CancelledError:
-                    pass
-            self._active_tasks.pop(session_key, None)
+    # Legacy Telegram methods (_telegram_poll_bot, _telegram_poll,
+    # _handle_telegram_message, _stream_telegram_response) removed.
+    # Now handled by TelegramPlugin (pyclopse/channels/telegram_plugin.py).
 
     async def _handle_slack_message(
         self,
@@ -2286,17 +1761,7 @@ class Gateway:
         self._is_running = True
         self._logger.info("pyclopse Gateway started")
 
-        # Start Telegram long-polling — one task per configured bot
-        for bot_name, bot in self._tg_bots.items():
-            task = asyncio.create_task(
-                self._telegram_poll_bot(bot_name, bot),
-                name=f"telegram-poll-{bot_name}",
-            )
-            self._tg_polling_tasks[bot_name] = task
-        if self._tg_bots:
-            self._logger.info(
-                f"Telegram polling started for {len(self._tg_bots)} bot(s): {list(self._tg_bots)}"
-            )
+        # Telegram polling is now managed by TelegramPlugin.start()
 
         # Keep running
         try:
@@ -2409,15 +1874,7 @@ class Gateway:
 
         self._is_running = False
 
-        # Stop Telegram polling (all bots)
-        for bot_name, task in list(self._tg_polling_tasks.items()):
-            if not task.done():
-                task.cancel()
-                try:
-                    await task
-                except asyncio.CancelledError:
-                    pass
-        self._tg_polling_tasks.clear()
+        # Telegram polling is now stopped by TelegramPlugin.stop() (via channel plugin loop below)
 
         # Stop agents
         if self._agent_manager:
@@ -2544,15 +2001,19 @@ class Gateway:
         user_id = session.last_user_id or session.user_id
         thread_ts = getattr(session, "last_thread_ts", None)
 
-        if channel == "telegram":
-            bot, chat_id = self._bot_and_chat_for_agent(session.agent_id)
-            chat_id = chat_id or user_id
-            if bot and chat_id:
-                try:
-                    for chunk in self._split_message(text):
-                        await bot.send_message(chat_id=chat_id, text=chunk)
-                except Exception as e:
-                    self._logger.error(f"_deliver_to_channel telegram failed: {e}")
+        if channel in self._channels:
+            from pyclopse.channels.base import MessageTarget
+            plugin = self._channels[channel]
+            target = MessageTarget(channel=channel, user_id=user_id)
+            # Look up bot_name from endpoint so the correct bot delivers
+            ep = self._known_endpoints.get(session.agent_id, {}).get(channel, {})
+            bot_name = ep.get("bot_name")
+            try:
+                limit = getattr(getattr(plugin, "capabilities", None), "max_message_length", 4096)
+                for chunk in self._split_message(text, limit):
+                    await plugin.send_message(target, chunk, bot_name=bot_name)
+            except Exception as e:
+                self._logger.error(f"_deliver_to_channel {channel} plugin failed: {e}")
         elif channel == "slack":
             if self._slack_web_client:
                 try:
@@ -2840,27 +2301,20 @@ class Gateway:
         for ch, ep in endpoints.items():
             if ch in (originating_channel, "tui", "job"):
                 continue
-            if ch == "telegram":
-                _ep_bot_name = ep.get("bot_name")
-                self._ensure_tg_dicts()
-                if _ep_bot_name and _ep_bot_name in self._tg_bots:
-                    bot = self._tg_bots[_ep_bot_name]
-                else:
-                    bot, _ = self._bot_and_chat_for_agent(session.agent_id)
-                chat_id = ep.get("sender_id", "")
-                if bot and chat_id:
-                    try:
-                        await bot.send_message(
-                            chat_id=chat_id,
-                            text=content,
-                        )
-                    except Exception as e:
-                        self._logger.error(f"fan-out user message telegram error: {e}")
+            sender_id = ep.get("sender_id", "")
+            if ch in self._channels:
+                plugin = self._channels[ch]
+                try:
+                    from pyclopse.channels.base import MessageTarget
+                    target = MessageTarget(channel=ch, user_id=sender_id)
+                    await plugin.send_message(target, content, bot_name=ep.get("bot_name"))
+                except Exception as e:
+                    self._logger.error(f"fan-out user message {ch} plugin error: {e}")
             elif ch == "slack":
                 if self._slack_web_client:
                     try:
                         await self._slack_web_client.chat_postMessage(
-                            channel=ep.get("sender_id", ""),
+                            channel=sender_id,
                             text=content,
                         )
                     except Exception as e:
@@ -2921,42 +2375,36 @@ class Gateway:
                 self._logger.info("fan-out: skipping channel=%s (excluded)", ch)
                 continue
             sender_id = ep.get("sender_id", "")
-            if ch == "telegram":
-                # Use the stored bot_name if available — it points to the exact bot
-                # the user is chatting with. Fall back to agent-level lookup otherwise.
-                _ep_bot_name = ep.get("bot_name")
-                self._ensure_tg_dicts()
-                if _ep_bot_name and _ep_bot_name in self._tg_bots:
-                    bot = self._tg_bots[_ep_bot_name]
-                else:
-                    bot, _ = self._bot_and_chat_for_agent(session.agent_id)
-                chat_id = sender_id
-                self._logger.info(
-                    "fan-out: telegram bot=%s (name=%s) chat_id=%s",
-                    bot is not None, _ep_bot_name, chat_id,
-                )
-                if bot and chat_id:
-                    try:
-                        from pyclopse.agents.runner import (
-                            strip_thinking_tags,
-                            format_thinking_for_telegram,
-                        )
-                        tg_text = format_thinking_for_telegram(response_text)
-                        if tg_text:
-                            # Has thinking tags — send as HTML with expandable blockquote
-                            await bot.send_message(chat_id=chat_id, text=tg_text, parse_mode="HTML")
+            if ch in self._channels:
+                # Plugin-based delivery
+                plugin = self._channels[ch]
+                try:
+                    from pyclopse.channels.base import MessageTarget
+                    from pyclopse.agents.runner import strip_thinking_tags
+                    target = MessageTarget(channel=ch, user_id=sender_id)
+                    # Channels with HTML support get thinking-formatted text;
+                    # others get clean text with thinking stripped.
+                    if getattr(getattr(plugin, "capabilities", None), "html_formatting", False):
+                        from pyclopse.agents.runner import format_thinking_for_telegram
+                        formatted = format_thinking_for_telegram(response_text)
+                        if formatted:
+                            await plugin.send_message(target, formatted, parse_mode="HTML",
+                                                      bot_name=ep.get("bot_name"))
                         else:
-                            # No thinking tags — strip any stray tags and send plain
                             clean = strip_thinking_tags(response_text)
-                            for chunk in self._split_message(clean):
-                                await bot.send_message(chat_id=chat_id, text=chunk)
-                        self._logger.info("fan-out: delivered to telegram chat_id=%s", chat_id)
-                    except Exception as e:
-                        self._logger.error(f"fan-out telegram error: {e}")
-                else:
-                    self._logger.warning(
-                        "fan-out: telegram skipped — bot=%s chat_id=%r", bot is not None, chat_id
-                    )
+                            limit = getattr(plugin.capabilities, "max_message_length", 4096)
+                            for chunk in self._split_message(clean, limit):
+                                await plugin.send_message(target, chunk,
+                                                          bot_name=ep.get("bot_name"))
+                    else:
+                        clean = strip_thinking_tags(response_text)
+                        limit = getattr(getattr(plugin, "capabilities", None), "max_message_length", 4096)
+                        for chunk in self._split_message(clean, limit):
+                            await plugin.send_message(target, chunk,
+                                                      bot_name=ep.get("bot_name"))
+                    self._logger.info("fan-out: delivered to %s via plugin sender_id=%s", ch, sender_id)
+                except Exception as e:
+                    self._logger.error(f"fan-out {ch} plugin error: {e}")
             elif ch == "slack":
                 if self._slack_web_client:
                     try:

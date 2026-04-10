@@ -2262,13 +2262,20 @@ def config_schema(section: str = "") -> str:
     Return the JSON schema for the pyclopse configuration (or a specific section).
     Useful for understanding what fields are available before calling config_set.
 
+    The ``channels`` section is dynamically enriched with schemas declared by
+    channel plugins via ``ChannelPlugin.config_schema``, so agents always see
+    the full set of configurable fields for each channel.
+
     Args:
         section: Optional top-level section name, e.g. "gateway", "agents",
-                 "security", "sessions". Leave empty for the full schema.
+                 "security", "channels". Leave empty for the full schema.
     """
     try:
         from pyclopse.config.schema import Config
         full_schema = Config.model_json_schema()
+
+        # Enrich the channels section with plugin-declared config schemas
+        _enrich_channels_schema(full_schema)
 
         if not section:
             return json.dumps(full_schema, indent=2)
@@ -2290,10 +2297,58 @@ def config_schema(section: str = "") -> str:
             if name.lower() == section.lower() or name.lower().startswith(section.lower()):
                 return json.dumps(schema_def, indent=2)
 
+        # Check enriched channel schemas
+        if section.lower() in ("channels",):
+            channels = full_schema.get("properties", {}).get("channels", {})
+            return json.dumps(channels, indent=2)
+
         available = list(props.keys())
         return f"[ERROR] Section {section!r} not found. Available: {available}"
     except Exception as e:
         return f"[ERROR] config_schema failed: {e}"
+
+
+def _enrich_channels_schema(full_schema: dict) -> None:
+    """Merge plugin-declared channel config schemas into the full config schema.
+
+    Iterates over all built-in channel plugin classes, generates their JSON
+    schema, and injects them as named properties under ``channels``.
+    """
+    try:
+        from pyclopse.core.gateway import Gateway
+        channels_props = {}
+        for channel_name, plugin_cls in Gateway._builtin_plugin_classes():
+            try:
+                ch_schema = plugin_cls.config_schema.model_json_schema()
+                channels_props[channel_name] = ch_schema
+            except Exception:
+                pass
+
+        if not channels_props:
+            return
+
+        # Resolve the ChannelsConfig $ref to find the actual definition
+        defs = full_schema.get("$defs", {})
+        props = full_schema.get("properties", {})
+        channels_ref = props.get("channels", {})
+
+        # Follow $ref to the actual ChannelsConfig definition
+        if "$ref" in channels_ref:
+            def_name = channels_ref["$ref"].split("/")[-1]
+            channels_def = defs.get(def_name, {})
+        else:
+            channels_def = channels_ref
+
+        # Inject plugin schemas as properties of ChannelsConfig
+        ch_props = channels_def.setdefault("properties", {})
+        ch_props.update(channels_props)
+        channels_def.setdefault("type", "object")
+        channels_def["description"] = (
+            "Channel configurations. Each key is a channel name "
+            "(telegram, discord, whatsapp, etc.) with its plugin-declared schema."
+        )
+    except Exception:
+        pass  # Non-critical — schema is just less detailed
 
 
 # ---------------------------------------------------------------------------

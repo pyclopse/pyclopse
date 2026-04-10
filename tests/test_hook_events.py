@@ -16,8 +16,9 @@ from pathlib import Path
 def _make_gateway_stub(agent_id="main", session_id="sess-x"):
     """Build a minimal Gateway-like stub with just enough wiring for handle_message."""
     from pyclopse.core.gateway import Gateway
+    from pyclopse.channels.telegram_plugin import TelegramChannelConfig
     from pyclopse.config.schema import (
-        Config, AgentsConfig, ChannelsConfig, TelegramConfig, SlackConfig,
+        Config, AgentsConfig, ChannelsConfig, SlackConfig,
     )
     from pyclopse.core.session import Session
 
@@ -34,7 +35,7 @@ def _make_gateway_stub(agent_id="main", session_id="sess-x"):
         "messages_by_channel": {},
     }
 
-    tg = TelegramConfig(allowed_users=[], denied_users=[])
+    tg = TelegramChannelConfig(allowed_users=[], denied_users=[])
     sl = SlackConfig(allowed_users=[], denied_users=[])
     gw._config = Config(agents=AgentsConfig(), channels=ChannelsConfig(telegram=tg, slack=sl))
 

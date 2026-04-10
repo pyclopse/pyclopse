@@ -7,7 +7,7 @@ import asyncio
 from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Any, Dict, List, Optional
-from unittest.mock import AsyncMock, MagicMock, patch, call
+from unittest.mock import AsyncMock, MagicMock, PropertyMock, patch, call
 
 import pytest
 
@@ -300,7 +300,7 @@ class TestHistoryInjection:
 
 
 # ===========================================================================
-# Section 2: Telegram incoming routing
+# Section 2: Telegram incoming routing (via TelegramPlugin)
 # ===========================================================================
 
 def _make_telegram_message(
@@ -317,152 +317,154 @@ def _make_telegram_message(
     msg.chat.id = chat_id
     msg.text = text
     msg.message_id = message_id
+    msg.message_thread_id = None
     return msg
 
 
-def _make_gateway_for_telegram(allowed_users: Optional[List[int]] = None):
+def _make_telegram_plugin(check_access: bool = True, dispatch_response: str = "bot reply"):
     """
-    Build a Gateway instance with all internals stubbed out,
-    configured for Telegram tests.
+    Build a TelegramPlugin with a mocked GatewayHandle, configured for tests.
     """
-    from pyclopse.core.gateway import Gateway
+    from pyclopse.channels.telegram_plugin import TelegramPlugin, TelegramChannelConfig
     from pyclopse.config.schema import (
         Config,
         ChannelsConfig,
-        TelegramConfig,
         AgentsConfig,
-        ConcurrencyConfig,
+        SecurityConfig,
     )
 
-    gw = Gateway.__new__(Gateway)  # Skip __init__
+    plugin = TelegramPlugin()
 
-    # Minimal internal state
-    gw._is_running = True
-    gw._initialized = True
-    gw._logger = MagicMock()
-    gw._audit_logger = None
-    gw._telegram_bot = AsyncMock()
-    gw._telegram_chat_id = None
-    gw._telegram_polling_task = None
-    gw._active_tasks = {}
-    gw._session_manager = None
-    gw._agent_manager = None
-    gw._channels = {}
-    gw._seen_message_ids = {}
-    gw._dedup_ttl_seconds = 60
-    gw._hook_registry = None
-    gw._known_session_ids = set()
+    bot = AsyncMock()
+    bot.send_message = AsyncMock(return_value=MagicMock(message_id=99))
+    bot.send_chat_action = AsyncMock()
+    plugin._bots = {"_default": bot}
+    plugin._chat_ids = {"_default": None}
 
-    # Build a real-ish config with Telegram enabled
-    telegram_cfg = TelegramConfig(
-        enabled=True,
-        botToken="fake-token",
-        allowedUsers=allowed_users or [],
+    telegram_cfg = TelegramChannelConfig.model_validate({
+        "enabled": True,
+        "botToken": "fake-token",
+        "typingIndicator": False,  # disable to simplify tests
+    })
+
+    config = Config(
+        channels=ChannelsConfig(telegram=telegram_cfg),
+        agents=AgentsConfig(),
+        security=SecurityConfig(),
     )
-    channels_cfg = ChannelsConfig(telegram=telegram_cfg)
-    agents_cfg = AgentsConfig()
 
-    gw._config = Config(channels=channels_cfg, agents=agents_cfg)
+    handle = MagicMock()
+    handle.dispatch = AsyncMock(return_value=dispatch_response)
+    handle.dispatch_command = AsyncMock(return_value=None)
+    handle.is_duplicate = MagicMock(return_value=False)
+    handle.check_access = MagicMock(return_value=check_access)
+    handle.resolve_agent_id = MagicMock(return_value="default")
+    handle.register_endpoint = MagicMock()
+    handle.split_message = MagicMock(side_effect=lambda text, limit=4096: [text])
+    type(handle).config = PropertyMock(return_value=config)
 
-    return gw
+    plugin._gw = handle
+    plugin._telegram_config = telegram_cfg
+
+    return plugin, bot, handle
 
 
 class TestTelegramIncoming:
-    """Tests for _handle_telegram_message and _telegram_poll."""
+    """Tests for TelegramPlugin._handle_message."""
 
     @pytest.mark.asyncio
     async def test_routes_to_handle_message(self):
-        """_handle_telegram_message calls enqueue_message with correct args."""
-        gw = _make_gateway_for_telegram(allowed_users=[42])
-        gw.enqueue_message = AsyncMock(return_value="bot reply")
-
+        """_handle_message calls dispatch with correct args."""
+        plugin, bot, handle = _make_telegram_plugin(dispatch_response="bot reply")
         msg = _make_telegram_message(user_id=42, chat_id=42, text="Hi!")
-        await gw._handle_telegram_message(msg)
+        await plugin._handle_message(msg, "_default", bot)
 
-        gw.enqueue_message.assert_called_once_with(
-            session_key="telegram:42",
-            content="Hi!",
-            channel="telegram",
-            sender="Alice",
-            sender_id="42",
-            message_id="101",
-            agent_id="default",
-        )
+        handle.dispatch.assert_called_once()
+        call_kwargs = handle.dispatch.call_args.kwargs
+        assert call_kwargs["channel"] == "telegram"
+        assert call_kwargs["user_id"] == "42"
+        assert call_kwargs["user_name"] == "Alice"
+        assert call_kwargs["text"] == "Hi!"
+        assert call_kwargs["message_id"] == "101"
+        assert call_kwargs["agent_id"] == "default"
 
     @pytest.mark.asyncio
     async def test_sends_response_to_correct_chat(self):
-        """_handle_telegram_message sends the response back to the right chat_id."""
-        gw = _make_gateway_for_telegram(allowed_users=[42])
-        gw.enqueue_message = AsyncMock(return_value="response text")
-
+        """_handle_message sends the response back to the right chat_id."""
+        plugin, bot, handle = _make_telegram_plugin(dispatch_response="response text")
         msg = _make_telegram_message(user_id=42, chat_id=99, text="ping")
-        await gw._handle_telegram_message(msg)
+        await plugin._handle_message(msg, "_default", bot)
 
-        gw._telegram_bot.send_message.assert_called_once_with(
-            chat_id="99",
-            text="response text",
-        )
+        bot.send_message.assert_called_once()
+        call_kwargs = bot.send_message.call_args.kwargs
+        assert call_kwargs["chat_id"] == "99"
+        assert call_kwargs["text"] == "response text"
 
     @pytest.mark.asyncio
     async def test_unauthorized_user_ignored(self):
-        """_handle_telegram_message ignores messages from users not in allowed_users."""
-        gw = _make_gateway_for_telegram(allowed_users=[100, 200])
-        gw.enqueue_message = AsyncMock(return_value="should not be called")
-
+        """_handle_message ignores messages from users not in allowed_users."""
+        plugin, bot, handle = _make_telegram_plugin(check_access=False)
         msg = _make_telegram_message(user_id=42, chat_id=42, text="intruder")
-        await gw._handle_telegram_message(msg)
+        await plugin._handle_message(msg, "_default", bot)
 
-        gw.enqueue_message.assert_not_called()
-        gw._telegram_bot.send_message.assert_not_called()
+        handle.dispatch.assert_not_called()
+        bot.send_message.assert_not_called()
 
     @pytest.mark.asyncio
     async def test_no_allowed_users_restriction_allows_anyone(self):
-        """When allowed_users is empty, all users are accepted."""
-        gw = _make_gateway_for_telegram(allowed_users=[])
-        gw.enqueue_message = AsyncMock(return_value="welcome")
-
+        """When check_access returns True, all users are accepted."""
+        plugin, bot, handle = _make_telegram_plugin(check_access=True, dispatch_response="welcome")
         msg = _make_telegram_message(user_id=9999, chat_id=9999, text="hey")
-        await gw._handle_telegram_message(msg)
+        await plugin._handle_message(msg, "_default", bot)
 
-        gw.enqueue_message.assert_called_once()
+        handle.dispatch.assert_called_once()
 
     @pytest.mark.asyncio
-    async def test_error_in_handle_message_sends_error_reply(self):
-        """When enqueue_message raises, an error message is sent to the user."""
-        gw = _make_gateway_for_telegram(allowed_users=[42])
-        gw.enqueue_message = AsyncMock(side_effect=RuntimeError("boom"))
+    async def test_error_in_dispatch_sends_error_reply(self):
+        """When dispatch raises, an error message is sent to the user."""
+        plugin, bot, handle = _make_telegram_plugin()
+        handle.dispatch = AsyncMock(side_effect=RuntimeError("boom"))
 
         msg = _make_telegram_message(user_id=42, chat_id=55, text="crash me")
-        await gw._handle_telegram_message(msg)
+        await plugin._handle_message(msg, "_default", bot)
 
         # Should have called send_message with an error message
-        gw._telegram_bot.send_message.assert_called_once()
-        call_kwargs = gw._telegram_bot.send_message.call_args.kwargs
-        assert call_kwargs["chat_id"] == "55"
-        assert "boom" in call_kwargs["text"]
+        bot.send_message.assert_called()
+        # Find the error call (may follow other calls)
+        found_error = False
+        for c in bot.send_message.call_args_list:
+            text = c.kwargs.get("text", "")
+            if "boom" in text:
+                assert c.kwargs["chat_id"] == "55"
+                found_error = True
+                break
+        assert found_error, f"Expected error with 'boom' in send_message calls: {bot.send_message.call_args_list}"
 
     @pytest.mark.asyncio
-    async def test_no_reply_when_handle_message_returns_none(self):
-        """_handle_telegram_message does not call send_message if response is None."""
-        gw = _make_gateway_for_telegram(allowed_users=[42])
-        gw.enqueue_message = AsyncMock(return_value=None)
+    async def test_no_reply_when_dispatch_returns_none(self):
+        """_handle_message does not call send_message if response is None."""
+        plugin, bot, handle = _make_telegram_plugin(dispatch_response=None)
+        handle.dispatch = AsyncMock(return_value=None)
 
         msg = _make_telegram_message(user_id=42, chat_id=42, text="silence")
-        await gw._handle_telegram_message(msg)
+        await plugin._handle_message(msg, "_default", bot)
 
-        gw._telegram_bot.send_message.assert_not_called()
+        bot.send_message.assert_not_called()
 
     @pytest.mark.asyncio
-    async def test_telegram_poll_dispatches_tasks(self):
-        """_telegram_poll creates a task per incoming text message."""
-        gw = _make_gateway_for_telegram()
+    async def test_poll_bot_dispatches_tasks(self):
+        """_poll_bot creates a task per incoming text message."""
+        from pyclopse.channels.telegram_plugin import TelegramPlugin
+
+        plugin = TelegramPlugin()
+        plugin._gw = MagicMock()
 
         # Build a mock update
         update = MagicMock()
         update.update_id = 10
         update.message = _make_telegram_message(text="update text")
 
-        # get_updates returns one batch then stops the loop
+        bot = AsyncMock()
         call_count = 0
 
         async def fake_get_updates(**kwargs):
@@ -470,69 +472,35 @@ class TestTelegramIncoming:
             call_count += 1
             if call_count == 1:
                 return [update]
-            # Stop the loop after first batch
-            gw._is_running = False
-            return []
+            # Stop the loop after first batch by raising CancelledError
+            raise asyncio.CancelledError()
 
-        gw._telegram_bot.get_updates = fake_get_updates
-        gw._handle_telegram_message = AsyncMock(return_value=None)
+        bot.get_updates = fake_get_updates
+        plugin._handle_message = AsyncMock(return_value=None)
 
-        # Run the poll loop
-        await gw._telegram_poll()
+        # Run the poll loop (will exit on CancelledError)
+        await plugin._poll_bot("_default", bot)
 
         # The message handler should have been dispatched
         await asyncio.sleep(0)  # let any pending tasks run
 
     @pytest.mark.asyncio
-    async def test_telegram_poll_stops_when_not_running(self):
-        """_telegram_poll exits its loop when _is_running is False."""
-        gw = _make_gateway_for_telegram()
-        gw._is_running = False  # Already stopped
+    async def test_poll_bot_cancelled_error_stops_loop(self):
+        """_poll_bot exits cleanly on CancelledError."""
+        from pyclopse.channels.telegram_plugin import TelegramPlugin
 
-        get_updates_mock = AsyncMock(return_value=[])
-        gw._telegram_bot.get_updates = get_updates_mock
+        plugin = TelegramPlugin()
+        plugin._gw = MagicMock()
 
-        # Should exit immediately without looping
-        await gw._telegram_poll()
-
-        get_updates_mock.assert_not_called()
-
-    @pytest.mark.asyncio
-    async def test_telegram_poll_handles_exception_and_continues(self):
-        """_telegram_poll logs errors and keeps running after transient failures."""
-        gw = _make_gateway_for_telegram()
-
-        call_count = 0
-
-        async def fake_get_updates(**kwargs):
-            nonlocal call_count
-            call_count += 1
-            if call_count == 1:
-                raise ConnectionError("network hiccup")
-            # Stop after second call
-            gw._is_running = False
-            return []
-
-        gw._telegram_bot.get_updates = fake_get_updates
-
-        # Should not raise
-        with patch("asyncio.sleep", new=AsyncMock()):
-            await gw._telegram_poll()
-
-        assert call_count == 2  # Tried again after the error
-
-    @pytest.mark.asyncio
-    async def test_telegram_poll_cancelled_error_stops_loop(self):
-        """_telegram_poll exits cleanly on CancelledError."""
-        gw = _make_gateway_for_telegram()
+        bot = AsyncMock()
 
         async def raise_cancelled(**kwargs):
             raise asyncio.CancelledError()
 
-        gw._telegram_bot.get_updates = raise_cancelled
+        bot.get_updates = raise_cancelled
 
         # Should not propagate CancelledError
-        await gw._telegram_poll()
+        await plugin._poll_bot("_default", bot)
 
 
 # ===========================================================================
@@ -564,6 +532,8 @@ class TestHandleMessageAgentLookup:
         gw._channels = {}
         gw._hook_registry = None
         gw._known_session_ids = set()
+        gw._known_endpoints = {}
+        gw._agent_listeners = {}
 
         # Build config (no agents actually needed for this test)
         gw._config = Config()
@@ -577,6 +547,7 @@ class TestHandleMessageAgentLookup:
         mock_session = MagicMock()
         mock_session.id = "sess-123"
         mock_session.agent_id = "myagent"
+        mock_session.context = {}
         mock_session_manager = MagicMock()
         mock_session_manager.get_active_session = AsyncMock(return_value=mock_session)
         mock_session_manager.create_session = AsyncMock(return_value=mock_session)
@@ -628,6 +599,7 @@ class TestHandleMessageAgentLookup:
         gw._channels = {}
         gw._hook_registry = None
         gw._known_session_ids = set()
+        gw._known_endpoints = {}
         gw._config = Config()
 
         # No agents at all

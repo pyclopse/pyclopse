@@ -1,5 +1,6 @@
 """Stable module path for channel plugin test fixtures."""
 from pyclopse.channels.plugin import ChannelPlugin, GatewayHandle
+from pyclopse.channels.base import MessageTarget
 
 
 class EchoPlugin(ChannelPlugin):
@@ -18,6 +19,11 @@ class EchoPlugin(ChannelPlugin):
     async def stop(self) -> None:
         self.stopped = True
 
+    async def send_message(self, target: MessageTarget, text: str,
+                           parse_mode=None, **kwargs) -> None:
+        self.sent.append((target.user_id, text))
+
+    # Keep legacy send for backward-compat tests
     async def send(self, user_id: str, text: str, **kwargs) -> None:
         self.sent.append((user_id, text))
 

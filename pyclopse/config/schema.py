@@ -579,89 +579,32 @@ class TodosConfig(BaseModel):
     )
 
 
-class TelegramBotConfig(BaseModel):
-    """Per-bot Telegram configuration within a multi-bot setup.
-
-    Fields left as ``None`` inherit the value from the parent ``TelegramConfig``.
-    """
-    bot_token: Optional[str] = Field(default=None, validation_alias="botToken")
-    # agent_id this bot routes messages to; None = use first configured agent
-    agent: Optional[str] = None
-    allowed_users: Optional[List[int]] = Field(default=None, validation_alias="allowedUsers")
-    denied_users: Optional[List[int]] = Field(default=None, validation_alias="deniedUsers")
-    typing_indicator: Optional[bool] = Field(default=None, validation_alias="typingIndicator")
-    streaming: Optional[bool] = None
-
-class TelegramConfig(BaseModel):
-    """Telegram channel configuration."""
-    enabled: bool = True
-    bot_token: Optional[str] = Field(default=None, validation_alias="botToken")
-    allowed_users: List[int] = Field(default_factory=list, validation_alias="allowedUsers")
-    denied_users: List[int] = Field(default_factory=list, validation_alias="deniedUsers")
-    # Map topic names → Telegram forum topic IDs for group chats with topics
-    topics: Dict[str, int] = Field(default_factory=dict)
-    # Send typing indicator while agent is processing
-    typing_indicator: bool = Field(default=True, validation_alias="typingIndicator")
-    # Stream response by editing a single message in place
-    streaming: bool = Field(default=False)
-    # Multi-bot: named bots, each routing to a specific agent
-    bots: Dict[str, TelegramBotConfig] = Field(default_factory=dict)
-
-    def effective_config_for_bot(self, name: str) -> TelegramBotConfig:
-        """Return a fully-resolved config for the named bot, inheriting parent defaults.
-
-        Fields that are ``None`` on the named bot entry are filled in from the
-        parent ``TelegramConfig`` values so that callers always receive a complete
-        configuration object.
-
-        Args:
-            name (str): Key into ``self.bots`` identifying the bot to resolve.
-
-        Returns:
-            TelegramBotConfig: A new instance with all optional fields populated
-                from parent defaults where the bot-specific value was absent.
-        """
-        bot = self.bots[name]
-        return TelegramBotConfig.model_validate({
-            "botToken": bot.bot_token,
-            "agent": bot.agent,
-            "allowedUsers": bot.allowed_users if bot.allowed_users is not None else self.allowed_users,
-            "deniedUsers": bot.denied_users if bot.denied_users is not None else self.denied_users,
-            "typingIndicator": bot.typing_indicator if bot.typing_indicator is not None else self.typing_indicator,
-            "streaming": bot.streaming if bot.streaming is not None else self.streaming,
-        })
-
-
-class DiscordConfig(BaseModel):
-    """Discord channel configuration."""
-    enabled: bool = False
-    bot_token: Optional[str] = Field(default=None, validation_alias="botToken")
-    guilds: List[Dict[str, str]] = Field(default_factory=list)
-
 class SlackConfig(BaseModel):
-    """Slack channel configuration."""
+    """Slack channel configuration (legacy — will become a plugin)."""
+    model_config = ConfigDict(extra="allow")
     enabled: bool = False
     bot_token: Optional[str] = Field(default=None, validation_alias="botToken")
     signing_secret: Optional[str] = Field(default=None, validation_alias="signingSecret")
     allowed_users: List[str] = Field(default_factory=list, validation_alias="allowedUsers")
     denied_users: List[str] = Field(default_factory=list, validation_alias="deniedUsers")
-    # Reply in thread when message is part of a Slack thread
     threading: bool = True
 
-class WhatsAppConfig(BaseModel):
-    """WhatsApp channel configuration."""
-    enabled: bool = False
-    phone_id: Optional[str] = Field(default=None, validation_alias="phoneId")
-    access_token: Optional[str] = Field(default=None, validation_alias="accessToken")
-    allowed_users: List[str] = Field(default_factory=list, validation_alias="allowedUsers")
-    denied_users: List[str] = Field(default_factory=list, validation_alias="deniedUsers")
 
 class ChannelsConfig(BaseModel):
-    """Channels configuration."""
-    telegram: Optional[TelegramConfig] = None
-    discord: Optional[DiscordConfig] = None
+    """Channels configuration.
+
+    Channel plugins declare their own config schemas via
+    ``ChannelPlugin.config_schema``.  This model stores raw dicts for each
+    channel name and passes them through to plugins for validation at startup.
+
+    The ``slack`` field is kept as a typed model because Slack is still
+    integrated via legacy gateway code.  It will be removed once Slack is
+    migrated to the plugin system.
+    """
+    model_config = ConfigDict(extra="allow")
+
+    # Legacy Slack — will become a plugin
     slack: Optional[SlackConfig] = None
-    whatsapp: Optional[WhatsAppConfig] = None
 
 
 class PluginType(str, Enum):

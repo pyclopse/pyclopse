@@ -30,7 +30,7 @@ class _LocalPlugin(ChannelPlugin):
     name = "local"
     async def start(self, gw): pass
     async def stop(self): pass
-    async def send(self, uid, text, **kw): pass
+    async def send_message(self, target, text, parse_mode=None, **kw): pass
 
 
 # ---------------------------------------------------------------------------
@@ -322,6 +322,8 @@ class TestGatewayChannelPluginWiring:
             sender_id="u1",
             content="hello",
             message_id=None,
+            agent_id=None,
+            on_chunk=None,
         )
         assert result == "agent reply"
 
@@ -331,7 +333,7 @@ class TestGatewayChannelPluginWiring:
             name = "bad"
             async def start(self, gw): raise RuntimeError("connection failed")
             async def stop(self): pass
-            async def send(self, uid, text, **kw): pass
+            async def send_message(self, target, text, parse_mode=None, **kw): pass
 
         gw = self._make_gateway()
         with patch("pyclopse.channels.loader.load_all", return_value=[_BadPlugin()]):
@@ -371,7 +373,7 @@ class TestGatewayChannelPluginWiring:
             name = "fails"
             async def start(self, gw): pass
             async def stop(self): raise RuntimeError("network error")
-            async def send(self, uid, text, **kw): pass
+            async def send_message(self, target, text, parse_mode=None, **kw): pass
 
         from pyclopse.core.gateway import Gateway
         gw = Gateway.__new__(Gateway)

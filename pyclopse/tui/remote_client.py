@@ -143,7 +143,7 @@ class RemoteGatewayClient:
     # ── Jobs ──────────────────────────────────────────────────────────────────
 
     async def list_jobs(self, agent_id: str) -> list[dict[str, Any]]:
-        data = await self._get("/jobs/", agent_id=agent_id)
+        data = await self._get("/jobs/", owner=agent_id)
         return data.get("jobs", [])
 
     async def run_job(self, job_id: str) -> None:

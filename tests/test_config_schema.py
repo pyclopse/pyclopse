@@ -4,13 +4,12 @@ Verifies defaults, parsing, and backward-compatibility.
 """
 
 import pytest
+from pyclopse.channels.telegram_plugin import TelegramChannelConfig
 from pyclopse.config.schema import (
     Config,
     AgentConfig,
     SessionsConfig,
-    TelegramConfig,
     SlackConfig,
-    WhatsAppConfig,
     SecurityConfig,
 )
 
@@ -87,39 +86,39 @@ class TestAgentConfigNewFields:
 
 
 # ---------------------------------------------------------------------------
-# TelegramConfig new fields
+# TelegramChannelConfig new fields
 # ---------------------------------------------------------------------------
 
-class TestTelegramConfigNewFields:
+class TestTelegramChannelConfigNewFields:
 
     def test_denied_users_defaults_empty(self):
-        cfg = TelegramConfig()
+        cfg = TelegramChannelConfig()
         assert cfg.denied_users == []
 
     def test_topics_defaults_empty(self):
-        cfg = TelegramConfig()
+        cfg = TelegramChannelConfig()
         assert cfg.topics == {}
 
     def test_typing_indicator_defaults_true(self):
-        cfg = TelegramConfig()
+        cfg = TelegramChannelConfig()
         assert cfg.typing_indicator is True
 
     def test_typing_indicator_can_disable(self):
-        cfg = TelegramConfig.model_validate({"typingIndicator": False})
+        cfg = TelegramChannelConfig.model_validate({"typingIndicator": False})
         assert cfg.typing_indicator is False
 
     def test_topics_can_be_set(self):
-        cfg = TelegramConfig.model_validate({
+        cfg = TelegramChannelConfig.model_validate({
             "topics": {"general": 0, "alerts": 42}
         })
         assert cfg.topics["alerts"] == 42
 
     def test_denied_users_camel_alias(self):
-        cfg = TelegramConfig.model_validate({"deniedUsers": [111, 222]})
+        cfg = TelegramChannelConfig.model_validate({"deniedUsers": [111, 222]})
         assert 111 in cfg.denied_users
 
     def test_existing_fields_unaffected(self):
-        cfg = TelegramConfig.model_validate({"enabled": True, "allowedUsers": [12345]})
+        cfg = TelegramChannelConfig.model_validate({"enabled": True, "allowedUsers": [12345]})
         assert cfg.enabled is True
         assert 12345 in cfg.allowed_users
 
@@ -156,17 +155,19 @@ class TestSlackConfigNewFields:
 
 
 # ---------------------------------------------------------------------------
-# WhatsAppConfig new fields
+# WhatsApp — now handled by generic ChannelConfig (no dedicated class)
 # ---------------------------------------------------------------------------
 
-class TestWhatsAppConfigNewFields:
+class TestWhatsAppViaChannelConfig:
 
     def test_allowed_users_defaults_empty(self):
-        cfg = WhatsAppConfig()
+        from pyclopse.channels.plugin import ChannelConfig
+        cfg = ChannelConfig()
         assert cfg.allowed_users == []
 
     def test_denied_users_defaults_empty(self):
-        cfg = WhatsAppConfig()
+        from pyclopse.channels.plugin import ChannelConfig
+        cfg = ChannelConfig()
         assert cfg.denied_users == []
 
 
@@ -209,7 +210,7 @@ class TestBackwardCompatibility:
         assert isinstance(cfg.sessions, SessionsConfig)
 
     def test_telegram_without_new_fields(self):
-        cfg = TelegramConfig.model_validate({"botToken": "abc123"})
+        cfg = TelegramChannelConfig.model_validate({"botToken": "abc123"})
         assert cfg.topics == {}
         assert cfg.typing_indicator is True
 

@@ -2,7 +2,8 @@
 import logging
 from typing import Dict, Any, Optional
 
-from fastapi import APIRouter, HTTPException, Header, Depends
+from fastapi import APIRouter, HTTPException, Header, Depends, Request
+from fastapi.responses import JSONResponse, PlainTextResponse, Response
 from pydantic import BaseModel
 
 logger = logging.getLogger("pyclopse.api.channels")
@@ -328,3 +329,49 @@ async def channel_status(channel_name: str):
     except Exception as e:
         logger.error(f"Error getting channel status: {e}")
         raise HTTPException(status_code=500, detail=str(e))
+
+
+# ---------------------------------------------------------------------------
+# Generic plugin webhook — dispatches to any ChannelPlugin.handle_webhook()
+# ---------------------------------------------------------------------------
+
+@router.api_route("/webhook/{channel_name}", methods=["GET", "POST"])
+async def generic_channel_webhook(channel_name: str, request: Request):
+    """Generic webhook endpoint for channel plugins.
+
+    Dispatches to the named plugin's ``handle_webhook()`` method.  Supports
+    both GET (verification challenges) and POST (inbound messages).
+
+    The plugin receives raw bytes, headers, and query params so it can do
+    its own signature verification.
+    """
+    from pyclopse.api.app import get_gateway
+    gateway = get_gateway()
+
+    plugin = gateway._channels.get(channel_name)
+    if not plugin:
+        raise HTTPException(status_code=404, detail=f"No channel plugin '{channel_name}'")
+
+    if not hasattr(plugin, "handle_webhook"):
+        raise HTTPException(status_code=404, detail=f"Channel '{channel_name}' has no webhook handler")
+
+    body = await request.body()
+    headers = {k.lower(): v for k, v in request.headers.items()}
+    query_params = dict(request.query_params)
+
+    try:
+        result = await plugin.handle_webhook(body, headers, query_params)
+    except HTTPException:
+        raise
+    except NotImplementedError:
+        raise HTTPException(status_code=404, detail=f"Channel '{channel_name}' does not support webhooks")
+    except Exception as e:
+        logger.error(f"Webhook error for {channel_name}: {e}")
+        # Always return 200 to prevent platform retries
+        return Response(status_code=200)
+
+    if isinstance(result, str):
+        return PlainTextResponse(result)
+    if isinstance(result, dict):
+        return JSONResponse(content=result)
+    return Response(status_code=200)

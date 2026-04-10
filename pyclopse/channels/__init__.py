@@ -1,7 +1,7 @@
 """Channel registry, adapters, and plugin system."""
 from typing import Dict, Type, Optional
 from .base import ChannelAdapter, Message, MessageTarget, MediaAttachment
-from .plugin import ChannelPlugin, GatewayHandle
+from .plugin import ChannelPlugin, ChannelCapabilities, ChannelConfig, GatewayHandle
 from .loader import load_all, load_from_specs, discover_entry_points
 
 
@@ -40,6 +40,8 @@ __all__ = [
     "MediaAttachment",
     # Plugin system
     "ChannelPlugin",
+    "ChannelCapabilities",
+    "ChannelConfig",
     "GatewayHandle",
     "load_all",
     "load_from_specs",

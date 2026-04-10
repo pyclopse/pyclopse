@@ -30,7 +30,8 @@ def _make_runner(session_id="sess-abc"):
 
 def _make_gateway(agent_id="main", session_id="sess-abc", runner=None, thread_bindings=None):
     from pyclopse.core.gateway import Gateway
-    from pyclopse.config.schema import Config, AgentsConfig, ChannelsConfig, TelegramConfig, SlackConfig
+    from pyclopse.channels.telegram_plugin import TelegramChannelConfig
+    from pyclopse.config.schema import Config, AgentsConfig, ChannelsConfig, SlackConfig
 
     gw = Gateway.__new__(Gateway)
     gw._logger = MagicMock()
@@ -38,7 +39,7 @@ def _make_gateway(agent_id="main", session_id="sess-abc", runner=None, thread_bi
     gw._approval_system.always_approve = []
     gw._thread_bindings = dict(thread_bindings or {})
 
-    tg = TelegramConfig(allowed_users=[], denied_users=[])
+    tg = TelegramChannelConfig(allowed_users=[], denied_users=[])
     sl = SlackConfig(allowed_users=[], denied_users=[])
     gw._config = Config(agents=AgentsConfig(), channels=ChannelsConfig(telegram=tg, slack=sl))
 

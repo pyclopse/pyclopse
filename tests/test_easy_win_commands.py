@@ -15,14 +15,15 @@ from unittest.mock import MagicMock, AsyncMock
 
 def _make_gateway(agent_id="main", session_id="sess-abc", fallbacks=None):
     from pyclopse.core.gateway import Gateway
-    from pyclopse.config.schema import Config, AgentsConfig, ChannelsConfig, TelegramConfig, SlackConfig
+    from pyclopse.channels.telegram_plugin import TelegramChannelConfig
+    from pyclopse.config.schema import Config, AgentsConfig, ChannelsConfig, SlackConfig
 
     gw = Gateway.__new__(Gateway)
     gw._logger = MagicMock()
     gw._approval_system = MagicMock()
     gw._approval_system.always_approve = []
 
-    tg = TelegramConfig(allowed_users=[], denied_users=[])
+    tg = TelegramChannelConfig(allowed_users=[], denied_users=[])
     sl = SlackConfig(allowed_users=[], denied_users=[])
     gw._config = Config(agents=AgentsConfig(), channels=ChannelsConfig(telegram=tg, slack=sl))
 

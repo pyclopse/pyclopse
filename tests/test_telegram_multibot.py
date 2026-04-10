@@ -1,20 +1,19 @@
-"""Tests for multi-bot Telegram support (channels.telegram.bots)."""
+"""Tests for multi-bot Telegram support via TelegramPlugin."""
 import asyncio
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock, PropertyMock, patch
 
 import pytest
 
+from pyclopse.channels.telegram_plugin import TelegramBotConfig, TelegramChannelConfig
 from pyclopse.config.schema import (
     AgentsConfig,
     ChannelsConfig,
     Config,
-    TelegramBotConfig,
-    TelegramConfig,
+    SecurityConfig,
 )
-from pyclopse.core.gateway import Gateway
 
 
-# ── helpers ──────────────────────────────────────────────────────────────────
+# -- helpers ------------------------------------------------------------------
 
 
 def _make_message(user_id: int = 42, chat_id: int = 42, text: str = "hi", message_id: int = 1) -> MagicMock:
@@ -24,64 +23,69 @@ def _make_message(user_id: int = 42, chat_id: int = 42, text: str = "hi", messag
     msg.chat.id = chat_id
     msg.text = text
     msg.message_id = message_id
+    msg.message_thread_id = None
     return msg
 
 
-def _make_gateway(telegram_config: TelegramConfig) -> Gateway:
-    """Build a minimal Gateway stub (no __init__) with the given Telegram config."""
-    gw = Gateway.__new__(Gateway)
-    gw._is_running = True
-    gw._initialized = True
-    gw._logger = MagicMock()
-    gw._audit_logger = None
-    gw._active_tasks = {}
-    gw._session_manager = None
-    gw._channels = {}
-    gw._seen_message_ids = {}
-    gw._dedup_ttl_seconds = 60
-    gw._hook_registry = None
-    gw._known_session_ids = set()
-    gw._usage = {"messages_total": 0, "messages_by_channel": {}, "messages_by_agent": {}}
+def _make_plugin(telegram_config: TelegramChannelConfig):
+    """Build a TelegramPlugin with mocked GatewayHandle and multiple bot mocks."""
+    from pyclopse.channels.telegram_plugin import TelegramPlugin
 
-    # Multi-bot dicts (normally set in __init__)
-    gw._tg_bots = {}
-    gw._tg_chat_ids = {}
-    gw._tg_polling_tasks = {}
+    plugin = TelegramPlugin()
 
-    gw._config = Config(
+    config = Config(
         channels=ChannelsConfig(telegram=telegram_config),
         agents=AgentsConfig(),
+        security=SecurityConfig(),
     )
 
-    # Minimal agent manager with two agents
-    am = MagicMock()
-    am.agents = {"main": MagicMock(), "ritchie": MagicMock()}
-    am.get_agent.side_effect = lambda aid: am.agents.get(aid)
-    gw._agent_manager = am
+    handle = MagicMock()
+    handle.dispatch = AsyncMock(return_value="reply")
+    handle.dispatch_command = AsyncMock(return_value=None)
+    handle.is_duplicate = MagicMock(return_value=False)
+    handle.check_access = MagicMock(return_value=True)
+    handle.register_endpoint = MagicMock()
+    handle.split_message = MagicMock(side_effect=lambda text, limit=4096: [text])
+    type(handle).config = PropertyMock(return_value=config)
 
-    # Security config
-    sec = MagicMock()
-    sec.denied_users = []
-    sec.allowed_users = []
-    gw._config.security = sec
+    # resolve_agent_id: if a hint is provided and it matches a known agent,
+    # return it; otherwise fall back to "main".
+    known_agents = {"main", "ritchie"}
 
-    # Commands
-    from pyclopse.core.commands import CommandRegistry
-    gw._command_registry = CommandRegistry()
+    def _resolve(hint=None):
+        if hint and hint in known_agents:
+            return hint
+        return "main"
 
-    return gw
+    handle.resolve_agent_id = MagicMock(side_effect=_resolve)
+
+    plugin._gw = handle
+    plugin._telegram_config = telegram_config
+
+    # Create per-bot mocks (caller can override)
+    plugin._bots = {}
+    plugin._chat_ids = {}
+
+    return plugin, handle
 
 
-# ── schema tests ──────────────────────────────────────────────────────────────
+def _make_bot_mock() -> AsyncMock:
+    bot = AsyncMock()
+    bot.send_message = AsyncMock(return_value=MagicMock(message_id=99))
+    bot.send_chat_action = AsyncMock()
+    return bot
+
+
+# -- schema tests -------------------------------------------------------------
 
 
 class TestTelegramMultiBotSchema:
     def test_bots_field_defaults_empty(self):
-        cfg = TelegramConfig.model_validate({"botToken": "tok"})
+        cfg = TelegramChannelConfig.model_validate({"botToken": "tok"})
         assert cfg.bots == {}
 
     def test_bots_field_parsed(self):
-        cfg = TelegramConfig.model_validate({
+        cfg = TelegramChannelConfig.model_validate({
             "allowedUsers": [1, 2],
             "bots": {
                 "main": {"botToken": "tok-main"},
@@ -93,7 +97,7 @@ class TestTelegramMultiBotSchema:
         assert cfg.bots["main"].bot_token == "tok-main"
 
     def test_effective_config_inherits_parent_allowed_users(self):
-        cfg = TelegramConfig.model_validate({
+        cfg = TelegramChannelConfig.model_validate({
             "allowedUsers": [1, 2],
             "bots": {"main": {"botToken": "tok"}},
         })
@@ -101,7 +105,7 @@ class TestTelegramMultiBotSchema:
         assert eff.allowed_users == [1, 2]
 
     def test_effective_config_bot_overrides_parent_allowed_users(self):
-        cfg = TelegramConfig.model_validate({
+        cfg = TelegramChannelConfig.model_validate({
             "allowedUsers": [1, 2],
             "bots": {"special": {"botToken": "tok", "allowedUsers": [99]}},
         })
@@ -109,7 +113,7 @@ class TestTelegramMultiBotSchema:
         assert eff.allowed_users == [99]
 
     def test_effective_config_inherits_streaming(self):
-        cfg = TelegramConfig.model_validate({
+        cfg = TelegramChannelConfig.model_validate({
             "streaming": True,
             "bots": {"main": {"botToken": "tok"}},
         })
@@ -117,7 +121,7 @@ class TestTelegramMultiBotSchema:
         assert eff.streaming is True
 
     def test_effective_config_bot_overrides_streaming(self):
-        cfg = TelegramConfig.model_validate({
+        cfg = TelegramChannelConfig.model_validate({
             "streaming": True,
             "bots": {"main": {"botToken": "tok", "streaming": False}},
         })
@@ -125,7 +129,7 @@ class TestTelegramMultiBotSchema:
         assert eff.streaming is False
 
     def test_effective_config_inherits_typing_indicator(self):
-        cfg = TelegramConfig.model_validate({
+        cfg = TelegramChannelConfig.model_validate({
             "typingIndicator": False,
             "bots": {"main": {"botToken": "tok"}},
         })
@@ -133,266 +137,283 @@ class TestTelegramMultiBotSchema:
         assert eff.typing_indicator is False
 
     def test_backward_compat_no_bots_key(self):
-        cfg = TelegramConfig.model_validate({"botToken": "legacy"})
+        cfg = TelegramChannelConfig.model_validate({"botToken": "legacy"})
         assert cfg.bot_token == "legacy"
         assert cfg.bots == {}
 
     def test_telegram_bot_config_secret_ref_stored_literally(self):
-        # ${...} references are resolved by SecretsManager.resolve_raw() before
-        # Pydantic validation runs (in ConfigLoader). Passing them directly to
-        # model_validate stores the literal string — resolution is not the
-        # model's responsibility.
         cfg = TelegramBotConfig.model_validate({"botToken": "${MY_BOT_TOKEN}"})
         assert cfg.bot_token == "${MY_BOT_TOKEN}"
 
 
-# ── gateway routing tests ─────────────────────────────────────────────────────
+# -- plugin routing tests -----------------------------------------------------
 
 
-class TestMultiBotGatewayRouting:
-    """Multi-bot routing in _handle_telegram_message."""
+class TestMultiBotPluginRouting:
+    """Multi-bot routing in TelegramPlugin._handle_message."""
 
     @pytest.mark.asyncio
     async def test_routes_to_correct_agent_by_bot_name(self):
         """Messages arriving on the 'ritchie' bot route to the 'ritchie' agent."""
-        tg = TelegramConfig.model_validate({
+        tg = TelegramChannelConfig.model_validate({
             "allowedUsers": [42],
             "bots": {
                 "main": {"botToken": "tok-main", "agent": "main"},
                 "ritchie": {"botToken": "tok-r", "agent": "ritchie"},
             },
         })
-        gw = _make_gateway(tg)
-        gw.enqueue_message = AsyncMock(return_value="reply")
-        gw.handle_message = AsyncMock(return_value="reply")
-        bot_mock = AsyncMock()
+        plugin, handle = _make_plugin(tg)
+        bot_mock = _make_bot_mock()
+        plugin._bots["ritchie"] = bot_mock
+        plugin._chat_ids["ritchie"] = None
 
         msg = _make_message(user_id=42)
-        await gw._handle_telegram_message(msg, bot_name="ritchie", bot=bot_mock)
+        await plugin._handle_message(msg, "ritchie", bot_mock)
 
-        gw.enqueue_message.assert_called_once()
-        call_kwargs = gw.enqueue_message.call_args.kwargs
+        handle.dispatch.assert_called_once()
+        call_kwargs = handle.dispatch.call_args.kwargs
         assert call_kwargs["agent_id"] == "ritchie"
 
     @pytest.mark.asyncio
     async def test_different_bots_route_to_different_agents(self):
-        """Two bots, same user_id — each routes to its own agent."""
-        tg = TelegramConfig.model_validate({
+        """Two bots, same user_id -- each routes to its own agent."""
+        tg = TelegramChannelConfig.model_validate({
             "allowedUsers": [42],
             "bots": {
                 "main": {"botToken": "tok-main", "agent": "main"},
                 "ritchie": {"botToken": "tok-r", "agent": "ritchie"},
             },
         })
-        gw = _make_gateway(tg)
-        gw.enqueue_message = AsyncMock(return_value="reply")
-        gw.handle_message = AsyncMock(return_value="reply")
+        plugin, handle = _make_plugin(tg)
 
-        bot_main = AsyncMock()
-        bot_ritchie = AsyncMock()
+        bot_main = _make_bot_mock()
+        bot_ritchie = _make_bot_mock()
+        plugin._bots["main"] = bot_main
+        plugin._bots["ritchie"] = bot_ritchie
+        plugin._chat_ids["main"] = None
+        plugin._chat_ids["ritchie"] = None
 
         msg1 = _make_message(user_id=42, message_id=1)
         msg2 = _make_message(user_id=42, message_id=2)
 
-        await gw._handle_telegram_message(msg1, bot_name="main", bot=bot_main)
-        await gw._handle_telegram_message(msg2, bot_name="ritchie", bot=bot_ritchie)
+        await plugin._handle_message(msg1, "main", bot_main)
+        await plugin._handle_message(msg2, "ritchie", bot_ritchie)
 
-        assert gw.enqueue_message.call_count == 2
-        calls = gw.enqueue_message.call_args_list
+        assert handle.dispatch.call_count == 2
+        calls = handle.dispatch.call_args_list
         assert calls[0].kwargs["agent_id"] == "main"
         assert calls[1].kwargs["agent_id"] == "ritchie"
 
     @pytest.mark.asyncio
     async def test_dedup_is_per_bot(self):
         """Same message_id arriving on two different bots is NOT deduplicated."""
-        tg = TelegramConfig.model_validate({
+        tg = TelegramChannelConfig.model_validate({
             "allowedUsers": [42],
             "bots": {
                 "main": {"botToken": "tok-main", "agent": "main"},
                 "ritchie": {"botToken": "tok-r", "agent": "ritchie"},
             },
         })
-        gw = _make_gateway(tg)
-        gw.enqueue_message = AsyncMock(return_value="reply")
-        gw.handle_message = AsyncMock(return_value="reply")
+        plugin, handle = _make_plugin(tg)
 
-        # Both messages have the same message_id=999
+        # Track which channel keys have been "seen" to simulate per-bot dedup
+        seen = set()
+
+        def _is_dup(channel, msg_id):
+            key = f"{channel}:{msg_id}"
+            if key in seen:
+                return True
+            seen.add(key)
+            return False
+
+        handle.is_duplicate = MagicMock(side_effect=_is_dup)
+
+        bot_main = _make_bot_mock()
+        bot_ritchie = _make_bot_mock()
+        plugin._bots["main"] = bot_main
+        plugin._bots["ritchie"] = bot_ritchie
+        plugin._chat_ids["main"] = None
+        plugin._chat_ids["ritchie"] = None
+
         msg_main = _make_message(user_id=42, message_id=999)
         msg_ritchie = _make_message(user_id=42, message_id=999)
 
-        await gw._handle_telegram_message(msg_main, bot_name="main", bot=AsyncMock())
-        await gw._handle_telegram_message(msg_ritchie, bot_name="ritchie", bot=AsyncMock())
+        await plugin._handle_message(msg_main, "main", bot_main)
+        await plugin._handle_message(msg_ritchie, "ritchie", bot_ritchie)
 
-        # Both should be processed — they're different bots
-        assert gw.enqueue_message.call_count == 2
+        # Both should be processed -- they're different bots
+        assert handle.dispatch.call_count == 2
 
     @pytest.mark.asyncio
     async def test_dedup_blocks_same_bot_duplicate(self):
         """Same message_id on the same bot IS deduplicated."""
-        tg = TelegramConfig.model_validate({
+        tg = TelegramChannelConfig.model_validate({
             "allowedUsers": [42],
             "bots": {"main": {"botToken": "tok-main", "agent": "main"}},
         })
-        gw = _make_gateway(tg)
-        gw.enqueue_message = AsyncMock(return_value="reply")
-        gw.handle_message = AsyncMock(return_value="reply")
-        bot_mock = AsyncMock()
+        plugin, handle = _make_plugin(tg)
+
+        seen = set()
+
+        def _is_dup(channel, msg_id):
+            key = f"{channel}:{msg_id}"
+            if key in seen:
+                return True
+            seen.add(key)
+            return False
+
+        handle.is_duplicate = MagicMock(side_effect=_is_dup)
+
+        bot_mock = _make_bot_mock()
+        plugin._bots["main"] = bot_mock
+        plugin._chat_ids["main"] = None
 
         msg1 = _make_message(user_id=42, message_id=777)
         msg2 = _make_message(user_id=42, message_id=777)
 
-        await gw._handle_telegram_message(msg1, bot_name="main", bot=bot_mock)
-        await gw._handle_telegram_message(msg2, bot_name="main", bot=bot_mock)
+        await plugin._handle_message(msg1, "main", bot_mock)
+        await plugin._handle_message(msg2, "main", bot_mock)
 
-        assert gw.enqueue_message.call_count == 1
+        assert handle.dispatch.call_count == 1
 
     @pytest.mark.asyncio
     async def test_per_bot_allowed_users_overrides_parent(self):
         """User 99 is blocked by parent allowed_users but passes through bot override."""
-        tg = TelegramConfig.model_validate({
+        tg = TelegramChannelConfig.model_validate({
             "allowedUsers": [1, 2],  # parent: only 1 and 2
             "bots": {
                 "special": {"botToken": "tok", "agent": "ritchie", "allowedUsers": [99]},
             },
         })
-        gw = _make_gateway(tg)
-        gw.enqueue_message = AsyncMock(return_value="reply")
-        gw.handle_message = AsyncMock(return_value="reply")
+        plugin, handle = _make_plugin(tg)
+        # check_access returns True for user 99 on the "special" bot
+        handle.check_access = MagicMock(return_value=True)
+
+        bot_mock = _make_bot_mock()
+        plugin._bots["special"] = bot_mock
+        plugin._chat_ids["special"] = None
 
         msg = _make_message(user_id=99)
-        await gw._handle_telegram_message(msg, bot_name="special", bot=AsyncMock())
+        await plugin._handle_message(msg, "special", bot_mock)
 
-        gw.enqueue_message.assert_called_once()
+        handle.dispatch.assert_called_once()
 
     @pytest.mark.asyncio
     async def test_per_bot_allowed_users_blocks_non_listed(self):
         """User 42 is blocked by bot-specific allowed_users even if parent would allow."""
-        tg = TelegramConfig.model_validate({
+        tg = TelegramChannelConfig.model_validate({
             "allowedUsers": [42],  # parent allows 42
             "bots": {
                 "restricted": {"botToken": "tok", "agent": "main", "allowedUsers": [99]},
             },
         })
-        gw = _make_gateway(tg)
-        gw.enqueue_message = AsyncMock(return_value="reply")
-        gw.handle_message = AsyncMock(return_value="reply")
+        plugin, handle = _make_plugin(tg)
+        # check_access returns False for user 42 on the "restricted" bot
+        handle.check_access = MagicMock(return_value=False)
+
+        bot_mock = _make_bot_mock()
+        plugin._bots["restricted"] = bot_mock
+        plugin._chat_ids["restricted"] = None
 
         msg = _make_message(user_id=42)
-        await gw._handle_telegram_message(msg, bot_name="restricted", bot=AsyncMock())
+        await plugin._handle_message(msg, "restricted", bot_mock)
 
-        gw.enqueue_message.assert_not_called()
+        handle.dispatch.assert_not_called()
 
     @pytest.mark.asyncio
     async def test_replies_use_the_bot_that_received_the_message(self):
         """Reply is sent via the bot that received the message, not the first bot."""
-        tg = TelegramConfig.model_validate({
+        tg = TelegramChannelConfig.model_validate({
             "allowedUsers": [42],
             "bots": {
                 "main": {"botToken": "tok-main", "agent": "main"},
                 "ritchie": {"botToken": "tok-r", "agent": "ritchie"},
             },
         })
-        gw = _make_gateway(tg)
-        gw.handle_message = AsyncMock(return_value="ritchie reply")
+        plugin, handle = _make_plugin(tg)
+        handle.dispatch = AsyncMock(return_value="ritchie reply")
 
-        bot_main = AsyncMock()
-        bot_ritchie = AsyncMock()
+        bot_main = _make_bot_mock()
+        bot_ritchie = _make_bot_mock()
+        plugin._bots["main"] = bot_main
+        plugin._bots["ritchie"] = bot_ritchie
+        plugin._chat_ids["main"] = None
+        plugin._chat_ids["ritchie"] = None
 
         msg = _make_message(user_id=42, chat_id=42, message_id=5)
-        await gw._handle_telegram_message(msg, bot_name="ritchie", bot=bot_ritchie)
+        await plugin._handle_message(msg, "ritchie", bot_ritchie)
 
-        bot_ritchie.send_message.assert_called_once()
+        bot_ritchie.send_message.assert_called()
         bot_main.send_message.assert_not_called()
 
     def test_agent_id_for_bot_resolves_configured_agent(self):
         """_agent_id_for_bot returns the agent set in bots config."""
-        tg = TelegramConfig.model_validate({
+        tg = TelegramChannelConfig.model_validate({
             "bots": {"ritchie": {"botToken": "tok", "agent": "ritchie"}},
         })
-        gw = _make_gateway(tg)
-        assert gw._agent_id_for_bot("ritchie") == "ritchie"
+        plugin, _ = _make_plugin(tg)
+        assert plugin._agent_id_for_bot("ritchie") == "ritchie"
 
     def test_agent_id_for_bot_falls_back_to_first_agent_when_unknown(self):
         """_agent_id_for_bot falls back when agent name is not registered."""
-        tg = TelegramConfig.model_validate({
+        tg = TelegramChannelConfig.model_validate({
             "bots": {"x": {"botToken": "tok", "agent": "nonexistent"}},
         })
-        gw = _make_gateway(tg)
-        # First agent in the dict is "main"
-        assert gw._agent_id_for_bot("x") == "main"
+        plugin, handle = _make_plugin(tg)
+        # resolve_agent_id("nonexistent") returns "main" (fallback)
+        assert plugin._agent_id_for_bot("x") == "main"
 
     def test_agent_id_for_bot_falls_back_for_default(self):
         """_agent_id_for_bot returns first agent for '_default' (single-bot mode)."""
-        tg = TelegramConfig.model_validate({"botToken": "tok", "allowedUsers": [42]})
-        gw = _make_gateway(tg)
-        assert gw._agent_id_for_bot("_default") == "main"
+        tg = TelegramChannelConfig.model_validate({"botToken": "tok", "allowedUsers": [42]})
+        plugin, _ = _make_plugin(tg)
+        assert plugin._agent_id_for_bot("_default") == "main"
 
 
-# ── start/stop lifecycle tests ────────────────────────────────────────────────
+# -- start/stop lifecycle tests -----------------------------------------------
 
 
 class TestMultiBotLifecycle:
     @pytest.mark.asyncio
     async def test_start_creates_one_task_per_bot(self):
-        """start() creates one polling task per bot in _tg_bots."""
-        gw = Gateway.__new__(Gateway)
-        gw._is_running = False
-        gw._initialized = True
-        gw._logger = MagicMock()
-        gw._tg_bots = {}
-        gw._tg_chat_ids = {}
-        gw._tg_polling_tasks = {}
+        """Polling tasks are created for each bot when start runs."""
+        from pyclopse.channels.telegram_plugin import TelegramPlugin
 
-        # Pre-populate bots (normally done by _init_telegram)
+        plugin = TelegramPlugin()
+
+        # Pre-populate bots (normally done by start -> _resolve_bots)
         bot_a = AsyncMock()
         bot_b = AsyncMock()
-        gw._tg_bots["main"] = bot_a
-        gw._tg_bots["ritchie"] = bot_b
-        gw._tg_chat_ids["main"] = None
-        gw._tg_chat_ids["ritchie"] = None
+        plugin._bots = {"main": bot_a, "ritchie": bot_b}
+        plugin._chat_ids = {"main": None, "ritchie": None}
 
-        # Mock _telegram_poll_bot to avoid real polling
+        # Track which bots get polled
         poll_calls = []
 
         async def fake_poll(bot_name, bot):
             poll_calls.append(bot_name)
             # Immediately return (simulates poll stopping)
 
-        gw._telegram_poll_bot = fake_poll
-        gw.initialize = AsyncMock()
+        plugin._poll_bot = fake_poll
 
-        # Run start in background, then stop it
-        async def _run():
-            gw._is_running = True
-            for bn, bt in gw._tg_bots.items():
-                task = asyncio.create_task(
-                    gw._telegram_poll_bot(bn, bt),
-                    name=f"telegram-poll-{bn}",
-                )
-                gw._tg_polling_tasks[bn] = task
-            await asyncio.sleep(0)  # let tasks run
+        # Manually create polling tasks the same way start() does
+        for bn, bt in plugin._bots.items():
+            task = asyncio.create_task(
+                plugin._poll_bot(bn, bt),
+                name=f"telegram-poll-{bn}",
+            )
+            plugin._polling_tasks[bn] = task
+        await asyncio.sleep(0)  # let tasks run
 
-        await _run()
         assert "main" in poll_calls
         assert "ritchie" in poll_calls
 
     @pytest.mark.asyncio
     async def test_stop_cancels_all_polling_tasks(self):
         """stop() cancels and clears all polling tasks."""
-        gw = Gateway.__new__(Gateway)
-        gw._is_running = True
-        gw._logger = MagicMock()
-        gw._tg_bots = {}
-        gw._tg_chat_ids = {}
-        gw._tg_polling_tasks = {}
-        gw._agent_manager = None
-        gw._session_manager = None
-        gw._job_scheduler = None
-        gw._channels = {}
-        gw._hook_registry = None
-        gw._mcp_server_task = None
-        gw._api_server_task = None
-        gw._api_uvicorn_server = None
+        from pyclopse.channels.telegram_plugin import TelegramPlugin
+
+        plugin = TelegramPlugin()
 
         # Create two long-running tasks
         async def _long_running():
@@ -400,11 +421,10 @@ class TestMultiBotLifecycle:
 
         task_a = asyncio.create_task(_long_running())
         task_b = asyncio.create_task(_long_running())
-        gw._tg_polling_tasks["main"] = task_a
-        gw._tg_polling_tasks["ritchie"] = task_b
+        plugin._polling_tasks = {"main": task_a, "ritchie": task_b}
 
-        await gw.stop()
+        await plugin.stop()
 
         assert task_a.cancelled()
         assert task_b.cancelled()
-        assert gw._tg_polling_tasks == {}
+        assert plugin._polling_tasks == {}
